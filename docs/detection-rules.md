@@ -93,8 +93,19 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `final.ipfs` | The final page is served from an IPFS gateway (`{gateway, cid}` or null) |
 | `evasion.devtools_blocked`, `.devtools_blocked_keys`, `.context_menu_blocked` | DevTools shortcuts / context menu the page cancelled (observed via the key probe) |
 | `downloads.types` | Content-based (magic-byte) types of downloads, e.g. `pe`, `lnk`, `iso`, `cab`, `chm`, `vhd` |
+| `downloads.archive_inner_risky`, `.archive_encrypted`, `.archive_password_on_page`, `.archives` | ZIP/TAR member listing (stdlib, directory only — never extracted); risky inner types; encrypted entries; a password printed on the page (DE-DLD-001/002) |
+| `forms.script_posted_credentials`, `.script_posted_targets` | Password field with no real form action posted by fetch/XHR/beacon to another site (needs the A3 request log) |
+| `network.request_log`, `.trusted_redirectors` | A3 browser request log summary (count, by resource type); trusted redirector / open-redirect wrappers in the chain |
+| `navigation.scripted_bounce`, `.scripted_bounces` | Script-initiated top-level bounces to a decoy (about:blank, a 404, a big-brand homepage) |
+| `capture.gated` | A CAPTCHA/Turnstile challenge was seen this session (prefer `unknown` over `benign`; re-run interactively) |
+| `scripts.libraries` | JS library inventory parsed from CDN script URLs (`{name, version, url}`) |
+| `cookies.end_of_session` | Cookie names in the jar at teardown (values are hashed, never stored) |
+| `js.dynamic_exec_count`, `.dynamic_exec_max_len`, `.dynamic_exec_max_entropy` | Runtime eval/Function/setTimeout(string) calls: count, longest argument, highest entropy |
+| `js.blob_constructs`, `.blob_details` | Blob/File constructions over 1 KB (HTML smuggling) |
+| `js.history_floods`, `.fullscreen`, `.pointer_lock`, `.keyboard_lock`, `.notification_prompt`, `.service_worker`, `.sw_scripts` | Runtime API calls used by browser lockers and push-bait pages |
+| `lure.tech_support_phone`, `.tech_support_phones`, `.allow_notifications_bait` | A support phone number near scare wording; "click Allow to continue/verify" coercion |
 
-To add a new fact, compute it in `build_facts`. Keep it a pure function of the stored capture, so re-analysis stays reproducible. New facts read the HAR (`exfil.*`, `idp.*`, `web3.*`, `network.ip_lookups`), raw DOM snapshots (`idp.ms_*` structural markers) and the runner's new `websocket_frames`, `wallet_requests` and `blocked_input` logs. **All of them degrade to neutral values on captures that predate the artifact** (a missing log yields `0`/`false`/`null`, never an error), so stored analyses stay re-evaluable.
+To add a new fact, compute it in `build_facts`. Keep it a pure function of the stored capture, so re-analysis stays reproducible. New facts read the HAR (`exfil.*`, `idp.*`, `web3.*`, `network.ip_lookups`), raw DOM snapshots (`idp.ms_*` structural markers), the A3 request log (`requests.jsonl`), the runtime-API log (`js.*`, dynamic scripts), end-of-session cookies, and the runner's `websocket_frames`, `wallet_requests` and `blocked_input` logs. **All of them degrade to neutral values on captures that predate the artifact** (a missing log yields `0`/`false`/`null`, never an error), so stored analyses stay re-evaluable.
 
 ### Active-probe capture (legal sign-off, NFR-10)
 
@@ -105,8 +116,18 @@ Three capture behaviours make the session *act like a victim*. They are **off by
 | `SANDBOX_CANARY_FILL` | `off` | Reserved flag for filling synthetic canary credentials and submitting to trace exfil. The canary mailbox must be one you control. | DE-PHI-003/004 (scaffold) |
 | `SANDBOX_KEY_PROBE` | `false` | Dispatches DevTools shortcuts (F12, Ctrl+U, Ctrl+Shift+I/J/C) and a right-click; the init-script `preventDefault` hook records what the page blocks. | `evasion.*`, DE-EVA-001 |
 | `SANDBOX_FAKE_WALLET` | `false` | Exposes a keyless `window.ethereum` that answers account reads with a fixed dummy address and logs then rejects every sign/send request. No keys, no network. | `web3.wallet_requests`, DE-W3B-005 |
+| `SANDBOX_ALLOW_SERVICE_WORKERS` | `false` | Lets service workers register and run (default **blocks** them) so their script and lifecycle are captured. This gives the page a real background worker, so it is opt-in rather than a pure observer. | `js.service_worker`, `js.sw_scripts` |
 
-The clipboard, blob/exec and DevTools-blocking hooks run always (they only observe); they are kept stealthy (wrapped functions report native `toString()` output and keep their names) and size-capped (clipboard text 16 KB, 2000 WebSocket frames, 500 wallet records, 200 blocked-input records).
+The clipboard, blob/exec and DevTools-blocking hooks run always (they only observe); they are kept stealthy (wrapped functions report native `toString()` output and keep their names) and size-capped (clipboard text 16 KB, 2000 WebSocket frames, 500 wallet records, 200 blocked-input records, 5000 request-log entries, 50 dynamic scripts).
+
+### Browser request log (A3) and detonation profiles
+
+- **Request log (`requests.jsonl`, A3).** A raw CDP `Network.requestWillBeSent` / `webSocketCreated` log joined with Playwright's `context.on("request")` stream. Each line records the URL, method, resource type, originating `frame_url`/`worker_url`, whether it was a navigation, and (from the CDP initiator stack) the script/function that issued it. It is capped at 5000 entries. Facts derive from it precisely where present and fall back to coarse HAR correlation otherwise: `idp.cdn_assets_precise`, `forms.script_posted_credentials`, `network.request_log`, `network.trusted_redirectors`, and the A7 `navigation.*` cause facts. CDP requests that complete entirely synchronously inside one script turn (e.g. a tight `pushState` loop) may not surface a CDP event; the Playwright frame URL still lands, which is enough for the frame-origin facts.
+- **Dynamic scripts (A14).** Code passed to `eval`/`Function`/`setTimeout`-string/`document.write`/`innerHTML` and large decoded `atob` output is aggregated (`js.dynamic_exec_count`, `.max_len`, `.max_entropy`, `.apis`) and, for bodies ≥ 1 KB, written to `scripts/dynamic-<sha>.js` (up to 50) so YARA and the library inventory see decoded-at-runtime code, not just the loader.
+- **Cookies (A12) and libraries (A15).** `cookies.*` records end-of-session cookie names, flags and value hashes (no plaintext values); `scripts.libraries` is a best-effort inventory parsed from CDN script URLs.
+- **Detonation profiles (A16).** `BrowserProfile.platform` now also sets `navigator.platform`. An **opt-in** `chrome-mac` (MacIntel) profile is available for macOS-targeted detonation, and `chrome-android` / `safari-iphone` mobile profiles exist. The default profile is unchanged (Windows Chrome); selecting a profile is a deliberate choice and never automatic.
+
+**A8 (OCR / QR decoding) is not implemented.** `pyzbar`, OpenCV, Pillow, `pytesseract`, `zbarimg` and `tesseract` are all unavailable in the image and need heavy system packages. Text-in-image and QR-in-image lures are therefore out of scope until an OCR/QR dependency is added with graceful fallback. A9 rendered-text facts use the DOM `innerText` already collected; overlay/BitB geometry (DE-PHI-006) is still deferred.
 
 ### Brand impersonation
 
