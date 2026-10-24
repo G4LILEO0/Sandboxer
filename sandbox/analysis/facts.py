@@ -88,18 +88,27 @@ _CMD_NOISE = re.compile(r'\^|(?<=\w)""(?=\w)')
 # Traits of a ClickFix payload rather than a command a docs page lets you copy: a
 # download cradle, an encoded or hidden PowerShell, mshta of a URL, or the trailing
 # "# I am not a robot" comment that hides the command in the Run dialog.
-_CLICKFIX = [
+#
+# Fetch-then-run cradles (download a script and pipe it to an interpreter) are also how
+# real package managers install (Homebrew, uv, Bun, Scoop, Chocolatey, rustup), so on
+# their own they are ambiguous: a cradle whose every source is a known installer is not
+# ClickFix (R-01). The source is judged, not the page, so a compromised allowlisted site
+# pushing a cradle from its own host still counts.
+_CLICKFIX_FETCH_RUN = [
     re.compile(
         r"\b(iwr|irm|invoke-webrequest|invoke-restmethod|downloadstring|downloadfile|"
         r"net\.webclient|start-bitstransfer)\b.{0,300}(\biex\b|invoke-expression|\|\s*iex)",
         re.I | re.S,
     ),
     re.compile(r"(\biex\b|invoke-expression)\s*\(?\s*\(?\s*(iwr|irm|new-object|\[)", re.I),
+    re.compile(r"\b(curl|wget)\b[^|\n]{0,300}\|\s*(ba|z)?sh\b", re.I),
+    re.compile(r"\$\(\s*(curl|wget)\b", re.I),
+]
+# Traits no installer uses: always ClickFix, whatever the source.
+_CLICKFIX_UNAMBIGUOUS = [
     re.compile(r"\s-(e|ec|enc|encodedcommand)\s+[A-Za-z0-9+/=]{40,}", re.I),
     re.compile(r"\s-w(indowstyle)?\s+(h|hidden|1)\b", re.I),
     re.compile(r"\bmshta(\.exe)?\s+[\"']?(https?:|\\\\|vbscript:|javascript:)", re.I),
-    re.compile(r"\b(curl|wget)\b[^|\n]{0,300}\|\s*(ba|z)?sh\b", re.I),
-    re.compile(r"\$\(\s*(curl|wget)\b", re.I),
     re.compile(r"base64\s+(-d|--decode)[^|\n]{0,80}\|\s*(ba|z)?sh\b", re.I),
     re.compile(r"(#|\brem\b|::).{0,80}\b(robot|captcha|verif\w*|human|cloudflare|ray id)", re.I),
     # finger.exe as a download cradle: finger user@host prints attacker-served text.
@@ -110,6 +119,67 @@ _CLICKFIX = [
     re.compile(r"\bstart\s+(\"[^\"]*\"\s+)?/min\b", re.I),
     re.compile(r"%comspec%\s*/[ck]\b", re.I),
 ]
+# DNS-retrieval cradle (DE-CFX-009): nslookup / Resolve-DnsName whose answer is run as
+# the next stage. The execution sink is required: a plain lookup, or one filtered with
+# findstr, is a troubleshooting snippet.
+_DNS_CRADLE = re.compile(
+    r"\b(nslookup|resolve-dnsname)\b.{0,300}?"
+    r"(\|\s*(iex|invoke-expression|cmd|powershell)\b|\biex\b|invoke-expression"
+    r"|\bdo\s+(call\s+)?%%?\w)",
+    re.I | re.S,
+)
+_CLICKFIX_UNAMBIGUOUS.append(_DNS_CRADLE)
+_CLICKFIX = _CLICKFIX_FETCH_RUN + _CLICKFIX_UNAMBIGUOUS
+_DNS_CRADLE_ARGS = re.compile(r"\b(?:nslookup|resolve-dnsname)\b([^|\n;&)]*)", re.I)
+_DNS_VALUE_FLAGS = {"-type", "-server", "-dnsonly"}  # flags whose value is the next token
+_IPV4 = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+_DNS_NAME = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,63}", re.I)
+# Where real install one-liners fetch from (R-01): host -> allowed path prefixes, or
+# None for any path on that host. Analyst-curated module data, shaped so it can become a
+# feed. raw.githubusercontent.com serves anything, so only named installer repos count.
+INSTALLER_SOURCES: dict[str, tuple[str, ...] | None] = {
+    "brew.sh": None,
+    "astral.sh": None,
+    "bun.sh": None,
+    "get.scoop.sh": None,
+    "community.chocolatey.org": ("/install.ps1",),
+    "chocolatey.org": ("/install.ps1",),
+    "sh.rustup.rs": None,
+    "win.rustup.rs": None,
+    "deno.land": ("/install.sh", "/install.ps1", "/x/install/"),
+    "get.docker.com": None,
+    "get.pnpm.io": None,
+    "install.python-poetry.org": None,
+    "pyenv.run": None,
+    "raw.githubusercontent.com": (
+        "/Homebrew/install/", "/nvm-sh/nvm/", "/ohmyzsh/ohmyzsh/", "/pyenv/pyenv-installer/",
+    ),
+}  # fmt: skip
+_CRADLE_SOURCE = re.compile(
+    r"https?://([a-z0-9.-]+)(/[^\s'\"|);]*)?"
+    r"|\b(?:irm|iwr|curl|wget|invoke-restmethod|invoke-webrequest)\b(?:\s+-{1,2}[\w-]+)*\s+"
+    r"[\"']?([a-z0-9-]+(?:\.[a-z0-9-]+)+)(/[^\s'\"|);]*)?",
+    re.I,
+)
+
+
+def _is_installer_cradle(plain: str) -> bool:
+    """Every source the command fetches from is a known installer (R-01)."""
+    sources = [
+        ((m.group(1) or m.group(3) or "").lower(), m.group(2) or m.group(4) or "/")
+        for m in _CRADLE_SOURCE.finditer(plain)
+    ]
+    if not sources:
+        return False
+    for host, path in sources:
+        if host not in INSTALLER_SOURCES:
+            return False
+        prefixes = INSTALLER_SOURCES[host]
+        if prefixes is not None and not path.startswith(prefixes):
+            return False
+    return True
+
+
 # Separate test on the raw text: a one-line command padded with a long run of spaces or
 # dashes, which pushes the real command out of view in the Run dialog and leaves only a
 # decoy ("P_u_s_h t_h_e E_n_t_e_r k_e_y", "I am not a robot") visible.
@@ -419,13 +489,52 @@ def _is_filefix(text: str) -> bool:
     return bool(_FILEFIX.search(text))
 
 
-def _is_clickfix(text: str) -> bool:
-    if _CARET_OBFUSCATION.search(text) or _PADDED_DECOY.search(text.strip()):
-        return True
-    if _is_filefix(text):
-        return True
+def _clickfix_traits(text: str) -> str | None:
+    """'unambiguous', 'cradle' (fetch-then-run from a non-installer source), 'installer'
+    (fetch-then-run whose every source is a known installer), or None."""
     plain = _CMD_NOISE.sub("", text)
-    return any(p.search(plain) for p in _CLICKFIX) or any(p.search(plain) for p in _MAC_CLICKFIX)
+    if (
+        _CARET_OBFUSCATION.search(text)
+        or _PADDED_DECOY.search(text.strip())
+        or _is_filefix(text)
+        or any(p.search(plain) for p in _CLICKFIX_UNAMBIGUOUS)
+        or any(p.search(plain) for p in _MAC_CLICKFIX)
+    ):
+        return "unambiguous"
+    if any(p.search(plain) for p in _CLICKFIX_FETCH_RUN):
+        return "installer" if _is_installer_cradle(plain) else "cradle"
+    return None
+
+
+def _is_clickfix(text: str) -> bool:
+    return _clickfix_traits(text) in ("unambiguous", "cradle")
+
+
+def _dns_cradle_iocs(text: str) -> tuple[set[str], set[str]]:
+    """The queried name and hard-coded DNS server of a DNS cradle (DE-CFX-009)."""
+    plain = _CMD_NOISE.sub("", text)
+    names: set[str] = set()
+    ips: set[str] = set()
+    if not _DNS_CRADLE.search(plain):
+        return names, ips
+    for m in _DNS_CRADLE_ARGS.finditer(plain):
+        tokens = [t.strip("\"'()") for t in m.group(1).split()]
+        skip = False
+        for tok in tokens:
+            low = tok.lower()
+            if skip:
+                skip = False
+                if _IPV4.fullmatch(tok):  # -Server <ip>
+                    ips.add(tok)
+                continue
+            if low.startswith("-"):
+                skip = low in _DNS_VALUE_FLAGS
+                continue
+            if _IPV4.fullmatch(tok):
+                ips.add(tok)
+            elif _DNS_NAME.fullmatch(tok):
+                names.add(low)
+    return names, ips
 
 
 def _clipboard(data: CaptureData) -> dict[str, Any]:
@@ -438,7 +547,8 @@ def _clipboard(data: CaptureData) -> dict[str, Any]:
         if c.get("text") and (c.get("api") or not c.get("trusted"))
     ]
     commands = [c for c in writes if _COMMAND.search(_CMD_NOISE.sub("", c.get("text", "")))]
-    clickfix = [c for c in commands if _is_clickfix(c.get("text", ""))]
+    traits = [_clickfix_traits(c.get("text", "")) for c in commands]
+    clickfix = [c for c, t in zip(commands, traits, strict=True) if t in ("unambiguous", "cradle")]
     path_disguised = [c for c in writes if _is_filefix(c.get("text", ""))]
     # A page write with no user gesture (new A1 field), or a command-like write later
     # overwritten / cleared (evidence-blanking). Old captures lack the field: neutral.
@@ -454,6 +564,8 @@ def _clipboard(data: CaptureData) -> dict[str, Any]:
         "writes": len(writes),
         "command_like": len(commands),
         "clickfix_like": len(clickfix),
+        "clickfix_unambiguous": traits.count("unambiguous"),
+        "installer_cradles": traits.count("installer"),
         "path_disguised": len(path_disguised),
         "no_gesture_writes": len(no_gesture),
         "overwritten_command": overwritten,
@@ -1598,6 +1710,10 @@ def extract_iocs(data: CaptureData, facts: dict[str, Any]) -> dict[str, list[str
             urls.add(u)
             if host := _host(u):
                 (ips if re.fullmatch(r"[\d.]+", host) else domains).add(host)
+        # A DNS cradle names no URL: its stage lives in a TXT/Name answer (DE-CFX-009).
+        dns_names, dns_servers = _dns_cradle_iocs(text)
+        domains.update(dns_names)
+        ips.update(dns_servers)
         eth_addresses.update(a.lower() for a in _ETH_ADDRESS.findall(text))
     for call in facts.get("web3", {}).get("rpc_calls", []):
         if call.get("to"):
