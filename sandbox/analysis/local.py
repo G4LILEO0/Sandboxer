@@ -30,12 +30,16 @@ def load_capture(out: Path, *, allowlisted: set[str] | None = None) -> CaptureDa
     scripts = {
         p.stem: p.read_text(encoding="utf-8", errors="replace") for p in out.glob("scripts/*.js")
     }
-    heads = {p.name: p.read_bytes()[:16] for p in out.glob("quarantine/*")}
+    heads = {p.name: p.read_bytes()[:32780] for p in out.glob("quarantine/*")}
     urls = {d["file"]: d.get("url", "") for d in result.get("dom_snapshots", [])}
-    dom_pages = [
-        parse_dom(p.read_text(encoding="utf-8", errors="replace"), urls.get(f"dom/{p.name}", ""))
+    dom_html = [
+        {
+            "url": urls.get(f"dom/{p.name}", ""),
+            "html": p.read_text(encoding="utf-8", errors="replace"),
+        }
         for p in sorted(out.glob("dom/*.html"))
     ]
+    dom_pages = [parse_dom(p["html"], p["url"]) for p in dom_html]
     brands = [BrandRef(n, tuple(k), tuple(d)) for n, k, d in defaults.DEFAULT_BRANDS]
     return CaptureData(
         result=result,
@@ -44,6 +48,7 @@ def load_capture(out: Path, *, allowlisted: set[str] | None = None) -> CaptureDa
         scripts=scripts,
         download_heads=heads,
         dom_pages=dom_pages,
+        dom_html=dom_html,
         brands=brands,
         allowlisted=allowlisted or set(),
     )

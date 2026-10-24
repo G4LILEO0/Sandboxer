@@ -185,6 +185,9 @@ FREE_HOSTING = (
     "tiiny.site", "trycloudflare.com", "typedream.app", "vercel.app", "web.app",
     "webflow.io", "webnode.page", "weebly.com", "weeblysite.com", "wixsite.com",
     "wixstudio.io", "wordpress.com", "workers.dev", "yolasite.com", "zapto.org",
+    # Abused storage / dev / serverless hosting (DE-PHI-008).
+    "storage.dev", "amplifyapp.com", "fly.dev", "ondigitalocean.app", "up.railway.app",
+    "railway.app", "on.aws", "lambda-url.on.aws", "azurestaticapps.net", "s3.amazonaws.com",
 )  # fmt: skip
 
 
