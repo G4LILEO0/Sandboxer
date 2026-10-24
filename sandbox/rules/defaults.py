@@ -388,6 +388,35 @@ BEHAVIOUR_RULES = [
         {"fact": "idp.high_risk_consent", "op": "gt", "value": 0},
         ["idp.oauth_authorize_requests", "final.url"],
     ),
+    # --- ConsentFix / AuthCodeFix (DE-M365-013, DE-M365-014) -------------------------
+    _rule(
+        "consentfix_authcode_paste_back",
+        "critical",
+        ["consent-phishing", "clickfix", "aitm"],
+        ["T1528", "T1566.002", "T1204.004"],
+        "A non-Microsoft page surfaces a real Entra authorize URL for a first-party "
+        "(pre-consented) app such as Azure CLI with a localhost redirect_uri, and tells the "
+        "visitor to paste the resulting URL or code back: the authorization code is handed "
+        "to the attacker (ConsentFix / AuthCodeFix).",
+        {
+            "all": [
+                {"fact": "idp.firstparty_loopback_authorize", "op": "gt", "value": 0},
+                {"fact": "lure.paste_back_instruction", "op": "eq", "value": True},
+            ]
+        },
+        ["idp.firstparty_loopback_details", "capture.gated", "final.url"],
+    ),
+    _rule(
+        "firstparty_app_loopback_authorize",
+        "medium",
+        ["consent-phishing"],
+        ["T1528"],
+        "A non-Microsoft, non-allowlisted page surfaces an Entra authorize URL for a "
+        "first-party app with a localhost redirect_uri: the structural half of ConsentFix, "
+        "seen even when the paste-back instruction is not rendered.",
+        {"fact": "idp.firstparty_loopback_authorize", "op": "gt", "value": 0},
+        ["idp.firstparty_loopback_details", "final.url"],
+    ),
     _rule(
         "ms_session_cookie_foreign_host",
         "critical",
@@ -1024,6 +1053,8 @@ DEFAULT_WEIGHTS = {
     "aitm_ms_paths_foreign_host": 80,
     "oauth_error_redirect_abuse": 55,
     "illicit_consent_grant": 50,
+    "consentfix_authcode_paste_back": 75,
+    "firstparty_app_loopback_authorize": 30,
     "ms_session_cookie_foreign_host": 80,
     "web3_rpc_from_non_wallet_page": 55,
     "etherhiding_payload_executed": 80,

@@ -583,6 +583,13 @@ _SUPPORT_SCARE = re.compile(
     r"(?i)(microsoft|windows|defender|apple|support|virus|infected|blocked|trojan|"
     r"spyware|call (us|now|immediately)|do not (restart|shut)|technical support)",
 )
+# "Copy the URL from the address bar and paste it here": the hand-back step of an
+# authorization-code paste-back (ConsentFix / AuthCodeFix, DE-M365-013).
+_PASTE_BACK = re.compile(
+    r"(?i)\b(paste|drag(\s+and\s+drop)?|drop)\b.{0,60}\b(url|link|address(\s+bar)?|"
+    r"authori[sz]ation\s+code|code)\b.{0,40}\b(here|below|back|into|in\s+the\s+(box|field))\b"
+    r"|\bcopy\b.{0,40}\b(url|link|address(\s+bar)?)\b.{0,80}\b(paste|here|below|back)\b",
+)
 _NOTIFY_BAIT = re.compile(
     r"(?i)(click|press|tap)\s*(the\s*)?[\"'“]?allow[\"'”]?\s*(to|button|if|below)"
     r"|allow notifications to (continue|verify|watch|download|proceed)"
@@ -609,13 +616,15 @@ def _lure(data: CaptureData) -> dict[str, Any]:
         }
     )
     phones = set()
-    notify_bait = False
+    notify_bait = paste_back = False
     for f in frames:
         text = f"{f.get('title', '')} {f.get('text', '')}"
         if _SUPPORT_SCARE.search(text):
             phones.update(m.group(0).strip() for m in _SUPPORT_PHONE.finditer(text))
         if _NOTIFY_BAIT.search(text):
             notify_bait = True
+        if _PASTE_BACK.search(text):
+            paste_back = True
     return {
         "run_dialog_instructions": len(pages),
         "run_dialog_pages": pages[:10],
@@ -624,6 +633,7 @@ def _lure(data: CaptureData) -> dict[str, Any]:
         "tech_support_phone": len(phones),
         "tech_support_phones": sorted(phones)[:10],
         "allow_notifications_bait": notify_bait,
+        "paste_back_instruction": paste_back,
     }
 
 
@@ -1173,6 +1183,7 @@ def _idp(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
         if info and info["client_id"] not in FIRST_PARTY_MS_APP_IDS:
             if info["high_risk"]:
                 authorize.append(info)
+    consentfix = _firstparty_loopback_authorize(data, reqs)
     # Microsoft session cookies set by a non-Microsoft host.
     foreign_cookies = []
     for r in reqs:
@@ -1194,9 +1205,73 @@ def _idp(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
         "ms_foreign_paths": foreign_paths[:10],
         "oauth_authorize_requests": authorize[:10],
         "high_risk_consent": len(authorize),
+        "firstparty_loopback_authorize": len(consentfix),
+        "firstparty_loopback_details": consentfix[:10],
         "cookies_on_foreign_host": len(foreign_cookies),
         "idp_cookies": foreign_cookies[:10],
     }
+
+
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+# An Entra authorize URL written into a page (link, inline script, window.open target).
+_AUTHORIZE_IN_TEXT = re.compile(
+    r"https:(?://|\\/\\/)login\.microsoft(?:online)?\.com(?:/|\\/)[^\s\"'<>]{0,200}?"
+    r"oauth2(?:/|\\/)(?:v2\.0(?:/|\\/))?authorize\?[^\s\"'<>]{1,2000}",
+    re.I,
+)
+
+
+def _firstparty_loopback_authorize(
+    data: CaptureData, reqs: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """DE-M365-013/014 (ConsentFix / AuthCodeFix): an Entra authorize URL for a
+    first-party, pre-consented app (Azure CLI and similar) whose redirect_uri is loopback,
+    surfaced by a non-Microsoft, non-allowlisted page. The victim signs in for real and
+    pastes the localhost URL, which carries the authorization code, back to the attacker.
+
+    The sandbox does not click "Sign in", so the URL is looked for in the chain and
+    requests and also in page links, raw DOM and collected scripts. The origin is
+    judged per source: the submitted host for chain URLs, the frame host for links/DOM.
+    Developer tooling that legitimately uses a loopback redirect does so from the CLI or
+    from Microsoft's own pages, not from a third-party web page."""
+    import html as _html
+
+    def foreign(host: str | None) -> bool:
+        if not host:
+            return False
+        return not _ms_owned(host, data.brands) and site(host) not in data.allowlisted
+
+    candidates: list[tuple[str, str | None]] = []
+    origin = _host(data.result.get("url"))
+    candidates += [(u, origin) for u in _chain_urls(data) + [r["url"] for r in reqs]]
+    for frame in _all_frames(data):
+        fhost = _host(frame.get("url"))
+        candidates += [(str(link), fhost) for link in frame.get("links", [])]
+    for page in data.dom_html:
+        phost = _host(page.get("url"))
+        html_text = page.get("html", "")
+        candidates += [(m.group(0), phost) for m in _AUTHORIZE_IN_TEXT.finditer(html_text)]
+    for text in data.scripts.values():
+        candidates += [(m.group(0), origin) for m in _AUTHORIZE_IN_TEXT.finditer(text)]
+    found: dict[str, dict[str, Any]] = {}
+    for raw, src_host in candidates:
+        if not foreign(src_host):
+            continue
+        url = _html.unescape(raw.replace("\\/", "/").replace("\\u0026", "&"))
+        info = _parse_authorize(url)
+        if not info or info["client_id"] not in FIRST_PARTY_MS_APP_IDS:
+            continue
+        if (info["redirect_uri_host"] or "").strip("[]") not in _LOOPBACK_HOSTS:
+            continue
+        found.setdefault(
+            url[:300],
+            {
+                "client_id": info["client_id"],
+                "page_host": src_host,
+                "redirect_uri_host": info["redirect_uri_host"],
+            },
+        )
+    return list(found.values())
 
 
 def _parse_authorize(url: str) -> dict[str, Any] | None:
