@@ -438,15 +438,37 @@ BEHAVIOUR_RULES = [
         "critical",
         ["clickfix"],
         ["T1204.004", "T1059.001", "T1218.005"],
-        "A fake CAPTCHA / verification page (not a genuine Turnstile/reCAPTCHA challenge) "
-        "wrote a command to the clipboard, or did so with Run-dialog instructions.",
+        "A fake CAPTCHA / verification page wrote a command to the clipboard, or did so "
+        "with Run-dialog instructions. When genuine Turnstile/reCAPTCHA resources loaded, "
+        "verification wording alone is not enough: it then needs Run-dialog instructions "
+        "or an unambiguous ClickFix trait.",
         {
             "all": [
                 {"fact": "clipboard.command_like", "op": "gt", "value": 0},
                 {
                     "any": [
-                        {"fact": "lure.fake_captcha", "op": "eq", "value": True},
                         {"fact": "lure.run_dialog_instructions", "op": "gt", "value": 0},
+                        {
+                            "all": [
+                                {"fact": "lure.verification_wording", "op": "eq", "value": True},
+                                {
+                                    "any": [
+                                        {
+                                            "fact": "clipboard.clickfix_unambiguous",
+                                            "op": "gt",
+                                            "value": 0,
+                                        },
+                                        {
+                                            "not": {
+                                                "fact": "lure.genuine_challenge",
+                                                "op": "eq",
+                                                "value": True,
+                                            }
+                                        },
+                                    ]
+                                },
+                            ]
+                        },
                     ]
                 },
             ]

