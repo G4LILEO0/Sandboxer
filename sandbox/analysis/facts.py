@@ -79,7 +79,7 @@ _COMMAND = re.compile(
     r"\b(powershell|pwsh|cmd(\.exe)?\s*/[ck]|mshta|rundll32|regsvr32|bitsadmin|certutil|wscript|"
     r"cscript|curl\s+|wget\s+|iex\b|invoke-(expression|webrequest)|msiexec|start-process|"
     r"bash\s+-c|osascript|finger(\.exe)?\s+\S+@|conhost(\.exe)?\s|forfiles|for\s+/f\b)|"
-    r"%comspec%",
+    r"%comspec%|\|\s*cmd(\.exe)?\b",
     re.I,
 )
 # cmd ignores ^ escapes and empty "" pairs inside a word, so f^^i^^n^^g^^e^^r and
@@ -129,6 +129,12 @@ _DNS_CRADLE = re.compile(
     re.I | re.S,
 )
 _CLICKFIX_UNAMBIGUOUS.append(_DNS_CRADLE)
+# CrashFix (DE-CFX-010) copies finger.exe under another name (ct.exe) to dodge
+# command-line rules on "finger", then pipes <name>.exe user@host into cmd.
+_CLICKFIX_UNAMBIGUOUS += [
+    re.compile(r"\bcopy\b[^&|\n]{0,160}\bfinger(\.exe)?\b[^&|\n]{0,160}\\\w+\.exe\b", re.I),
+    re.compile(r"\b(?!finger\b)\w{1,12}\.exe\s+[\w.-]+@[\w.-]+\s*\|\s*cmd\b", re.I),
+]
 _CLICKFIX = _CLICKFIX_FETCH_RUN + _CLICKFIX_UNAMBIGUOUS
 _DNS_CRADLE_ARGS = re.compile(r"\b(?:nslookup|resolve-dnsname)\b([^|\n;&)]*)", re.I)
 _DNS_VALUE_FLAGS = {"-type", "-server", "-dnsonly"}  # flags whose value is the next token
@@ -1455,6 +1461,25 @@ def _fake_captcha(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, An
     }
 
 
+# CrashFix / fake crash-repair popup (DE-CFX-010): "browser stopped abnormally / security
+# issues detected", then a "repair" command to paste.
+_CRASH_REPAIR = re.compile(
+    r"(?i)\bbrowser (has )?(stopped|crashed)\b|stopped abnormally|security issues? detected"
+    r"|\brepair (your )?(browser|chrome|edge)\b|\bbrowser (repair|recovery) (tool|command)\b",
+)
+
+
+def _crash_repair(data: CaptureData) -> list[str]:
+    out = []
+    for frame in _all_frames(data):
+        host = _host(frame.get("url"))
+        text = f"{frame.get('title', '')} {frame.get('text', '')}"
+        if host and not any(host == v or host.endswith("." + v) for v in _BROWSER_VENDORS):
+            if _CRASH_REPAIR.search(text):
+                out.append(frame.get("url", ""))
+    return sorted(set(out))[:10]
+
+
 def _fake_update(data: CaptureData) -> list[str]:
     out = []
     for frame in _all_frames(data):
@@ -1754,7 +1779,12 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
     nav_cause = _navigation_cause(data)
     libraries = _libraries(data)
     final_allowlisted = bool(final_host) and site(final_host) in data.allowlisted
-    lure = {**_lure(data), **_fake_captcha(data, reqs), "fake_update_pages": _fake_update(data)}
+    lure = {
+        **_lure(data),
+        **_fake_captcha(data, reqs),
+        "fake_update_pages": _fake_update(data),
+        "crash_repair_pages": _crash_repair(data),
+    }
     web3 = _web3(data, reqs)
     web3.update(
         _web3_derived(

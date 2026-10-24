@@ -537,6 +537,29 @@ BEHAVIOUR_RULES = [
         },
         ["lure.fake_update_pages", "final.url"],
     ),
+    # --- CrashFix fake crash-repair lure (DE-CFX-010) --------------------------------
+    _rule(
+        "crashfix_repair_lure",
+        "high",
+        ["clickfix", "crashfix"],
+        ["T1176.001", "T1204.004"],
+        "A non-vendor page shows a fake browser-crash / 'security issues detected' repair "
+        "popup and writes a command to the clipboard or tells the visitor to paste one "
+        "into Run (CrashFix / KongTuke, often after a malicious extension freezes the "
+        "browser).",
+        {
+            "all": [
+                {"fact": "lure.crash_repair_pages", "op": "exists", "value": True},
+                {
+                    "any": [
+                        {"fact": "clipboard.command_like", "op": "gt", "value": 0},
+                        {"fact": "lure.run_dialog_instructions", "op": "gt", "value": 0},
+                    ]
+                },
+            ]
+        },
+        ["lure.crash_repair_pages", "clipboard.commands", "evasion.devtools_blocked", "final.url"],
+    ),
     # --- HTML smuggling credential page (DE-OBF-006) --------------------------------
     _rule(
         "smuggled_credential_page",
@@ -1068,6 +1091,7 @@ DEFAULT_WEIGHTS = {
     "fake_captcha_clipboard_command": 80,
     "filefix_command_disguised_as_path": 80,
     "fake_browser_update": 70,
+    "crashfix_repair_lure": 55,
     "smuggled_credential_page": 55,
     "ipfs_credential_page": 45,
     "client_side_ip_geo_lookup": 20,
