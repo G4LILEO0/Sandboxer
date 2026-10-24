@@ -169,6 +169,7 @@ class CaptureData:
     har_entries: list[dict[str, Any]] = field(default_factory=list)
     scripts: dict[str, str] = field(default_factory=dict)  # sha256 -> text
     download_heads: dict[str, bytes] = field(default_factory=dict)  # sha256 -> first bytes
+    download_paths: dict[str, str] = field(default_factory=dict)  # sha256 -> local path (A10)
     brands: list[BrandRef] = field(default_factory=list)
     allowlisted: set[str] = field(default_factory=set)
     domain_ages: dict[str, int | None] = field(default_factory=dict)
@@ -177,6 +178,9 @@ class CaptureData:
     # Raw DOM snapshot HTML per page ({"url", "html"}): structural markers (ESTS $Config,
     # input ids) that the parsed text drops. Empty for old captures, which yield neutral facts.
     dom_html: list[dict[str, str]] = field(default_factory=list)
+    # Browser-side request records with CDP initiator (A3): {url, method, type, frame_url,
+    # initiator{type, script_url}, ...}. Empty for captures made before A3; facts fall back.
+    requests: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _host(url: str | None) -> str:
@@ -355,6 +359,62 @@ def _downloads(data: CaptureData) -> dict[str, Any]:
     }
 
 
+_ARCHIVE_PASSWORD = re.compile(
+    r"(?i)(password|pass|pwd|كلمة\s*(?:ال)?مرور)\s*[:：=]?\s*[`'\"]?([^\s`'\"<>]{3,24})",
+)
+
+
+def _archive_listing(data: CaptureData) -> dict[str, Any]:
+    """A10/DE-DLD-001/002: list archive members with stdlib zipfile/tarfile (directory only,
+    never extract), flag encrypted entries, and spot risky inner types. ISO/7z/RAR are not
+    listed (no stdlib reader); they are noted but not opened."""
+    import tarfile
+    import zipfile
+
+    archives, inner_risky, encrypted = [], 0, 0
+    for d in data.result.get("downloads", []):
+        sha = d.get("sha256")
+        path = data.download_paths.get(sha or "")
+        if not path:
+            continue
+        head = data.download_heads.get(sha or "", b"")
+        entry: dict[str, Any] = {"name": d.get("suggested_filename"), "format": None, "encrypted": False, "entries": []}  # noqa: E501
+        try:
+            if head.startswith(b"PK\x03\x04") and zipfile.is_zipfile(path):
+                entry["format"] = "zip"
+                with zipfile.ZipFile(path) as zf:
+                    for info in zf.infolist()[:200]:
+                        enc = bool(info.flag_bits & 0x1)
+                        entry["encrypted"] = entry["encrypted"] or enc
+                        ext = info.filename.lower().rsplit(".", 1)[-1] if "." in info.filename else ""  # noqa: E501
+                        risky = ext in EXECUTABLE_EXTENSIONS
+                        inner_risky += risky
+                        entry["entries"].append({"name": info.filename[:200], "size": info.file_size, "encrypted": enc, "risky": risky})  # noqa: E501
+            elif tarfile.is_tarfile(path):
+                entry["format"] = "tar"
+                with tarfile.open(path) as tf:
+                    for member in tf.getmembers()[:200]:
+                        ext = member.name.lower().rsplit(".", 1)[-1] if "." in member.name else ""
+                        risky = ext in EXECUTABLE_EXTENSIONS
+                        inner_risky += risky
+                        entry["entries"].append({"name": member.name[:200], "size": member.size, "risky": risky})  # noqa: E501
+            else:
+                continue
+        except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError):
+            continue
+        encrypted += entry["encrypted"]
+        archives.append(entry)
+    # Is an archive password printed on a page? (scanner-evasion delivery, DE-DLD-002)
+    page_text = " ".join(f.get("text", "") for f in _all_frames(data))
+    password_on_page = bool(encrypted and _ARCHIVE_PASSWORD.search(page_text))
+    return {
+        "archives": archives[:10],
+        "archive_inner_risky": inner_risky,
+        "archive_encrypted": encrypted,
+        "archive_password_on_page": password_on_page,
+    }
+
+
 def _is_filefix(text: str) -> bool:
     return bool(_FILEFIX.search(text))
 
@@ -404,6 +464,20 @@ def _clipboard(data: CaptureData) -> dict[str, Any]:
     }
 
 
+_SUPPORT_PHONE = re.compile(
+    r"(?:\+?\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}\b"
+)
+_SUPPORT_SCARE = re.compile(
+    r"(?i)(microsoft|windows|defender|apple|support|virus|infected|blocked|trojan|"
+    r"spyware|call (us|now|immediately)|do not (restart|shut)|technical support)",
+)
+_NOTIFY_BAIT = re.compile(
+    r"(?i)(click|press|tap)\s*(the\s*)?[\"'“]?allow[\"'”]?\s*(to|button|if|below)"
+    r"|allow notifications to (continue|verify|watch|download|proceed)"
+    r"|click allow.{0,30}(robot|human|verify)",
+)
+
+
 def _lure(data: CaptureData) -> dict[str, Any]:
     """Pages that tell the visitor to open a Run dialog or terminal and paste into it,
     and pages giving a reason to pay (redelivery or customs fees, fines, tolls)."""
@@ -422,11 +496,22 @@ def _lure(data: CaptureData) -> dict[str, Any]:
             for m in _PAYMENT_PRETEXT.finditer(f"{f.get('title', '')} {f.get('text', '')}")
         }
     )
+    phones = set()
+    notify_bait = False
+    for f in frames:
+        text = f"{f.get('title', '')} {f.get('text', '')}"
+        if _SUPPORT_SCARE.search(text):
+            phones.update(m.group(0).strip() for m in _SUPPORT_PHONE.finditer(text))
+        if _NOTIFY_BAIT.search(text):
+            notify_bait = True
     return {
         "run_dialog_instructions": len(pages),
         "run_dialog_pages": pages[:10],
         "payment_pretext": len(pretexts),
         "payment_pretexts": pretexts[:10],
+        "tech_support_phone": len(phones),
+        "tech_support_phones": sorted(phones)[:10],
+        "allow_notifications_bait": notify_bait,
     }
 
 
@@ -929,13 +1014,24 @@ def _idp(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
         if len(found) >= 2 and _html_credential_prompt(html):
             clone_pages.append({"host": host, "url": page.get("url"), "markers": found})
             markers_seen.extend(found)
-    # IdP CDN branding assets on a foreign credential page.
+    # IdP CDN branding assets on a foreign credential page. With the A3 request log we can
+    # check the initiating document's host precisely; otherwise fall back to "a foreign
+    # credential page exists in the session".
     cdn_assets = sorted({r["url"][:300] for r in reqs if _IDP_CDN.search(r["host"] or "")})
     prompt_hosts = _page_hosts_with_prompt(data)
-    foreign_prompt = any(
-        not _ms_owned(h, data.brands) and site(h) not in data.allowlisted for h in prompt_hosts
-    )
-    cdn_on_foreign = bool(cdn_assets) and foreign_prompt
+    foreign_prompt_hosts = {
+        h for h in prompt_hosts if not _ms_owned(h, data.brands) and site(h) not in data.allowlisted
+    }
+    cdn_precise = False
+    if data.requests:
+        for asset in cdn_assets:
+            doc_host = _cdn_document_host(data, asset)
+            if doc_host and doc_host in foreign_prompt_hosts:
+                cdn_precise = True
+                break
+        cdn_on_foreign = cdn_precise
+    else:
+        cdn_on_foreign = bool(cdn_assets) and bool(foreign_prompt_hosts)
     # Microsoft auth paths served from a non-Microsoft host (AiTM reverse proxy).
     foreign_paths = []
     for r in reqs:
@@ -970,6 +1066,7 @@ def _idp(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
         "ms_clone_page_details": clone_pages[:10],
         "ms_markers": sorted(set(markers_seen)),
         "cdn_assets_on_foreign_page": cdn_on_foreign,
+        "cdn_assets_precise": cdn_precise,
         "cdn_assets": cdn_assets[:10],
         "ms_paths_on_foreign_host": len(foreign_paths),
         "ms_foreign_paths": foreign_paths[:10],
@@ -1122,6 +1219,167 @@ def _fake_update(data: CaptureData) -> list[str]:
     return sorted(set(out))[:10]
 
 
+_LIBRARY_PATTERNS = [
+    ("jquery", re.compile(r"/jquery[/-]v?(\d+\.\d+\.\d+)", re.I)),
+    ("crypto-js", re.compile(r"crypto-js[@/](\d+\.\d+\.\d+)", re.I)),
+    ("randexp", re.compile(r"randexp[@/](\d+\.\d+\.\d+)", re.I)),
+    ("socket.io", re.compile(r"socket\.io[@/](\d+\.\d+\.\d+)", re.I)),
+    ("web3", re.compile(r"/web3(?:\.min)?\.js|web3[@/](\d+\.\d+\.\d+)", re.I)),
+    ("ethers", re.compile(r"ethers[@/.-]?v?(\d+\.\d+\.\d+)?", re.I)),
+]
+# Decoy destinations a cloaking page bounces to after a failed sandbox / bot check.
+_DECOY_HOST = re.compile(
+    r"(^|\.)(google\.[a-z.]+|wikibooks\.org|wikipedia\.org|ebay\.com|booking\.com|"
+    r"office\.com|microsoft\.com)$",
+    re.I,
+)
+# Trusted redirector / open-redirect wrappers abused to launder a lure URL.
+_TRUSTED_REDIRECTOR = re.compile(
+    r"google\.[a-z.]+/(amp/s/|url\?|aclk)|googleadservices\.com/pagead/aclk|youtube\.com/redirect"
+    r"|l\.facebook\.com/l\.php|/t\.co/|bit\.ly/|tinyurl\.com/|is\.gd/|serving-sys\.com"
+    r"|safelinks\.protection\.outlook\.com|urldefense\.com|mimecastprotect\.com",
+    re.I,
+)
+# CAPTCHA / antibot challenge resources, and their result-field names.
+_CHALLENGE = re.compile(
+    r"challenges\.cloudflare\.com/turnstile|/cdn-cgi/challenge-platform|www\.google\.com/recaptcha"
+    r"|www\.recaptcha\.net/recaptcha|hcaptcha\.com|cf-turnstile-response|g-recaptcha-response",
+    re.I,
+)
+
+
+def _requests_summary(data: CaptureData) -> dict[str, Any]:
+    reqs = data.requests
+    by_type: dict[str, int] = {}
+    for r in reqs:
+        t = str(r.get("type") or "other").lower()
+        by_type[t] = by_type.get(t, 0) + 1
+    return {"count": len(reqs), "by_type": by_type}
+
+
+def _script_posted_credentials(data: CaptureData) -> dict[str, Any]:
+    """DE-PHI-003: a password field posted by fetch/XHR/beacon (not a <form action>) to
+    another site. Needs the A3 request log (initiator + resource type); 0 without it."""
+    pw_hosts: set[str] = set()
+    for frame in _all_frames(data):
+        host = _host(frame.get("url"))
+        if not host:
+            continue
+        if frame.get("loose_password_fields"):
+            pw_hosts.add(host)
+        for form in frame.get("forms", []):
+            if not any(f.get("type") == "password" for f in form.get("fields", [])):
+                continue
+            action = form.get("action") or ""
+            scheme = urlsplit(action).scheme.lower()
+            if not action or scheme in ("", "javascript") or _same_url(action, frame.get("url")):
+                pw_hosts.add(host)
+    posts = []
+    if pw_hosts:
+        for r in data.requests:
+            if str(r.get("method", "")).upper() not in ("POST", "PUT"):
+                continue
+            if str(r.get("type") or "").lower() not in ("fetch", "xhr", "ping", "websocket", "other", ""):  # noqa: E501
+                continue
+            fhost = _host(r.get("frame_url") or r.get("document_url"))
+            thost = _host(r.get("url"))
+            if (
+                fhost in pw_hosts
+                and thost
+                and not _same_site(fhost, thost, data.brands)
+                and site(thost) not in data.allowlisted
+            ):
+                posts.append({"from": fhost, "to": thost, "type": r.get("type")})
+    return {
+        "script_posted_credentials": len(posts),
+        "script_posted_targets": posts[:10],
+    }
+
+
+def _cdn_document_host(data: CaptureData, asset_url: str) -> str | None:
+    """The host of the document that initiated a request, from the A3 log; None if unknown."""
+    for r in data.requests:
+        if r.get("url") == asset_url:
+            doc = r.get("document_url") or r.get("frame_url")
+            return _host(doc) if doc else None
+    return None
+
+
+def _libraries(data: CaptureData) -> list[dict[str, str]]:
+    urls: set[str] = set()
+    for frame in _all_frames(data):
+        for s in frame.get("scripts", []):
+            if isinstance(s, dict) and s.get("src"):
+                urls.add(s["src"])
+    out = []
+    for url in urls:
+        for name, pat in _LIBRARY_PATTERNS:
+            if m := pat.search(url):
+                ver = m.group(1) if m.lastindex else None
+                out.append({"name": name, "version": ver, "url": url[:200]})
+                break
+    return out[:30]
+
+
+def _jsapi_facts(data: CaptureData) -> dict[str, Any]:
+    j = data.result.get("jsapi") or {}
+    execs = j.get("exec") or {}
+    apis = j.get("apis") or {}
+    blobs = j.get("blobs") or []
+    return {
+        "dynamic_exec_count": execs.get("count", 0),
+        "dynamic_exec_max_len": execs.get("max_len", 0),
+        "dynamic_exec_max_entropy": execs.get("max_entropy", 0.0),
+        "blob_constructs": len(blobs),
+        "blob_details": blobs[:10],
+        "history_floods": apis.get("history.pushState", 0) + apis.get("history.replaceState", 0),
+        "fullscreen": apis.get("requestFullscreen", 0),
+        "pointer_lock": apis.get("requestPointerLock", 0),
+        "media_autoplay": apis.get("play", 0),
+        "keyboard_lock": apis.get("keyboard.lock", 0),
+        "notification_prompt": apis.get("Notification.requestPermission", 0),
+        "service_worker": apis.get("serviceWorker.register", 0),
+        "sw_scripts": j.get("sw_scripts", []),
+    }
+
+
+def _navigation_cause(data: CaptureData) -> dict[str, Any]:
+    """DE-EVA-005: a scripted (no-gesture) top-level bounce to a decoy, on a young or
+    free-hosted or obfuscated submitted site."""
+    chain, _ = _split_analyst_hops(data)
+    bounces = []
+    for hop in chain:
+        if hop.get("type") in ("js", "meta_refresh", "header_refresh"):
+            thost = _host(hop.get("to"))
+            if thost and _DECOY_HOST.search(thost):
+                bounces.append({"to": hop.get("to"), "type": hop.get("type")})
+            elif str(hop.get("to", "")).startswith("about:blank"):
+                bounces.append({"to": "about:blank", "type": hop.get("type")})
+    return {"scripted_bounce": len(bounces), "scripted_bounces": bounces[:10]}
+
+
+def _challenge_gate(data: CaptureData, reqs: list[dict[str, Any]]) -> bool:
+    for r in reqs:
+        if _CHALLENGE.search(r["url"]) or _CHALLENGE.search(r["post"]):
+            return True
+    for frame in _all_frames(data):
+        for form in frame.get("forms", []):
+            for f in form.get("fields", []):
+                if f.get("name") and _CHALLENGE.search(f["name"]):
+                    return True
+    return False
+
+
+def _trusted_redirectors(data: CaptureData) -> list[str]:
+    chain, _ = _split_analyst_hops(data)
+    out = []
+    for hop in chain:
+        frm = hop.get("from") or ""
+        if _TRUSTED_REDIRECTOR.search(frm):
+            out.append(_host(frm))
+    return sorted(set(out))[:10]
+
+
 def _evasion(data: CaptureData) -> dict[str, Any]:
     blocked = data.result.get("blocked_input", [])
     devtools = sorted({b.get("key", "") for b in blocked if b.get("kind") == "devtools_key"})
@@ -1178,8 +1436,11 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
     blocked = r.get("blocked", [])
     internal = [b for b in blocked if "scheme" not in b.get("reason", "")]
     hidden = sorted({src for f in _all_frames(data) for src in _suspicious_hidden(f, data)})
-    forms = _forms(data)
+    forms = {**_forms(data), **_script_posted_credentials(data)}
     reqs = _har_requests(data)
+    jsapi = _jsapi_facts(data)
+    challenge_gate = _challenge_gate(data, reqs)
+    nav_cause = _navigation_cause(data)
     # Credential/credential-like form pages served from blob: or about: documents
     # (HTML smuggling), which Chromium allows for script-created top-level/frame docs.
     smuggled = sorted(
@@ -1212,14 +1473,19 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             # The session ended on Chrome's own error page (DNS, TLS or connection failure).
             "load_failed": not str(final_url or "").startswith(("http:", "https:")),
             "duration_ms": r.get("duration_ms"),
+            # A CAPTCHA/Turnstile gate was seen this session (DE-PHI-011): a run that stops
+            # at one should prefer "unknown" to "benign" and be re-run interactively.
+            "gated": challenge_gate,
         },
         "forms": forms,
         "scripts": {
             "count": len(data.scripts),
             "max_obfuscation_score": scripts[0]["score"] if scripts else 0,
             "obfuscated": scripts[:10],
+            "libraries": _libraries(data),
         },
-        "downloads": _downloads(data),
+        "js": jsapi,
+        "downloads": {**_downloads(data), **_archive_listing(data)},
         "clipboard": _clipboard(data),
         "lure": {
             **_lure(data),
@@ -1258,6 +1524,12 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "blocked_internal": len(internal),
             "blocked": blocked[:20],
             "ip_lookups": _ip_lookups(reqs),
+            "request_log": _requests_summary(data),
+            "trusted_redirectors": _trusted_redirectors(data),
+        },
+        "navigation": nav_cause,
+        "cookies": {
+            "end_of_session": [c.get("name") for c in data.result.get("cookies", [])][:50],
         },
         "frames": {
             "count": len(_frames(r)),
