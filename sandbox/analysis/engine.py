@@ -405,11 +405,13 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
             if a.size <= _MAX_YARA_BYTES and store.exists(a.object_key)
         }
         heads = {}
+        download_paths = {}
         for a in by_kind.get("download", []):
             if store.exists(a.object_key):
                 with store.open(a.object_key) as fh:
                     # Enough to reach the ISO 9660 "CD001" marker at 0x8001 for magic typing.
                     heads[a.sha256] = fh.read(32780)
+                download_paths[a.sha256] = str(store.path(a.object_key))
         dom_html = [
             {
                 "url": a.meta.get("url", ""),
@@ -419,6 +421,14 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
             if store.exists(a.object_key)
         ]
         dom_pages = [parse_dom(p["html"], p["url"]) for p in dom_html]
+        requests: list[dict] = []
+        for a in by_kind.get("requests_log", []):
+            if store.exists(a.object_key):
+                for line in store.read_bytes(a.object_key).decode("utf-8", "replace").splitlines():
+                    try:
+                        requests.append(json.loads(line))
+                    except ValueError:
+                        pass
 
         data = CaptureData(
             result=result,
@@ -426,8 +436,10 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
             har_entries=har_entries,
             scripts=scripts,
             download_heads=heads,
+            download_paths=download_paths,
             dom_pages=dom_pages,
             dom_html=dom_html,
+            requests=requests,
             brands=await load_brands(db),
         )
         hosts = contacted_hosts(data)

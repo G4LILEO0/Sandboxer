@@ -31,6 +31,7 @@ def load_capture(out: Path, *, allowlisted: set[str] | None = None) -> CaptureDa
         p.stem: p.read_text(encoding="utf-8", errors="replace") for p in out.glob("scripts/*.js")
     }
     heads = {p.name: p.read_bytes()[:32780] for p in out.glob("quarantine/*")}
+    download_paths = {p.name: str(p) for p in out.glob("quarantine/*")}
     urls = {d["file"]: d.get("url", "") for d in result.get("dom_snapshots", [])}
     dom_html = [
         {
@@ -40,6 +41,12 @@ def load_capture(out: Path, *, allowlisted: set[str] | None = None) -> CaptureDa
         for p in sorted(out.glob("dom/*.html"))
     ]
     dom_pages = [parse_dom(p["html"], p["url"]) for p in dom_html]
+    reqlog = out / "requests.jsonl"
+    requests = (
+        [json.loads(x) for x in reqlog.read_text(encoding="utf-8").splitlines() if x.strip()]
+        if reqlog.exists()
+        else []
+    )
     brands = [BrandRef(n, tuple(k), tuple(d)) for n, k, d in defaults.DEFAULT_BRANDS]
     return CaptureData(
         result=result,
@@ -47,8 +54,10 @@ def load_capture(out: Path, *, allowlisted: set[str] | None = None) -> CaptureDa
         har_entries=har_entries,
         scripts=scripts,
         download_heads=heads,
+        download_paths=download_paths,
         dom_pages=dom_pages,
         dom_html=dom_html,
+        requests=requests,
         brands=brands,
         allowlisted=allowlisted or set(),
     )
