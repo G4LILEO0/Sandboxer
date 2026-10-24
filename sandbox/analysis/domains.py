@@ -188,6 +188,9 @@ FREE_HOSTING = (
     # Abused storage / dev / serverless hosting (DE-PHI-008).
     "storage.dev", "amplifyapp.com", "fly.dev", "ondigitalocean.app", "up.railway.app",
     "railway.app", "on.aws", "lambda-url.on.aws", "azurestaticapps.net", "s3.amazonaws.com",
+    # AI website builders / preview hosts (DE-PHI-013). v0 publishes to *.vercel.app
+    # (listed above); bolt.new itself is the editor, its sites go to bolt.host.
+    "lovable.app", "lovableproject.com", "v0.dev", "v0.app", "base44.app", "bolt.host",
 )  # fmt: skip
 
 

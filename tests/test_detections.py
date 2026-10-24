@@ -691,6 +691,36 @@ def test_trezor_seo_page_on_free_hosting():
     assert "brand_on_free_hosting" in _hits(data)
 
 
+@pytest.mark.parametrize(
+    ("host", "platform"),
+    [
+        ("ups-flow-harvester.lovable.app", "lovable.app"),
+        ("preview-1a2b.lovableproject.com", "lovableproject.com"),
+        ("okta-sso.base44.app", "base44.app"),
+        ("m365-login.bolt.host", "bolt.host"),
+        ("v0-okta-clone.vercel.app", "vercel.app"),
+    ],
+)
+def test_ai_builder_hosts_are_tenanted_free_hosting(host, platform):
+    """DE-PHI-013: AI site builders are free hosting, so each tenant is its own site and
+    allowlisting the platform never vouches for a kit on it."""
+    from sandbox.analysis.domains import free_hosting, site
+
+    assert free_hosting(host) == platform
+    assert site(host) == host.split(".", 1)[0] + "." + platform
+
+
+def test_brand_lure_on_lovable_is_flagged_and_demo_is_quiet():
+    url = "https://m365-docs-share.lovable.app/"
+    lure = _page(url, title="Microsoft 365 | Sign in to view document",
+                 text="Microsoft OneDrive shared file")  # noqa: E501
+    data = _data(url, [lure])
+    data.allowlisted = {"lovable.app"}
+    assert "brand_on_free_hosting" in _hits(data)
+    demo = _page("https://todo-demo.lovable.app/", title="Todo app", text="My tasks")
+    assert "brand_on_free_hosting" not in _hits(_data("https://todo-demo.lovable.app/", [demo]))
+
+
 def test_brand_article_off_free_hosting_is_not_flagged():
     page = _page("https://news.example/", title="Trezor login guide", text="Trezor wallet review")
     assert "brand_on_free_hosting" not in _hits(_data("https://news.example/", [page]))
