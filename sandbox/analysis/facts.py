@@ -1298,6 +1298,48 @@ def _web3(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
+_WALLET_CONNECTOR_LIBS = {"walletconnect", "web3modal", "wagmi", "rainbowkit"}
+# A page that offers to connect a wallet is a dApp (or a drainer lure, DE-W3B-006), not
+# an EtherHiding loader on an unrelated site.
+_DAPP_UI = re.compile(
+    r"(?i)\bconnect(\s+(your|a))?\s+wallet\b|\bwalletconnect\b"
+    r"|\bconnect\s+(to\s+)?(metamask|phantom|coinbase\s+wallet)\b",
+)
+
+
+def _web3_derived(
+    data: CaptureData,
+    web3: dict[str, Any],
+    libraries: list[dict[str, Any]],
+    jsapi: dict[str, Any],
+    lure_page: bool,
+    final_allowlisted: bool,
+) -> dict[str, Any]:
+    """EtherHiding guards (R-03, R-07) and the decoded-and-run escalation (DE-W3B-002).
+
+    The allowlist is deliberately not a guard: EtherHiding runs on compromised
+    legitimate (often allowlisted) sites. A real dApp is recognised by its wallet UI
+    instead, since the fake-wallet log (wallet_requests) only exists when the opt-in
+    SANDBOX_FAKE_WALLET profile is on.
+    """
+    dapp_ui = any(lib.get("name") in _WALLET_CONNECTOR_LIBS for lib in libraries) or any(
+        _DAPP_UI.search(f"{f.get('title', '')} {f.get('text', '')}") for f in _all_frames(data)
+    )
+    etherhiding = bool(
+        web3.get("rpc_call_count", 0) > 0 and not web3.get("wallet_requests") and not dapp_ui
+    )
+    # The contract's answer is decoded and run: a chain read followed by large runtime
+    # eval/Function code. Co-occurrence form; byte-matching the RPC result to the exec
+    # argument is a later refinement. On an allowlisted site it also needs a lure page.
+    executed = bool(
+        etherhiding
+        and jsapi.get("dynamic_exec_count", 0) > 0
+        and jsapi.get("dynamic_exec_max_len", 0) >= 1024
+        and (not final_allowlisted or lure_page)
+    )
+    return {"dapp_ui": dapp_ui, "etherhiding_rpc": etherhiding, "rpc_result_executed": executed}
+
+
 def _ip_lookups(reqs: list[dict[str, Any]]) -> list[str]:
     return sorted({r["host"] for r in reqs if r["host"] in IP_LOOKUP_HOSTS})
 
@@ -1336,6 +1378,12 @@ _LIBRARY_PATTERNS = [
     ("crypto-js", re.compile(r"crypto-js[@/](\d+\.\d+\.\d+)", re.I)),
     ("randexp", re.compile(r"randexp[@/](\d+\.\d+\.\d+)", re.I)),
     ("socket.io", re.compile(r"socket\.io[@/](\d+\.\d+\.\d+)", re.I)),
+    # Wallet-connector UI kits (a dApp, not a dead-drop loader); before web3/ethers, since
+    # they bundle those names in their paths.
+    ("walletconnect", re.compile(r"walletconnect[^/]*[@/]v?(\d+\.\d+\.\d+)?", re.I)),
+    ("web3modal", re.compile(r"web3modal[@/]v?(\d+\.\d+\.\d+)?", re.I)),
+    ("wagmi", re.compile(r"/wagmi[@/]v?(\d+\.\d+\.\d+)?", re.I)),
+    ("rainbowkit", re.compile(r"rainbow-me/rainbowkit[@/]v?(\d+\.\d+\.\d+)?", re.I)),
     ("web3", re.compile(r"/web3(?:\.min)?\.js|web3[@/](\d+\.\d+\.\d+)", re.I)),
     ("ethers", re.compile(r"ethers[@/.-]?v?(\d+\.\d+\.\d+)?", re.I)),
 ]
@@ -1553,6 +1601,20 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
     jsapi = _jsapi_facts(data)
     challenge_gate = _challenge_gate(data, reqs)
     nav_cause = _navigation_cause(data)
+    libraries = _libraries(data)
+    final_allowlisted = bool(final_host) and site(final_host) in data.allowlisted
+    lure = {**_lure(data), **_fake_captcha(data, reqs), "fake_update_pages": _fake_update(data)}
+    web3 = _web3(data, reqs)
+    web3.update(
+        _web3_derived(
+            data,
+            web3,
+            libraries,
+            jsapi,
+            lure_page=bool(lure["fake_update_pages"] or lure["fake_captcha"]),
+            final_allowlisted=final_allowlisted,
+        )
+    )
     # Credential/credential-like form pages served from blob: or about: documents
     # (HTML smuggling), which Chromium allows for script-created top-level/frame docs.
     smuggled = sorted(
@@ -1570,7 +1632,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "host": final_host,
             "domain": registrable(final_host) if final_host else None,
             "display_host": display_host(final_host) if final_host else None,
-            "allowlisted": bool(final_host) and site(final_host) in data.allowlisted,
+            "allowlisted": final_allowlisted,
             "free_hosting": free_hosting(final_host) if final_host else None,
             "ipfs": _final_ipfs(final_url),
             "title": r.get("title") or "",
@@ -1594,19 +1656,15 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "count": len(data.scripts),
             "max_obfuscation_score": scripts[0]["score"] if scripts else 0,
             "obfuscated": scripts[:10],
-            "libraries": _libraries(data),
+            "libraries": libraries,
         },
         "js": jsapi,
         "downloads": {**_downloads(data), **_archive_listing(data)},
         "clipboard": _clipboard(data),
-        "lure": {
-            **_lure(data),
-            **_fake_captcha(data, reqs),
-            "fake_update_pages": _fake_update(data),
-        },
+        "lure": lure,
         "exfil": _exfil(data, reqs),
         "idp": _idp(data, reqs),
-        "web3": _web3(data, reqs),
+        "web3": web3,
         "websocket": _websocket(data),
         "evasion": _evasion(data),
         "domains": {

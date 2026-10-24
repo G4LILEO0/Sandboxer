@@ -971,6 +971,69 @@ def test_web3_rpc_from_non_wallet_page_fires_and_wallet_app_is_quiet():
     assert "web3_rpc_from_non_wallet_page" not in _hits(dapp)
 
 
+def test_etherhiding_on_allowlisted_wordpress_fires():
+    """R-07: EtherHiding runs on compromised legitimate sites, which are often allowlisted."""
+    data = _cap("https://www.bigblog.com/", har=_rpc(), allowlisted=["bigblog.com"])
+    assert "web3_rpc_from_non_wallet_page" in _hits(data)
+
+
+def test_dapp_with_wallet_ui_is_not_etherhiding_without_fake_wallet():
+    """With the fake wallet off (the default) wallet_requests never exists, so a dApp is
+    recognised by its wallet UI: a connect-wallet button or a wallet-connector kit."""
+    text_ui = _page("https://app.uniswap.org/", title="Uniswap", text="Swap tokens. Connect wallet")
+    assert "web3_rpc_from_non_wallet_page" not in _hits(
+        _cap("https://app.uniswap.org/", [text_ui], har=_rpc(), allowlisted=["uniswap.org"])
+    )
+    kit = _page("https://new-dex.example/", title="Swap")
+    kit["frames"][0]["scripts"] = [
+        {"src": "https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.0/dist/index.js"}
+    ]
+    assert "web3_rpc_from_non_wallet_page" not in _hits(_cap("https://new-dex.example/", [kit], har=_rpc()))  # noqa: E501
+
+
+def test_fake_update_banner_on_dapp_is_not_critical():
+    """R-03: an out-of-date-browser banner on a dApp that reads the chain is not ClearFake."""
+    banner = "Your browser is out of date. Update Chrome for the best experience."
+    used_wallet = _cap("https://dapp.example/", [_page("https://dapp.example/", "DEX", banner)],
+                       har=_rpc(), wallet_requests=[{"method": "eth_requestAccounts"}])  # noqa: E501
+    assert "fake_browser_update" not in _hits(used_wallet)
+    ui = _page("https://dapp.example/", "DEX", banner + " Connect wallet")
+    assert "fake_browser_update" not in _hits(_cap("https://dapp.example/", [ui], har=_rpc()))
+    # ClearFake: a compromised blog shows the overlay and reads the contract.
+    blog = _page("https://www.bigblog.com/", "Blog", banner)
+    clearfake = _cap("https://www.bigblog.com/", [blog], har=_rpc(), allowlisted=["bigblog.com"])
+    assert "fake_browser_update" in _hits(clearfake)
+
+
+_BIG_EXEC = {"exec": {"count": 2, "max_len": 6000, "max_entropy": 5.4}}
+
+
+def test_etherhiding_payload_executed_fires_and_small_eval_is_quiet():
+    """DE-W3B-002: chain read + large runtime-decoded code on a non-dApp page."""
+    assert "etherhiding_payload_executed" in _hits(
+        _cap("https://compromised.example/", har=_rpc(), jsapi=_BIG_EXEC)
+    )
+    small = {"exec": {"count": 1, "max_len": 60, "max_entropy": 2.1}}
+    assert "etherhiding_payload_executed" not in _hits(
+        _cap("https://compromised.example/", har=_rpc(), jsapi=small)
+    )
+    # A dApp that also evals large code (bundler chunks) stays quiet.
+    dapp = _page("https://dapp.example/", "DEX", "Connect wallet")
+    assert "etherhiding_payload_executed" not in _hits(
+        _cap("https://dapp.example/", [dapp], har=_rpc(), jsapi=_BIG_EXEC)
+    )
+
+
+def test_etherhiding_payload_on_allowlisted_site_needs_a_lure():
+    blog = "https://www.bigblog.com/"
+    bare = _cap(blog, har=_rpc(), jsapi=_BIG_EXEC, allowlisted=["bigblog.com"])
+    assert "etherhiding_payload_executed" not in _hits(bare)
+    overlay = _page(blog, "Blog", "Your browser is out of date. Update Chrome")
+    lured = _cap("https://www.bigblog.com/", [overlay], har=_rpc(), jsapi=_BIG_EXEC,
+                 allowlisted=["bigblog.com"])  # noqa: E501
+    assert "etherhiding_payload_executed" in _hits(lured)
+
+
 def test_web3_known_malicious_contract_fires():
     har = _rpc(to="0x8eac3198dd72f3e07108c4c7cff43108ad48a71c")
     assert "web3_known_malicious_contract" in _hits(_cap("https://x.example/", har=har))
