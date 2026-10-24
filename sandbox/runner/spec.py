@@ -23,6 +23,10 @@ class RunSpec:
     screenshot_interval_s: int = 5
     ssrf_extra_blocked_cidrs: list[str] = field(default_factory=list)
     ssrf_allowed_cidrs: list[str] = field(default_factory=list)
+    # Active-probe capture (off by default; need legal sign-off, see config.py).
+    canary_fill: str = "off"  # off | automated | always
+    key_probe: bool = False
+    fake_wallet: bool = False
 
     @classmethod
     def from_json(cls, raw: str) -> "RunSpec":
