@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Report · URL Sandbox</title>
+  <script src="js/theme.js?v=20261010-2"></script>
+  <link rel="stylesheet" href="css/style.css?v=20261010-2" />
+  <link rel="stylesheet" href="css/report.css?v=20261010-2" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>URL Sandbox</a>
+    <nav class="nav" aria-label="Main">
+      <a href="index.html#lookup">Look up</a>
+      <a href="index.html#sandbox" aria-current="page">Sandbox</a>
+      <a href="admin.html" data-role="detection_engineer,admin" hidden>Admin</a>
+    </nav>
+    <div class="topbar-end">
+      <div id="identity" class="identity"></div>
+      <button type="button" class="icon-btn" id="theme-toggle" title="Switch between light and dark">◐</button>
+    </div>
+  </header>
+
+  <main class="report">
+    <p id="r-error" class="alert" hidden></p>
+
+    <section class="report-head">
+      <div class="specimen spined" id="specimen">
+        <div id="r-verdict" class="specimen-verdict"></div>
+        <div class="score" title="Score from 0 to 100; see “Why this verdict”">
+          <div class="score-bar"><span id="r-score-fill"></span></div>
+          <span id="r-score" class="small"></span>
+        </div>
+        <div id="r-override" class="small"></div>
+      </div>
+      <div class="subject">
+        <p class="small muted">Submitted URL</p>
+        <h1 id="r-url" class="indicator"></h1>
+        <p id="r-final" class="small"></p>
+        <div id="r-tags" class="tags-row"></div>
+        <p class="small muted analysis-id">Analysis <span id="r-id" class="monospace"></span></p>
+      </div>
+      <div class="head-actions no-print">
+        <button class="copy-btn" id="btn-reanalyse" title="Run the analysis again on the stored capture with the current rules">Re-analyse</button>
+        <button class="copy-btn danger" id="btn-cancel" hidden>Cancel analysis</button>
+        <details class="menu" id="export-menu">
+          <summary class="copy-btn">Export</summary>
+          <div class="menu-body">
+            <div class="menu-row">
+              <select id="ioc-format" aria-label="IOC export format">
+                <option value="json">IOCs as JSON</option><option value="csv">IOCs as CSV</option>
+                <option value="text">IOCs as defanged text</option><option value="stix">IOCs as STIX 2.1</option>
+              </select>
+              <button class="copy-btn" id="btn-iocs" type="button">Download</button>
+            </div>
+            <button class="copy-btn quiet" id="btn-json" type="button">Full report as JSON</button>
+            <button class="copy-btn quiet" id="btn-print" type="button" title="Use your browser's Save as PDF">Print or save as PDF</button>
+            <button class="copy-btn quiet" id="btn-embed" type="button" title="A short-lived link for embedding this report elsewhere">Copy embed link</button>
+          </div>
+        </details>
+        <label class="version-pick small">Version <select id="r-version" aria-label="Report version"></select></label>
+      </div>
+    </section>
+
+    <div id="r-meta" class="meta-grid"></div>
+    <p id="r-notes-auto" class="notice" hidden></p>
+
+    <section class="live" id="live-card" hidden aria-label="Live session">
+      <div class="live-bar">
+        <span class="rec-dot" aria-hidden="true"></span>
+        <strong id="live-title">Live session</strong>
+        <span id="live-left" class="live-clock"></span>
+        <span id="live-mode" class="small muted"></span>
+        <span class="spacer"></span>
+        <button class="copy-btn" id="live-extend" type="button">Add time</button>
+        <button class="copy-btn" id="live-pause" type="button">Pause timer</button>
+        <button class="copy-btn" id="live-open" type="button" title="Reconnect the live browser">Reconnect</button>
+        <button class="copy-btn danger" id="live-end" type="button">End session</button>
+      </div>
+      <div class="live-body">
+        <div class="live-screen">
+          <iframe id="live-frame" title="Live browser" allow="clipboard-read 'none'; clipboard-write 'none'" hidden></iframe>
+          <div id="live-placeholder" class="live-placeholder">Starting the browser…</div>
+        </div>
+        <aside class="clip-panel" id="clip-panel" hidden aria-label="Clipboard">
+          <div class="clip-col" id="clip-in-col">
+            <label for="clip-in"><strong>Copy into the session</strong></label>
+            <textarea id="clip-in" rows="3" placeholder="Text or URLs to paste in the session"></textarea>
+            <div class="clip-actions">
+              <button type="button" class="copy-btn" id="clip-send">Send to session</button>
+              <label class="check"><input type="checkbox" id="clip-refang" checked /> Refang</label>
+            </div>
+            <p class="hint">Then press <kbd>Ctrl</kbd>+<kbd>V</kbd> in the session. To open a URL: <kbd>Ctrl</kbd>+<kbd>L</kbd>, <kbd>Ctrl</kbd>+<kbd>V</kbd>, <kbd>Enter</kbd>.</p>
+          </div>
+          <div class="clip-col" id="clip-out-col">
+            <label for="clip-out"><strong>Copy out of the session</strong></label>
+            <p class="hint">Copy (<kbd>Ctrl</kbd>+<kbd>C</kbd>) or highlight text in the session first.</p>
+            <button type="button" class="copy-btn" id="clip-read">Get session clipboard</button>
+            <textarea id="clip-out" rows="3" readonly placeholder="Nothing copied out yet"></textarea>
+            <div class="clip-actions" id="clip-out-actions" hidden>
+              <button type="button" class="copy-btn" id="clip-copy-local">Copy to my clipboard</button>
+              <label class="small">URLs found:
+                <select id="clip-mode" aria-label="Mode for analysing found URLs"><option value="automated">Automated</option><option value="interactive">Interactive</option></select>
+              </label>
+              <button type="button" class="copy-btn" id="clip-analyze-all" hidden>Analyze all</button>
+            </div>
+            <ul id="clip-urls" class="clip-urls small"></ul>
+          </div>
+          <details class="clip-history">
+            <summary class="small">Clipboard history (<span id="clip-count">0</span>)</summary>
+            <ul id="clip-history" class="small"></ul>
+          </details>
+        </aside>
+      </div>
+      <p class="small muted live-policy">The browser runs isolated from your network. Downloads stay in quarantine, and the clipboard only moves when you use the panel; every copy is logged.</p>
+    </section>
+
+    <section class="progress" id="progress-card" hidden aria-live="polite">
+      <span class="status status-running" id="progress-status"></span>
+      <span id="progress-text" class="small muted"></span>
+    </section>
+
+    <nav class="report-tabs no-print" id="report-tabs" aria-label="Report sections">
+      <button type="button" data-tab="overview" class="active">Overview</button>
+      <button type="button" data-tab="timeline">Timeline</button>
+      <button type="button" data-tab="network">Network</button>
+      <button type="button" data-tab="content">Page content</button>
+      <button type="button" data-tab="domains">Domains and TLS</button>
+      <button type="button" data-tab="iocs">IOCs</button>
+      <button type="button" data-tab="notes">Notes and tags</button>
+      <button type="button" data-tab="compare">Compare</button>
+    </nav>
+
+    <div class="tab-panel" data-panel="overview">
+      <div class="overview-grid">
+        <section class="block"><h2>Why this verdict</h2><div id="r-contrib"></div></section>
+        <section class="block"><h2>Screenshots</h2><div id="r-shots" class="gallery"></div>
+          <video id="r-video" controls preload="metadata" hidden></video></section>
+      </div>
+      <section class="block"><h2>Detections</h2><div id="r-hits"></div></section>
+      <section class="block"><h2>Feed matches</h2><div id="r-indicators"></div></section>
+      <section class="block"><h2>Redirect chain</h2><div id="r-redirects"></div></section>
+      <div class="overview-grid">
+        <section class="block"><h2>ATT&amp;CK techniques</h2><div id="r-attack"></div></section>
+        <section class="block"><h2>Downloads, kept in quarantine</h2><div id="r-downloads"></div></section>
+      </div>
+    </div>
+
+    <div class="tab-panel" data-panel="timeline" hidden>
+      <section class="block">
+        <div class="filters">
+          <span class="small muted">Show</span>
+          <label class="check"><input type="checkbox" data-src="browser" checked /> Browser</label>
+          <label class="check"><input type="checkbox" data-src="network" checked /> Network</label>
+          <label class="check"><input type="checkbox" data-src="analyst" checked /> Analyst</label>
+          <label class="check"><input type="checkbox" data-src="runner" checked /> Capture</label>
+          <label class="check"><input type="checkbox" data-src="orchestrator" checked /> Session</label>
+          <span class="spacer"></span>
+          <span class="small muted">Select an event to see its screenshot, video moment and details.</span>
+        </div>
+        <div class="timeline-wrap"><div id="r-timeline" class="timeline"></div>
+          <div class="timeline-side"><img id="tl-shot" alt="Screenshot nearest the selected event" hidden /><video id="tl-video" controls preload="metadata" hidden></video><pre id="tl-detail" class="small"></pre></div></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-panel="network" hidden>
+      <section class="block">
+        <form class="filters" id="net-form">
+          <select name="domain" aria-label="Domain"><option value="">All domains</option></select>
+          <select name="type" aria-label="Type"><option value="">All types</option></select>
+          <select name="status" aria-label="Status"><option value="">All statuses</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option><option value="error">Errors</option></select>
+          <input name="q" placeholder="URL contains" aria-label="URL contains" />
+          <button class="copy-btn">Filter</button>
+          <span id="net-count" class="small muted"></span>
+          <span class="spacer"></span>
+          <button type="button" class="copy-btn" id="net-har">Download HAR</button>
+        </form>
+        <div class="table-wrap"><table class="analyses net"><thead><tr><th>#</th><th>Method</th><th>Status</th><th>Type</th><th>URL</th><th>Size</th><th>Time (ms)</th><th>Server IP</th></tr></thead><tbody id="net-rows"></tbody></table></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-panel="content" hidden>
+      <section class="block"><h2>Pages and frames</h2><div id="r-frames"></div></section>
+      <section class="block"><h2>Forms</h2><div id="r-forms"></div></section>
+      <section class="block"><h2>DOM snapshots</h2><div id="r-doms"></div></section>
+      <section class="block"><h2>Scripts</h2><div id="r-scripts"></div></section>
+      <section class="block"><h2>Console, dialogs and clipboard</h2><div id="r-console"></div></section>
+    </div>
+
+    <div class="tab-panel" data-panel="domains" hidden>
+      <section class="block"><h2>Contacted hosts</h2><div id="r-domains"></div></section>
+      <section class="block"><h2>Network IDS alerts</h2><div id="r-ids"></div></section>
+    </div>
+
+    <div class="tab-panel" data-panel="iocs" hidden>
+      <section class="block">
+        <div class="row"><h2>Indicators of compromise</h2><label class="check"><input type="checkbox" id="ioc-defang" checked /> Defang</label></div>
+        <div id="r-iocs" class="ioc-groups"></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-panel="notes" hidden>
+      <div class="overview-grid">
+        <section class="block">
+          <h2>Notes</h2>
+          <form id="note-form" class="stack"><textarea name="body" rows="3" placeholder="What did you find? Notes are kept with the analysis and shown to everyone who can see it." required></textarea><div><button class="copy-btn">Add note</button></div></form>
+          <div id="r-notes"></div>
+        </section>
+        <div class="stack">
+          <section class="block">
+            <h2>Analyst tags</h2>
+            <form id="tag-form" class="filters"><input name="tag" placeholder="campaign-name" pattern="[a-z0-9][a-z0-9\-_.:]*" title="Lowercase letters, digits and - _ . :" required aria-label="New tag" /><button class="copy-btn">Add tag</button></form>
+            <div id="r-analyst-tags" class="tags-row"></div>
+          </section>
+          <section class="block" data-role="senior_analyst">
+            <h2>Override the verdict</h2>
+            <p class="small muted">Shown next to the automatic verdict, never instead of it. The reason is logged.</p>
+            <form id="override-form" class="filters">
+              <select name="verdict" aria-label="Verdict"><option value="malicious">Malicious</option><option value="suspicious">Suspicious</option><option value="benign">Benign</option><option value="unknown">Unknown</option></select>
+              <input name="reason" placeholder="Reason" size="30" required minlength="3" aria-label="Reason" />
+              <button class="copy-btn">Override</button>
+            </form>
+            <div id="r-overrides" class="small"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-panel" data-panel="compare" hidden>
+      <section class="block">
+        <h2>Compare with another analysis</h2>
+        <form id="compare-form" class="filters"><input name="other" placeholder="Analysis ID, for example an_01…" size="34" required aria-label="Other analysis ID" /><button class="copy-btn">Compare</button></form>
+        <div id="compare-out"></div>
+      </section>
+    </div>
+  </main>
+
+  <script src="js/config.js?v=20261010-2"></script>
+  <script src="js/api.js?v=20261010-2"></script>
+  <script src="js/report.js?v=20261010-2"></script>
+</body>
+</html>

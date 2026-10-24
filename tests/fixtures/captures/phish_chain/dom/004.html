@@ -1,0 +1,11 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invoice</title></head>
+<body><p>Your invoice is downloading.</p>
+<script>
+  // Automatic download (ANA-4). The bytes are a harmless text file named like an executable.
+  var blob = new Blob(['MZ-fixture-not-a-real-executable'], {type: 'application/octet-stream'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'invoice_2026.exe';
+  document.body.appendChild(a); a.click();
+</script><a href="blob:http://172.19.0.2:8000/8011ec44-c82e-40eb-920d-34fd8b6e7a7e" download="invoice_2026.exe"></a>
+
+</body></html>

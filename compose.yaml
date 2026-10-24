@@ -1,0 +1,144 @@
+# Local development stack.
+#   docker compose --profile build build     # session + pcap images (first time, and after runner changes)
+#   docker compose up --build                # API on http://127.0.0.1:8000, worker, Postgres (pulls the Suricata image)
+name: sandbox
+
+x-app-env: &app-env
+  SANDBOX_ENV: dev
+  SANDBOX_DATABASE_URL: postgresql+asyncpg://sandbox:sandbox@postgres:5432/sandbox
+  TEST_DATABASE_URL: postgresql+asyncpg://sandbox:sandbox@postgres:5432/sandbox_test
+  SANDBOX_SECRET_KEY: ${SANDBOX_SECRET_KEY:-dev-insecure-secret-change-me}
+  SANDBOX_ARTIFACT_ROOT: /data/artifacts
+  SANDBOX_QUARANTINE_ROOT: /data/quarantine
+  SANDBOX_SESSION_NETWORK: sandbox_sessions
+  SANDBOX_SESSION_BRIDGE: sbx-sessions
+  SANDBOX_SESSION_SUBNET: 172.31.213.0/24
+  SANDBOX_SESSION_API_IP: 172.31.213.2
+  # enforce | warn | off: refuse sessions unless the egress probe passes (NFR-3).
+  SANDBOX_EGRESS_GUARD: ${SANDBOX_EGRESS_GUARD:-enforce}
+  # Read from .env by compose; blank means that vendor's lookups are disabled.
+  SANDBOX_VT_API_KEY: ${SANDBOX_VT_API_KEY:-}
+  SANDBOX_ABUSEIPDB_API_KEY: ${SANDBOX_ABUSEIPDB_API_KEY:-}
+  # Optional Suricata over session pcaps, e.g. jasonish/suricata:7.0.
+  SANDBOX_SURICATA_IMAGE: ${SANDBOX_SURICATA_IMAGE:-}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sandbox
+      POSTGRES_PASSWORD: sandbox
+      POSTGRES_DB: sandbox
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sandbox -d sandbox"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+      args:
+        EXTRAS: "[dev]"
+    image: sandbox-api:latest
+    environment: *app-env
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - artifacts:/data/artifacts
+      - quarantine:/data/quarantine:ro
+    # The live-view proxy reaches session containers on this network (INT-1). Its fixed
+    # address is the only one the egress guard lets open connections to sessions.
+    networks:
+      default: {}
+      sessions:
+        ipv4_address: 172.31.213.2
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz/ready')"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  worker:
+    image: sandbox-api:latest
+    command: ["python", "-m", "sandbox.orchestrator"]
+    environment: *app-env
+    # Needs the Docker socket to start and remove session containers. This makes the
+    # worker host-privileged: never expose it, and keep it off the session network.
+    user: "0:0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - artifacts:/data/artifacts
+      - quarantine:/data/quarantine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      egress-guard:
+        condition: service_started
+      suricata-image:
+        condition: service_completed_successfully
+
+  # Firewall for the session network: sessions reach the public internet only (NFR-3).
+  # Runs in the Docker host's network namespace with NET_ADMIN; the worker probes the
+  # result and refuses to start sessions if internal targets are reachable.
+  egress-guard:
+    build:
+      context: .
+      dockerfile: docker/egress.Dockerfile
+    image: sandbox-egress-guard:latest
+    network_mode: host
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_RAW]
+    environment:
+      SANDBOX_SESSION_BRIDGE: sbx-sessions
+      SANDBOX_SESSION_API_IP: 172.31.213.2
+    restart: unless-stopped
+
+  # Images the worker starts per session. Built with: docker compose --profile build build
+  session-image:
+    profiles: [build]
+    build:
+      context: .
+      dockerfile: docker/session.Dockerfile
+    image: sandbox-session:latest
+
+  pcap-image:
+    profiles: [build]
+    build:
+      context: .
+      dockerfile: docker/pcap.Dockerfile
+    image: sandbox-pcap:latest
+
+  # The worker runs Suricata in short-lived containers from this image, so `up` pulls it
+  # (if missing) and checks it starts before the worker does. Exits straight away.
+  suricata-image:
+    image: ${SANDBOX_SURICATA_IMAGE:-jasonish/suricata:7.0}
+    pull_policy: missing
+    entrypoint: ["suricata", "-V"]
+    network_mode: none
+    restart: "no"
+
+networks:
+  sessions:
+    name: sandbox_sessions
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: sbx-sessions
+    ipam:
+      config:
+        - subnet: 172.31.213.0/24
+
+volumes:
+  pgdata:
+  artifacts:
+  quarantine:

