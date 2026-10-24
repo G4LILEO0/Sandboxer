@@ -404,16 +404,24 @@ BEHAVIOUR_RULES = [
         "high",
         ["etherhiding", "web3"],
         ["T1102.001", "T1105", "T1189"],
-        "A page that is not a wallet/web3 app read a smart contract over JSON-RPC "
-        "(eth_call / eth_getStorageAt): the EtherHiding dead-drop loader pattern.",
-        {
-            "all": [
-                {"fact": "web3.rpc_call_count", "op": "gt", "value": 0},
-                {"not": {"fact": "web3.wallet_requests", "op": "exists", "value": True}},
-                {"not": {"fact": "final.allowlisted", "op": "eq", "value": True}},
-            ]
-        },
+        "A page that is not a wallet/web3 app (no wallet UI, no wallet use) read a smart "
+        "contract over JSON-RPC (eth_call / eth_getStorageAt): the EtherHiding dead-drop "
+        "loader pattern. Fires on allowlisted sites too, since EtherHiding runs on "
+        "compromised legitimate ones.",
+        {"fact": "web3.etherhiding_rpc", "op": "eq", "value": True},
         ["web3.rpc_calls", "final.url"],
+    ),
+    # --- EtherHiding payload executed (DE-W3B-002) ----------------------------------
+    _rule(
+        "etherhiding_payload_executed",
+        "critical",
+        ["etherhiding", "web3", "obfuscation"],
+        ["T1102.001", "T1027", "T1059.007"],
+        "A non-dApp page read a smart contract and then ran a large decoded string through "
+        "eval/Function: the contract's answer is the next-stage script (ClearFake / "
+        "EtherHiding). On an allowlisted site it also needs a fake update/CAPTCHA lure.",
+        {"fact": "web3.rpc_result_executed", "op": "eq", "value": True},
+        ["web3.rpc_calls", "js.dynamic_exec_max_len", "final.url"],
     ),
     _rule(
         "web3_known_malicious_contract",
@@ -471,7 +479,7 @@ BEHAVIOUR_RULES = [
                         {"fact": "downloads.unprompted_risky", "op": "gt", "value": 0},
                         {"fact": "downloads.executable", "op": "gt", "value": 0},
                         {"fact": "clipboard.command_like", "op": "gt", "value": 0},
-                        {"fact": "web3.rpc_call_count", "op": "gt", "value": 0},
+                        {"fact": "web3.etherhiding_rpc", "op": "eq", "value": True},
                     ]
                 },
             ]
@@ -979,6 +987,7 @@ DEFAULT_WEIGHTS = {
     "illicit_consent_grant": 50,
     "ms_session_cookie_foreign_host": 80,
     "web3_rpc_from_non_wallet_page": 55,
+    "etherhiding_payload_executed": 80,
     "web3_known_malicious_contract": 60,
     "fake_captcha_clipboard_command": 80,
     "filefix_command_disguised_as_path": 80,
