@@ -91,6 +91,23 @@ class Settings(BaseSettings):
     capture_pcap: bool = True
     # Seconds an automated run watches the page after it loads.
     automated_observe_s: int = 20
+
+    # --- Active-probe capture profiles (NFR-10 legal sign-off) --------------------------
+    # These make the session *do* something a victim would, so they are OFF by default and
+    # must be enabled deliberately after legal review. Each is recorded with the capture so
+    # re-analysis stays reproducible, and none change page behaviour beyond observing it.
+    #
+    # Fill synthetic canary credentials into forms and submit, to trace where they go
+    # (DE-PHI-003/004, DE-SKM-001). Submitting data to an attacker needs sign-off; the
+    # canary mailbox must be one the MSOC controls. "off" | "automated" | "always".
+    canary_fill: Literal["off", "automated", "always"] = "off"
+    # Send a synthetic DevTools/context-menu key probe to see what the page blocks
+    # (DE-EVA-001). Dispatches untrusted key events only; may trigger redirects.
+    key_probe: bool = False
+    # Expose a fake, keyless EIP-1193 wallet (window.ethereum) that logs and rejects every
+    # signing/sending request, to observe drainer flows (DE-W3B-005/006). Touches no network
+    # and holds no keys, but announcing a wallet is an interaction, so it is off by default.
+    fake_wallet: bool = False
     # Grace after the time limit before the reaper force-removes a container (ORC-5).
     reaper_grace_s: int = 60
     worker_id: str | None = None

@@ -24,28 +24,64 @@ INIT_SCRIPT = r"""
     if (el.classList && el.classList.length) s += '.' + Array.from(el.classList).slice(0, 3).join('.');
     return s.slice(0, 120);
   };
+  // Context shared by every clipboard record (DE-CFX-001 capture completeness).
+  let seq = 0;
+  const here = () => {
+    let frame_url = '', top_url = '';
+    try { frame_url = String(location.href); } catch (e) {}
+    try { top_url = String(window.top.location.href); } catch (e) { top_url = frame_url; }
+    return { frame_url, top_url };
+  };
+  const scriptUrl = () => {
+    try {
+      const stack = String(new Error().stack || '').split('\n');
+      for (const line of stack) {
+        const m = line.match(/https?:\/\/[^\s)'"]+|blob:[^\s)'"]+|data:[^\s)'"]{0,80}/);
+        if (m) return m[0].slice(0, 300);
+      }
+    } catch (e) {}
+    return null;
+  };
+  const activation = () => {
+    try { return !!(navigator.userActivation && navigator.userActivation.isActive); } catch (e) { return null; }
+  };
+  const clipboard = (api, text, mime) => send('clipboard_write', {
+    api, mime: mime || 'text/plain', text: String(text).slice(0, 16000),
+    seq: seq++, script_url: scriptUrl(), user_activation: activation(), ...here(),
+  });
+
+  // Keep hooks stealthy: a wrapped function must still report native source and keep its
+  // name, or kits that read fn.toString() detect instrumentation.
+  const nativeize = (wrapper, name) => {
+    try {
+      Object.defineProperty(wrapper, 'name', { value: name, configurable: true });
+      Object.defineProperty(wrapper, 'toString', {
+        value: () => 'function ' + name + '() { [native code] }', configurable: true,
+      });
+    } catch (e) {}
+    return wrapper;
+  };
 
   // Clipboard writes (ClickFix and similar "paste this command" lures).
   try {
     const clip = navigator.clipboard;
     if (clip) {
       const origWriteText = clip.writeText.bind(clip);
-      clip.writeText = (text) => {
-        send('clipboard_write', { api: 'navigator.clipboard.writeText', text: String(text).slice(0, 4000) });
-        return origWriteText(text);
-      };
+      clip.writeText = nativeize((text) => { clipboard('navigator.clipboard.writeText', text); return origWriteText(text); }, 'writeText');
       if (clip.write) {
         const origWrite = clip.write.bind(clip);
-        clip.write = (items) => {
-          send('clipboard_write', { api: 'navigator.clipboard.write', text: '[ClipboardItem]' });
+        clip.write = nativeize((items) => {
+          let mime = 'application/octet-stream';
+          try { if (items && items[0] && items[0].types) mime = items[0].types.join(','); } catch (e) {}
+          clipboard('navigator.clipboard.write', '[ClipboardItem]', mime);
           return origWrite(items);
-        };
+        }, 'write');
       }
     }
   } catch (e) {}
   try {
     const origExec = Document.prototype.execCommand;
-    Document.prototype.execCommand = function (cmd, ...rest) {
+    Document.prototype.execCommand = nativeize(function (cmd, ...rest) {
       if (String(cmd).toLowerCase() === 'copy' || String(cmd).toLowerCase() === 'cut') {
         let text = '';
         try { text = String(window.getSelection() || ''); } catch (e) {}
@@ -53,16 +89,33 @@ INIT_SCRIPT = r"""
         if (!text && active && 'value' in active) {
           try { text = String(active.value).slice(active.selectionStart || 0, active.selectionEnd || undefined); } catch (e) {}
         }
-        send('clipboard_write', { api: 'document.execCommand(' + cmd + ')', text: text.slice(0, 4000) });
+        clipboard('document.execCommand(' + cmd + ')', text);
       }
       return origExec.call(this, cmd, ...rest);
-    };
+    }, 'execCommand');
   } catch (e) {}
   document.addEventListener('copy', (ev) => {
     let text = '';
     try { text = ev.clipboardData ? ev.clipboardData.getData('text/plain') : ''; } catch (e) {}
-    send('clipboard_event', { trusted: ev.isTrusted, text: String(text).slice(0, 4000) });
+    send('clipboard_event', { trusted: ev.isTrusted, text: String(text).slice(0, 16000), ...here() });
   }, true);
+
+  // Anti-analysis: the page cancelling DevTools shortcuts or the context menu (DE-EVA-001).
+  try {
+    const origPD = Event.prototype.preventDefault;
+    Event.prototype.preventDefault = nativeize(function () {
+      try {
+        const t = this.type;
+        if (t === 'contextmenu') send('blocked_input', { kind: 'contextmenu' });
+        else if (t === 'keydown' || t === 'keyup') {
+          const k = this.key || '', c = this.ctrlKey || this.metaKey, s = this.shiftKey;
+          if (k === 'F12' || (c && 'uUsS'.indexOf(k) >= 0) || (c && s && 'IJCijc'.indexOf(k) >= 0))
+            send('blocked_input', { kind: 'devtools_key', key: (c ? 'Ctrl+' : '') + (s ? 'Shift+' : '') + k });
+        }
+      } catch (e) {}
+      return origPD.apply(this, arguments);
+    }, 'preventDefault');
+  } catch (e) {}
 
   // Analyst actions (only trusted, i.e. real input events).
   document.addEventListener('click', (ev) => {
@@ -90,6 +143,60 @@ INIT_SCRIPT = r"""
     const f = ev.target;
     send('form_submit', { trusted: ev.isTrusted, action: f && f.action, method: f && f.method, target: describe(f) });
   }, true);
+})();
+"""
+
+# Fake EIP-1193 wallet (DE-W3B-005/006). Injected only when `fake_wallet` is enabled. It
+# holds no keys and never touches a network: it answers account reads with a fixed dummy
+# address and logs then rejects (code 4001) every signing/sending request, so a drainer's
+# connect-then-sign flow is observable without any real approval.
+WALLET_SCRIPT = r"""
+(() => {
+  const report = window.__sandboxReport;
+  const send = (data) => { try { if (typeof report === 'function') report('wallet_request', data); } catch (e) {} };
+  const ADDR = '0x000000000000000000000000000000000000dEaD';
+  const REJECT = { code: 4001, message: 'User rejected the request.' };
+  const summarise = (method, params) => {
+    const out = { method: String(method) };
+    try {
+      if (method === 'eth_signTypedData_v4' && params && params[1]) {
+        const td = typeof params[1] === 'string' ? JSON.parse(params[1]) : params[1];
+        out.primaryType = td.primaryType || null;
+      } else if (method === 'eth_sendTransaction' && params && params[0] && params[0].data) {
+        const data = String(params[0].data);
+        out.selector = data.slice(0, 10);
+        // approve(spender,amount) / setApprovalForAll(operator,bool): unlimited approval.
+        if (data.length >= 138) out.unlimited = /f{40,}$/i.test(data.slice(-64)) || /0{24}0*1$/.test(data.slice(-64));
+      }
+    } catch (e) {}
+    return out;
+  };
+  const handler = (method, params) => {
+    const m = String(method);
+    if (m === 'eth_accounts' || m === 'eth_requestAccounts') { send({ method: m }); return Promise.resolve([ADDR]); }
+    if (m === 'eth_chainId' || m === 'net_version') return Promise.resolve('0x1');
+    send(summarise(m, params));
+    if (/sign|sendTransaction|wallet_/.test(m)) return Promise.reject(REJECT);
+    return Promise.resolve(null);
+  };
+  const provider = {
+    isMetaMask: true, chainId: '0x1', selectedAddress: ADDR,
+    request: ({ method, params }) => handler(method, params),
+    enable: () => handler('eth_requestAccounts'),
+    send: (method, params) => handler(typeof method === 'object' ? method.method : method, params),
+    sendAsync: (payload, cb) => handler(payload.method, payload.params).then(
+      (r) => cb(null, { id: payload.id, jsonrpc: '2.0', result: r }),
+      (e) => cb(e)),
+    on: () => provider, removeListener: () => provider,
+  };
+  try { Object.defineProperty(window, 'ethereum', { value: provider, configurable: true }); } catch (e) { window.ethereum = provider; }
+  // EIP-6963 discovery.
+  try {
+    const announce = () => window.dispatchEvent(new CustomEvent('eip6963:announceProvider', {
+      detail: Object.freeze({ info: { uuid: '00000000-0000-0000-0000-000000000000', name: 'Sandbox', icon: 'data:,', rdns: 'invalid.sandbox' }, provider }) }));
+    window.addEventListener('eip6963:requestProvider', announce);
+    announce();
+  } catch (e) {}
 })();
 """
 

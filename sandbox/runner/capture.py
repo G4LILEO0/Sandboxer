@@ -42,7 +42,7 @@ from playwright.async_api import Error as PlaywrightError
 
 from sandbox.core.netguard import NetGuard, system_resolver
 from sandbox.runner.events import Emitter, now_iso
-from sandbox.runner.page_scripts import BINDING, COLLECT_SCRIPT, INIT_SCRIPT
+from sandbox.runner.page_scripts import BINDING, COLLECT_SCRIPT, INIT_SCRIPT, WALLET_SCRIPT
 from sandbox.runner.profiles import get_profile
 from sandbox.runner.spec import RunSpec
 
@@ -128,6 +128,9 @@ class Capture:
         self.downloads: list[dict[str, Any]] = []
         self.dialogs: list[dict[str, Any]] = []
         self.clipboard: list[dict[str, Any]] = []
+        self.websocket_frames: list[dict[str, Any]] = []
+        self.wallet_requests: list[dict[str, Any]] = []
+        self.blocked_input: list[dict[str, Any]] = []
         self.console: list[dict[str, Any]] = []
         self.errors: list[str] = []
         self.screenshots: list[dict[str, Any]] = []
@@ -298,6 +301,7 @@ class Capture:
                 "upload_blocked", "browser", page=pid, multiple=fc.is_multiple()
             ),
         )
+        page.on("websocket", lambda ws: self._on_websocket_frames(ws))
         page.on("framenavigated", lambda f: self._on_navigated(page, f))
         page.on("load", lambda _: self._spawn(self._on_load(page)))
         page.on("response", lambda r: self._spawn(self.on_response(page, r)))
@@ -356,6 +360,32 @@ class Capture:
         self.downloads.append(entry)
         self.events.emit("download", "browser", **entry)
 
+    def _on_websocket_frames(self, ws) -> None:
+        """Record WebSocket frames (A2) for relay/skimmer detection; cross-checked against
+        the SSRF guard in ``on_websocket``, so blocked sockets never connect here."""
+        ws.on("framesent", lambda p: self._record_ws_frame(ws.url, "sent", p))
+        ws.on("framereceived", lambda p: self._record_ws_frame(ws.url, "received", p))
+
+    def _record_ws_frame(self, url: str, direction: str, payload) -> None:
+        if len(self.websocket_frames) >= 2000:
+            return
+        text = payload if isinstance(payload, str) else "[binary]"
+        event = None
+        # Socket.IO default: a message frame is `42["event",...]` (optionally namespaced).
+        m = re.match(r"\d*\[\s*\"([^\"]{1,64})\"", text)
+        if m:
+            event = m.group(1)
+        entry = {
+            "url": url[:2000],
+            "direction": direction,
+            "event": event,
+            "size": len(payload) if payload is not None else 0,
+            "preview": text[:1024],
+            "ms": self._elapsed_ms(),
+        }
+        self.websocket_frames.append(entry)
+        self.events.emit("websocket_frame", "network", url=url[:300], direction=direction, event=event)  # noqa: E501
+
     def _on_navigated(self, page: Page, frame: Frame) -> None:
         if frame != page.main_frame:
             return
@@ -398,6 +428,16 @@ class Capture:
             entry = {"page": pid, **data}
             self.clipboard.append(entry)
             self.events.emit(kind, "browser", **entry)
+            return
+        if kind == "wallet_request":
+            if len(self.wallet_requests) < 500:
+                entry = {"page": pid, **data}
+                self.wallet_requests.append(entry)
+                self.events.emit("wallet_request", "browser", **entry)
+            return
+        if kind == "blocked_input":
+            if len(self.blocked_input) < 200:
+                self.blocked_input.append({"page": pid, **data})
             return
         if kind == "form_submit" and not data.get("trusted"):
             self.events.emit("form_submit", "browser", page=pid, **data)
@@ -478,6 +518,9 @@ class Capture:
             await context.route_web_socket(re.compile(r".*"), self.on_websocket)
             await context.expose_binding(BINDING, self.on_binding)
             await context.add_init_script(INIT_SCRIPT)
+            if spec.fake_wallet:
+                # Active-probe capture (DE-W3B-005/006); off unless configured (legal sign-off).
+                await context.add_init_script(WALLET_SCRIPT)
             context.on("page", lambda p: self._spawn(self.attach_page(p)))
 
             page = await context.new_page()
@@ -530,10 +573,37 @@ class Capture:
                 scrolled = True
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.stop.wait(), timeout=1)
+        if self.spec.key_probe and not page.is_closed():
+            await self._run_key_probe(page)
         if self.stop.is_set():
             self.end_reason = "stopped"
         elif time.monotonic() >= self.deadline:
             self.end_reason = "time_limit"
+
+    async def _run_key_probe(self, page: Page) -> None:
+        """Dispatch DevTools shortcuts and a right-click (A5). The init-script
+        preventDefault hook records which the page cancels (DE-EVA-001). Synthetic, not
+        trusted input; may trigger a redirect, which is captured like any navigation."""
+        keys = [
+            {"key": "F12", "windowsVirtualKeyCode": 123},
+            {"key": "u", "modifiers": 2},  # Ctrl+U
+            {"key": "I", "modifiers": 10},  # Ctrl+Shift+I
+            {"key": "J", "modifiers": 10},  # Ctrl+Shift+J
+            {"key": "C", "modifiers": 10},  # Ctrl+Shift+C
+        ]
+        try:
+            cdp = await page.context.new_cdp_session(page)
+            for k in keys:
+                with contextlib.suppress(PlaywrightError):
+                    await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", **k})
+                    await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", **k})
+            with contextlib.suppress(PlaywrightError):
+                await cdp.send(
+                    "Input.dispatchMouseEvent",
+                    {"type": "mousePressed", "button": "right", "x": 20, "y": 20, "clickCount": 1},
+                )
+        except PlaywrightError as exc:
+            self.errors.append(f"key probe: {exc.message[:120]}")
 
     async def _wait_for_stop(self) -> None:
         remaining = max(0.0, self.deadline - time.monotonic())
@@ -576,6 +646,9 @@ class Capture:
             "downloads": self.downloads,
             "dialogs": self.dialogs,
             "clipboard": self.clipboard,
+            "websocket_frames": self.websocket_frames,
+            "wallet_requests": self.wallet_requests,
+            "blocked_input": self.blocked_input,
             "console": self.console[:500],
             "screenshots": self.screenshots,
             "dom_snapshots": self.dom_snapshots,
