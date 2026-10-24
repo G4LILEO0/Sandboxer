@@ -310,6 +310,294 @@ BEHAVIOUR_RULES = [
         "A password form is served or submitted over plain http.",
         {"fact": "forms.password_over_http", "op": "gt", "value": 0},
     ),
+    # --- exfiltration channels (DE-PHI-001/002) -------------------------------------
+    _rule(
+        "telegram_bot_exfil",
+        "critical",
+        ["phishing", "exfil-telegram"],
+        ["T1567", "T1102.002", "T1056.003"],
+        "The page called the Telegram Bot API (api.telegram.org/bot<token>/sendMessage or "
+        "similar) from the browser: phishing kits use a Telegram bot as their drop.",
+        {"fact": "exfil.telegram_count", "op": "gt", "value": 0},
+        ["exfil.telegram", "forms.password_forms", "final.url"],
+    ),
+    _rule(
+        "discord_webhook_exfil",
+        "high",
+        ["phishing", "exfil"],
+        ["T1567", "T1102.002"],
+        "The page posted to a Discord webhook (discord.com/api/webhooks/...) from the "
+        "browser: webhooks are a server-side drop, not something a normal web page uses.",
+        {"fact": "exfil.discord_count", "op": "gt", "value": 0},
+        ["exfil.discord", "forms.password_forms", "final.url"],
+    ),
+    # --- Microsoft 365 / Entra (DE-M365-001/002/003/006/007/011) --------------------
+    _rule(
+        "ms_signin_clone_foreign_host",
+        "high",
+        ["phishing", "aitm", "brand-impersonation"],
+        ["T1566.002", "T1056.003", "T1656"],
+        "A non-Microsoft page carries Microsoft sign-in structural markers (ESTS $Config, "
+        "i0116/idSIButton9 ids, AADCDN assets) and shows a credential prompt: a cloned or "
+        "proxied Microsoft login.",
+        {"fact": "idp.ms_clone_pages", "op": "gt", "value": 0},
+        ["idp.ms_clone_page_details", "final.url"],
+    ),
+    _rule(
+        "idp_cdn_assets_foreign_page",
+        "high",
+        ["phishing", "aitm"],
+        ["T1566.002", "T1656"],
+        "A page that is not the identity provider loads IdP sign-in branding from the IdP's "
+        "CDN (AADCDN, Okta CDN) and shows a credential prompt.",
+        {"fact": "idp.cdn_assets_on_foreign_page", "op": "eq", "value": True},
+        ["idp.cdn_assets", "final.url"],
+    ),
+    _rule(
+        "aitm_ms_paths_foreign_host",
+        "critical",
+        ["phishing", "aitm"],
+        ["T1557", "T1539", "T1566.002"],
+        "Microsoft login endpoints (oauth2/authorize, GetCredentialType, kmsi) are served "
+        "from a non-Microsoft host with ESTS markers or ESTS cookies: an AiTM reverse proxy.",
+        {"fact": "idp.ms_paths_on_foreign_host", "op": "gt", "value": 0},
+        ["idp.ms_foreign_paths", "final.url"],
+    ),
+    _rule(
+        "oauth_error_redirect_abuse",
+        "high",
+        ["phishing", "redirector-abuse"],
+        ["T1566.002", "T1204.001"],
+        "An OAuth authorize request with prompt=none bounced off a real identity provider "
+        "(error=interaction_required/access_denied) to a non-IdP redirect host.",
+        {
+            "all": [
+                {"fact": "redirects.oauth_error_bounce_count", "op": "gt", "value": 0},
+                {"not": {"fact": "final.allowlisted", "op": "eq", "value": True}},
+            ]
+        },
+        ["redirects.oauth_error_bounce", "redirects.chain"],
+    ),
+    _rule(
+        "illicit_consent_grant",
+        "high",
+        ["consent-phishing", "aitm"],
+        ["T1528", "T1566.002", "T1550.001"],
+        "An Entra authorize/consent request names a non-first-party client id and asks for "
+        "high-risk Graph scopes (Mail.ReadWrite, Files.ReadWrite.All, offline_access).",
+        {"fact": "idp.high_risk_consent", "op": "gt", "value": 0},
+        ["idp.oauth_authorize_requests", "final.url"],
+    ),
+    _rule(
+        "ms_session_cookie_foreign_host",
+        "critical",
+        ["phishing", "aitm"],
+        ["T1539", "T1557"],
+        "A non-Microsoft host set a Microsoft Entra session cookie (ESTSAUTH*): the sign of "
+        "a relayed Microsoft login in an AiTM proxy.",
+        {"fact": "idp.cookies_on_foreign_host", "op": "gt", "value": 0},
+        ["idp.idp_cookies", "final.url"],
+    ),
+    # --- EtherHiding / web3 (DE-W3B-001/004) ----------------------------------------
+    _rule(
+        "web3_rpc_from_non_wallet_page",
+        "high",
+        ["etherhiding", "web3"],
+        ["T1102.001", "T1105", "T1189"],
+        "A page that is not a wallet/web3 app read a smart contract over JSON-RPC "
+        "(eth_call / eth_getStorageAt): the EtherHiding dead-drop loader pattern.",
+        {
+            "all": [
+                {"fact": "web3.rpc_call_count", "op": "gt", "value": 0},
+                {"not": {"fact": "web3.wallet_requests", "op": "exists", "value": True}},
+                {"not": {"fact": "final.allowlisted", "op": "eq", "value": True}},
+            ]
+        },
+        ["web3.rpc_calls", "final.url"],
+    ),
+    _rule(
+        "web3_known_malicious_contract",
+        "high",
+        ["etherhiding", "web3", "known-bad"],
+        ["T1102.001"],
+        "The page read a smart contract address published in EtherHiding research.",
+        {"fact": "web3.known_malicious_contract", "op": "gt", "value": 0},
+        ["web3.known_contracts", "final.url"],
+    ),
+    # --- ClickFix extensions (DE-CFX-002/004) ---------------------------------------
+    _rule(
+        "fake_captcha_clipboard_command",
+        "critical",
+        ["clickfix"],
+        ["T1204.004", "T1059.001", "T1218.005"],
+        "A fake CAPTCHA / verification page (not a genuine Turnstile/reCAPTCHA challenge) "
+        "wrote a command to the clipboard, or did so with Run-dialog instructions.",
+        {
+            "all": [
+                {"fact": "clipboard.command_like", "op": "gt", "value": 0},
+                {
+                    "any": [
+                        {"fact": "lure.fake_captcha", "op": "eq", "value": True},
+                        {"fact": "lure.run_dialog_instructions", "op": "gt", "value": 0},
+                    ]
+                },
+            ]
+        },
+        ["lure.fake_captcha_evidence", "clipboard.commands", "final.url"],
+    ),
+    _rule(
+        "filefix_command_disguised_as_path",
+        "critical",
+        ["clickfix", "filefix"],
+        ["T1204.004", "T1059.001"],
+        "The clipboard holds a shell command padded and then commented out with a decoy "
+        "Windows file path (FileFix: the victim pastes it into Explorer's address bar).",
+        {"fact": "clipboard.path_disguised", "op": "gt", "value": 0},
+        ["clipboard.commands", "final.url"],
+    ),
+    # --- fake browser update (DE-DLD-005) -------------------------------------------
+    _rule(
+        "fake_browser_update",
+        "critical",
+        ["fake-update", "malware-download"],
+        ["T1189", "T1204.002", "T1036.005"],
+        "A non-vendor page shows a browser/software update lure and either downloads a "
+        "risky file or writes a clipboard command (ClearFake / SocGholish).",
+        {
+            "all": [
+                {"fact": "lure.fake_update_pages", "op": "exists", "value": True},
+                {
+                    "any": [
+                        {"fact": "downloads.unprompted_risky", "op": "gt", "value": 0},
+                        {"fact": "downloads.executable", "op": "gt", "value": 0},
+                        {"fact": "clipboard.command_like", "op": "gt", "value": 0},
+                        {"fact": "web3.rpc_call_count", "op": "gt", "value": 0},
+                    ]
+                },
+            ]
+        },
+        ["lure.fake_update_pages", "final.url"],
+    ),
+    # --- HTML smuggling credential page (DE-OBF-006) --------------------------------
+    _rule(
+        "smuggled_credential_page",
+        "high",
+        ["phishing", "smuggling"],
+        ["T1027.006", "T1566.002"],
+        "A blob: or about: document created by the page carries a credential form: an "
+        "HTML-smuggled phishing page assembled in the browser.",
+        {"fact": "frames.smuggled_credential_pages", "op": "gt", "value": 0},
+        ["frames.smuggled_credential_urls", "final.url"],
+    ),
+    # --- IPFS credential page (DE-PHI-009) ------------------------------------------
+    _rule(
+        "ipfs_credential_page",
+        "high",
+        ["phishing"],
+        ["T1566.002", "T1583.006"],
+        "The final page is served from an IPFS gateway and asks for credentials.",
+        {
+            "all": [
+                {"fact": "final.ipfs", "op": "exists", "value": True},
+                {
+                    "any": [
+                        {"fact": "forms.password_forms", "op": "gt", "value": 0},
+                        {"fact": "brand.credential_prompt", "op": "eq", "value": True},
+                        {"fact": "forms.otp_forms", "op": "gt", "value": 0},
+                    ]
+                },
+            ]
+        },
+        ["final.ipfs", "final.url"],
+    ),
+    # --- client-side IP/geo lookup (DE-EVA-004) -------------------------------------
+    _rule(
+        "client_side_ip_geo_lookup",
+        "medium",
+        ["evasion", "geofencing"],
+        ["T1614", "T1497"],
+        "The page queried a client-side IP/ASN/geo lookup service and also showed a "
+        "credential, ClickFix or download lure: geofencing or sandbox filtering.",
+        {
+            "all": [
+                {"fact": "network.ip_lookups", "op": "exists", "value": True},
+                {
+                    "any": [
+                        {"fact": "brand.credential_prompt", "op": "eq", "value": True},
+                        {"fact": "clipboard.command_like", "op": "gt", "value": 0},
+                        {"fact": "downloads.unprompted_risky", "op": "gt", "value": 0},
+                        {"fact": "forms.sensitive_prompt_pages", "op": "exists", "value": True},
+                    ]
+                },
+            ]
+        },
+        ["network.ip_lookups", "final.url"],
+    ),
+    # --- real-time credential relay over WebSocket (DE-M365-010, booster) -----------
+    _rule(
+        "credential_relay_websocket",
+        "high",
+        ["aitm", "exfil"],
+        ["T1557", "T1056.003"],
+        "A brand credential-prompt page opened a WebSocket to a host it does not own: the "
+        "real-time relay AiTM kits (Mamba/Tycoon) use to pass typed credentials on.",
+        {
+            "all": [
+                {"fact": "websocket.count", "op": "gt", "value": 0},
+                {
+                    "any": [
+                        {"fact": "brand.credential_prompt", "op": "eq", "value": True},
+                        {"fact": "idp.ms_clone_pages", "op": "gt", "value": 0},
+                    ]
+                },
+            ]
+        },
+        ["websocket.connections", "final.url"],
+    ),
+    # --- DevTools / context-menu blocking (DE-EVA-001, booster) ---------------------
+    _rule(
+        "devtools_blocking",
+        "medium",
+        ["evasion", "anti-analysis"],
+        ["T1622", "T1497"],
+        "The page cancelled DevTools shortcuts (F12, Ctrl+U, Ctrl+Shift+I/J/C) or the "
+        "context menu while also showing a credential, ClickFix or download lure.",
+        {
+            "all": [
+                {
+                    "any": [
+                        {"fact": "evasion.devtools_blocked", "op": "gt", "value": 0},
+                        {"fact": "evasion.context_menu_blocked", "op": "eq", "value": True},
+                    ]
+                },
+                {
+                    "any": [
+                        {"fact": "brand.credential_prompt", "op": "eq", "value": True},
+                        {"fact": "clipboard.command_like", "op": "gt", "value": 0},
+                        {"fact": "downloads.unprompted_risky", "op": "gt", "value": 0},
+                    ]
+                },
+            ]
+        },
+        ["evasion.devtools_blocked_keys", "final.url"],
+    ),
+    # --- crypto wallet drainer (DE-W3B-005), only fires when the fake wallet provider
+    # is enabled and records signing requests (off by default, see config flags) ------
+    _rule(
+        "wallet_drainer_signature",
+        "high",
+        ["crypto", "wallet-drainer"],
+        ["T1657", "T1566.002"],
+        "A page asked the (instrumented) wallet to sign a Permit/approval or an unlimited "
+        "token approval right after connect, on a non-allowlisted domain: a drainer.",
+        {
+            "all": [
+                {"fact": "web3.wallet_drainer", "op": "gt", "value": 0},
+                {"not": {"fact": "final.allowlisted", "op": "eq", "value": True}},
+            ]
+        },
+        ["web3.wallet_requests", "final.url"],
+    ),
 ]
 
 # Starter YARA set for web content (DOM snapshots, scripts, downloads). Severity and
@@ -423,6 +711,51 @@ rule hta_application : malware_download
         $hta
 }
 """,
+    "tycoon2fa_web": r"""
+rule tycoon2fa_web : phishing aitm
+{
+    meta:
+        description = "Tycoon 2FA AiTM phishing kit fingerprint (relay handlers, autofill helpers, hardcoded CryptoJS key)"
+        severity = "critical"
+        mitre_attack = "T1557 T1566.002 T1027"
+    strings:
+        $relay1 = "recieveid" nocase
+        $relay2 = "send_to_browser" nocase
+        $relay3 = "response_from_browser" nocase
+        $auto1 = "emailsectionelecheck" nocase
+        $auto2 = "tryfindingele" nocase
+        $auto3 = ".btn-blue-next-btn" nocase
+        $kit1 = "twofaselected" nocase
+        $key = "1234567890123456"
+        $crypto = "CryptoJS" nocase
+        $randexp = "randexp" nocase
+        $checkpass = "checkpass" nocase
+    condition:
+        2 of ($relay*, $auto*, $kit1)
+        or ($key and $crypto)
+        or ($randexp and $checkpass)
+}
+""",
+    "crypto_decrypt_then_write": r"""
+rule crypto_decrypt_then_write : obfuscation
+{
+    meta:
+        description = "Client-side CryptoJS/SubtleCrypto decrypt whose output is written into the document (encrypted page delivery)"
+        severity = "high"
+        mitre_attack = "T1027 T1140"
+    strings:
+        $dec1 = /CryptoJS\.(AES|DES|TripleDES|RC4|Rabbit)\.decrypt/ nocase
+        $dec2 = "crypto.subtle.decrypt" nocase
+        $sink1 = /document\.write(ln)?\s{0,3}\(/ nocase
+        $sink2 = /\.(inner|outer)HTML\s{0,3}=/ nocase
+        $sink3 = "decodeURIComponent" nocase
+        $sink4 = /\.srcdoc\s{0,3}=/ nocase
+        // a single long base64 run (YARA caps match length; use a fixed prefix)
+        $b64 = /["'][A-Za-z0-9+\/]{1000}/
+    condition:
+        1 of ($dec*) and 1 of ($sink*) and $b64
+}
+""",
     "windows_executable": r"""
 rule windows_executable : executable
 {
@@ -447,6 +780,25 @@ DEFAULT_WEIGHTS = {
     "clickfix_clipboard_command": 80,
     "form_posts_cross_domain": 50,
     "seed_phrase_harvest": 60,
+    "telegram_bot_exfil": 80,
+    "discord_webhook_exfil": 65,
+    "ms_signin_clone_foreign_host": 60,
+    "idp_cdn_assets_foreign_page": 45,
+    "aitm_ms_paths_foreign_host": 80,
+    "oauth_error_redirect_abuse": 55,
+    "illicit_consent_grant": 50,
+    "ms_session_cookie_foreign_host": 80,
+    "web3_rpc_from_non_wallet_page": 55,
+    "web3_known_malicious_contract": 60,
+    "fake_captcha_clipboard_command": 80,
+    "filefix_command_disguised_as_path": 80,
+    "fake_browser_update": 70,
+    "smuggled_credential_page": 55,
+    "ipfs_credential_page": 45,
+    "client_side_ip_geo_lookup": 20,
+    "credential_relay_websocket": 50,
+    "wallet_drainer_signature": 60,
+    "devtools_blocking": 20,
 }
 
 # (name, keywords, domains). Keywords match whole words, case-insensitively. A domain
