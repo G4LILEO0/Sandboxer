@@ -72,10 +72,41 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `redirects.count`, `.cross_domain`, `.https_downgrade`, `.chain` | The page's own redirect chain; navigations made by the analyst are excluded |
 | `brand.name`, `.confidence`, `.credential_prompt`, `.evidence`, `.url` | The strongest brand-impersonation candidate (see below) |
 | `network.blocked_internal` | Blocked requests to internal or metadata addresses |
+| `network.ip_lookups` | Client-side IP/ASN/geo lookup services the page called (geofencing / sandbox checks) |
 | `frames.hidden_iframes` | Invisible third-party iframes that are not allowlisted |
+| `frames.smuggled_credential_pages` | `blob:`/`about:` documents created by the page that hold a credential form (HTML smuggling) |
 | `popups.count`, `dialogs.count` | Popups and JavaScript dialogs |
+| `exfil.telegram_count`, `.telegram`, `.discord_count`, `.discord`, `.form_collectors` | Browser calls to the Telegram Bot API, Discord webhooks, or no-code form-collector services |
+| `idp.ms_clone_pages`, `.ms_markers` | Non-Microsoft pages carrying ≥2 Microsoft sign-in structural markers (ESTS `$Config`, `i0116`/`idSIButton9`, AADCDN assets) plus a credential prompt |
+| `idp.cdn_assets_on_foreign_page`, `.cdn_assets` | IdP (AADCDN / Okta CDN) sign-in branding loaded by a foreign credential page |
+| `idp.ms_paths_on_foreign_host`, `.ms_foreign_paths` | Microsoft login endpoints served from a non-Microsoft host with ESTS markers/cookies (AiTM proxy) |
+| `idp.high_risk_consent`, `.oauth_authorize_requests` | Entra authorize/consent requests: non-first-party `client_id` with high-risk Graph scopes |
+| `idp.cookies_on_foreign_host`, `.idp_cookies` | Microsoft ESTS session cookies set by a non-Microsoft host |
+| `redirects.oauth_error_bounce_count`, `.oauth_error_bounce` | `prompt=none` authorize request that bounced off a real IdP (`error=…`) to a foreign host |
+| `web3.rpc_call_count`, `.rpc_calls`, `.contract_addresses` | JSON-RPC `eth_call`/`eth_getStorageAt` reads (EtherHiding dead-drop loader) |
+| `web3.known_malicious_contract`, `.known_contracts` | Contract addresses published in EtherHiding research |
+| `web3.wallet_requests`, `.wallet_drainer` | Signing/sending requests seen by the fake wallet provider (only when `SANDBOX_FAKE_WALLET` is on) |
+| `websocket.count`, `.connections` | WebSocket connections and parsed Socket.IO event names |
+| `clipboard.path_disguised`, `.no_gesture_writes`, `.overwritten_command` | FileFix path-disguised commands; writes with no user gesture; a command later blanked/overwritten |
+| `lure.fake_captcha`, `.fake_captcha_evidence`, `.genuine_challenge` | Fake CAPTCHA/verification UI, and whether a genuine Turnstile/reCAPTCHA resource was loaded |
+| `lure.fake_update_pages` | Non-vendor pages showing a browser/software update lure |
+| `final.ipfs` | The final page is served from an IPFS gateway (`{gateway, cid}` or null) |
+| `evasion.devtools_blocked`, `.devtools_blocked_keys`, `.context_menu_blocked` | DevTools shortcuts / context menu the page cancelled (observed via the key probe) |
+| `downloads.types` | Content-based (magic-byte) types of downloads, e.g. `pe`, `lnk`, `iso`, `cab`, `chm`, `vhd` |
 
-To add a new fact, compute it in `build_facts`. Keep it a pure function of the stored capture, so re-analysis stays reproducible.
+To add a new fact, compute it in `build_facts`. Keep it a pure function of the stored capture, so re-analysis stays reproducible. New facts read the HAR (`exfil.*`, `idp.*`, `web3.*`, `network.ip_lookups`), raw DOM snapshots (`idp.ms_*` structural markers) and the runner's new `websocket_frames`, `wallet_requests` and `blocked_input` logs. **All of them degrade to neutral values on captures that predate the artifact** (a missing log yields `0`/`false`/`null`, never an error), so stored analyses stay re-evaluable.
+
+### Active-probe capture (legal sign-off, NFR-10)
+
+Three capture behaviours make the session *act like a victim*. They are **off by default** and gated behind `SANDBOX_*` settings (see `.env.example`); enable them only after legal review, because each is an interaction with the attacker. Their parameters are recorded with the capture so re-analysis stays reproducible, and none change page behaviour beyond observing it.
+
+| Setting | Default | What it does | Feeds |
+| --- | --- | --- | --- |
+| `SANDBOX_CANARY_FILL` | `off` | Reserved flag for filling synthetic canary credentials and submitting to trace exfil. The canary mailbox must be one you control. | DE-PHI-003/004 (scaffold) |
+| `SANDBOX_KEY_PROBE` | `false` | Dispatches DevTools shortcuts (F12, Ctrl+U, Ctrl+Shift+I/J/C) and a right-click; the init-script `preventDefault` hook records what the page blocks. | `evasion.*`, DE-EVA-001 |
+| `SANDBOX_FAKE_WALLET` | `false` | Exposes a keyless `window.ethereum` that answers account reads with a fixed dummy address and logs then rejects every sign/send request. No keys, no network. | `web3.wallet_requests`, DE-W3B-005 |
+
+The clipboard, blob/exec and DevTools-blocking hooks run always (they only observe); they are kept stealthy (wrapped functions report native `toString()` output and keep their names) and size-capped (clipboard text 16 KB, 2000 WebSocket frames, 500 wallet records, 200 blocked-input records).
 
 ### Brand impersonation
 
@@ -130,6 +161,10 @@ Things to keep in mind for web content:
 - YARA limits how long a regex match can be (around 1 KB). `{2000,}` never matches; use a fixed `{1000}` prefix instead.
 - Each rule compiles in its own namespace, so imported sets can reuse rule names.
 - Community sets such as `signature_base` are mostly file and memory rules. Enable them for downloads, but expect noise on HTML.
+
+Built-in web YARA now also includes `tycoon2fa_web` (Tycoon 2FA AiTM kit fingerprint: relay handlers `recieveid`/`send_to_browser`, autofill helpers, hardcoded CryptoJS key) and `crypto_decrypt_then_write` (client-side CryptoJS/SubtleCrypto decrypt whose output is written into the document).
+
+IOC extraction also emits `eth_address` indicators (from `eth_call` targets, page scripts and clipboard) and parses URLs/domains/IPs out of de-obfuscated clipboard commands (DE-CFX-008), so a ClickFix next-stage URL becomes a feed-matchable IOC.
 
 ## Suricata rules
 

