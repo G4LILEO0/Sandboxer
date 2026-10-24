@@ -995,10 +995,20 @@ _IPFS_URL = re.compile(
     r"|^https?://(b[a-z2-7]{50,}|k51[a-z0-9]{50,})\.ip[fn]s\.",
     re.I,
 )
-# Fake verification / CAPTCHA UI (page context for a ClickFix clipboard command).
-_FAKE_CAPTCHA = re.compile(
-    r"(?i)verify (you are|you'?re) (a )?human|i'?m not a robot|i am not a robot"
-    r"|verification (id|hash|code)|security check|ray id|recaptcha|cloudflare",
+# Fake verification / CAPTCHA UI (page context for a ClickFix clipboard command). R-10:
+# the brand words alone (Cloudflare, reCAPTCHA, Ray ID, "security check") are printed by
+# every site behind a real challenge or CDN, so they are evidence only, never the
+# trigger. The trigger is verification wording; lure.fake_captcha additionally needs a
+# copy/paste or press-keys instruction in the same frame.
+_VERIFY_WORDING = re.compile(
+    r"(?i)verify (that )?(you are|you'?re) (a )?human|i'?m not a robot|i am not a robot"
+    r"|verification (id|hash|code|steps?)|prove (that )?you'?re (a )?human"
+    r"|human verification|complete (the )?verification",
+)
+_CAPTCHA_BRAND = re.compile(r"(?i)security check|ray id|recaptcha|cloudflare|turnstile")
+_KEY_INSTRUCTION = re.compile(
+    r"(?i)\bpress\s+(and\s+hold\s+)?(the\s+)?(win(dows)?|ctrl|cmd|command|⌘|enter|"
+    r"keys?)\b|\bcopy\s+(the\s+)?(code|command|text|verification)",
 )
 # Real challenge resources: their presence lowers, not suppresses, the rule.
 _GENUINE_CHALLENGE = re.compile(
@@ -1349,14 +1359,22 @@ def _final_ipfs(final_url: str | None) -> dict[str, str] | None:
 
 
 def _fake_captcha(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
-    evidence = set()
+    evidence: set[str] = set()
+    wording = fake = False
     for frame in _all_frames(data):
         text = f"{frame.get('title', '')} {frame.get('text', '')}"
-        for m in _FAKE_CAPTCHA.finditer(text):
-            evidence.add(m.group(0).strip().lower())
+        found = {m.group(0).strip().lower() for m in _VERIFY_WORDING.finditer(text)}
+        if not found:
+            continue
+        wording = True
+        evidence |= found
+        evidence |= {m.group(0).strip().lower() for m in _CAPTCHA_BRAND.finditer(text)}
+        if _PASTE.search(text) or _RUN_DIALOG.search(text) or _KEY_INSTRUCTION.search(text):
+            fake = True
     genuine = any(_GENUINE_CHALLENGE.search(r["url"]) for r in reqs)
     return {
-        "fake_captcha": bool(evidence),
+        "fake_captcha": fake,
+        "verification_wording": wording,
         "fake_captcha_evidence": sorted(evidence)[:10],
         "genuine_challenge": genuine,
     }
