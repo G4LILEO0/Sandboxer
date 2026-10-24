@@ -1669,7 +1669,7 @@ def _evasion(data: CaptureData) -> dict[str, Any]:
     }
 
 
-def _websocket(data: CaptureData) -> dict[str, Any]:
+def _websocket(data: CaptureData, reqs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     conns: dict[str, dict[str, Any]] = {}
     for fr in data.result.get("websocket_frames", []):
         url = fr.get("url", "")
@@ -1682,7 +1682,40 @@ def _websocket(data: CaptureData) -> dict[str, Any]:
         if ev := fr.get("event"):
             c["events"].add(ev)
     out = [{**c, "events": sorted(c["events"])[:20]} for c in conns.values()]
-    return {"connections": out[:20], "count": len(out)}
+    polling = _socketio_polling(data, reqs or [])
+    return {
+        "connections": out[:20],
+        "count": len(out),
+        "socketio_polling": len(polling),
+        "polling_connections": polling[:20],
+    }
+
+
+# Socket.IO's HTTP long-polling transport (R-05): AiTM relays (Mamba 2FA, Tycoon) often
+# start in, or fall back to, polling, which never produces WebSocket frames.
+_SOCKETIO_PATH = re.compile(r"/socket\.io/", re.I)
+_SOCKETIO_POLLING = re.compile(r"(^|&)transport=polling(&|$)", re.I)
+# Event packets: 42["name",...] (EIO4 joins packets with \x1e, EIO3 length-prefixes them).
+_SOCKETIO_EVENT = re.compile(r'(?:^|[\x1e:])4\d*\[\s*"([^"\\]{1,64})"')
+
+
+def _socketio_polling(data: CaptureData, reqs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    hosts: dict[str, dict[str, Any]] = {}
+    rows = [(r["host"], r["path"], r["query"], r.get("post") or "", r.get("resp_text") or "")
+            for r in reqs]  # fmt: skip
+    for r in data.requests:
+        parts = urlsplit(str(r.get("url", "")))
+        rows.append(((parts.hostname or "").lower(), parts.path, parts.query, "", ""))
+    for host, path, query, post, resp in rows:
+        if not host or not _SOCKETIO_PATH.search(path) or not _SOCKETIO_POLLING.search(query):
+            continue
+        if site(host) in data.allowlisted:
+            continue
+        c = hosts.setdefault(host, {"host": host, "requests": 0, "events": set()})
+        c["requests"] += 1
+        for body in (post, resp):
+            c["events"].update(_SOCKETIO_EVENT.findall(body[:20000]))
+    return [{**c, "events": sorted(c["events"])[:20]} for c in hosts.values()]
 
 
 def build_facts(data: CaptureData) -> dict[str, Any]:
@@ -1783,7 +1816,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
         "exfil": _exfil(data, reqs),
         "idp": _idp(data, reqs),
         "web3": web3,
-        "websocket": _websocket(data),
+        "websocket": _websocket(data, reqs),
         "evasion": _evasion(data),
         "domains": {
             "count": len(regs),

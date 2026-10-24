@@ -598,11 +598,17 @@ BEHAVIOUR_RULES = [
         "high",
         ["aitm", "exfil"],
         ["T1557", "T1056.003"],
-        "A brand credential-prompt page opened a WebSocket to a host it does not own: the "
-        "real-time relay AiTM kits (Mamba/Tycoon) use to pass typed credentials on.",
+        "A brand credential-prompt page opened a WebSocket, or a Socket.IO long-polling "
+        "channel, to a host it does not own: the real-time relay AiTM kits (Mamba/Tycoon) "
+        "use to pass typed credentials on.",
         {
             "all": [
-                {"fact": "websocket.count", "op": "gt", "value": 0},
+                {
+                    "any": [
+                        {"fact": "websocket.count", "op": "gt", "value": 0},
+                        {"fact": "websocket.socketio_polling", "op": "gt", "value": 0},
+                    ]
+                },
                 {
                     "any": [
                         {"fact": "brand.credential_prompt", "op": "eq", "value": True},
@@ -611,7 +617,7 @@ BEHAVIOUR_RULES = [
                 },
             ]
         },
-        ["websocket.connections", "final.url"],
+        ["websocket.connections", "websocket.polling_connections", "final.url"],
     ),
     # --- script-posted credentials (DE-PHI-003, needs A3 request log) ---------------
     _rule(
