@@ -1148,10 +1148,33 @@ def test_script_posted_credentials_fires_and_same_site_is_quiet():
     page = _page("https://kit.example/login", forms=[LOOSE_PW])
     reqs = [{"method": "POST", "type": "fetch", "url": "https://collector.net/x",
              "frame_url": "https://kit.example/login"}]  # noqa: E501
-    assert "script_posted_credentials" in _hits(_cap("https://kit.example/login", [page], requests=reqs))  # noqa: E501
+    har = [_req("https://collector.net/x", "POST", post='{"email":"a@b.c","password":"x"}')]
+    assert "script_posted_credentials" in _hits(_cap("https://kit.example/login", [page], har=har, requests=reqs))  # noqa: E501
     same = [{"method": "POST", "type": "fetch", "url": "https://kit.example/api",
              "frame_url": "https://kit.example/login"}]  # noqa: E501
     assert "script_posted_credentials" not in _hits(_cap("https://kit.example/login", [page], requests=same))  # noqa: E501
+
+
+@pytest.mark.parametrize("rtype", ["fetch", "", "other"])
+def test_login_page_third_party_analytics_post_is_quiet(rtype):
+    """R-02: an SPA login page (password field, no form action) that sends analytics or
+    consent POSTs to a third party is not posting credentials."""
+    url = "https://app.example/login"
+    page = _page(url, title="Log in", forms=[LOOSE_PW])
+    reqs = [{"method": "POST", "type": rtype, "url": "https://analytics.vendor.net/collect",
+             "frame_url": url}]  # noqa: E501
+    har = [_req("https://analytics.vendor.net/collect", "POST", post="v=2&tid=G-1&en=page_view")]
+    assert "script_posted_credentials" not in _hits(_cap(url, [page], har=har, requests=reqs))
+
+
+def test_script_posted_credentials_with_brand_prompt_fires_on_opaque_body():
+    """Kits encrypt the body (Tycoon), so a brand credential prompt stands in for it."""
+    url = "https://m365-clone.example/"
+    page = _page(url, title="Sign in to your account", text="Microsoft", forms=[LOOSE_PW])
+    reqs = [{"method": "POST", "type": "xhr", "url": "https://drop.example/r.php",
+             "frame_url": url}]  # noqa: E501
+    har = [_req("https://drop.example/r.php", "POST", post="data=U2FsdGVkX1+" + "Q" * 40)]
+    assert "script_posted_credentials" in _hits(_cap(url, [page], har=har, requests=reqs))
 
 
 def test_runtime_dynamic_execution_fires_and_small_evals_are_quiet():

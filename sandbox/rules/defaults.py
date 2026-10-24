@@ -569,8 +569,25 @@ BEHAVIOUR_RULES = [
         ["phishing", "credential-harvest"],
         ["T1056.003", "T1041"],
         "A page with a password field and no real form action posted (fetch/XHR/beacon) to "
-        "another site: the script-posted credential path that form-action rules miss.",
-        {"fact": "forms.script_posted_credentials", "op": "gt", "value": 0},
+        "another site, and either the body carries a credential field or the page is a "
+        "brand credential prompt / Microsoft clone: the script-posted credential path that "
+        "form-action rules miss.",
+        {
+            "any": [
+                {"fact": "forms.script_posted_credentials", "op": "gt", "value": 0},
+                {
+                    "all": [
+                        {"fact": "forms.script_posts", "op": "gt", "value": 0},
+                        {
+                            "any": [
+                                {"fact": "brand.credential_prompt", "op": "eq", "value": True},
+                                {"fact": "idp.ms_clone_pages", "op": "gt", "value": 0},
+                            ]
+                        },
+                    ]
+                },
+            ]
+        },
         ["forms.script_posted_targets", "final.url"],
     ),
     # --- runtime obfuscated execution (DE-OBF-002, needs A1 exec hook) --------------

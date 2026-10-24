@@ -1417,9 +1417,27 @@ def _requests_summary(data: CaptureData) -> dict[str, Any]:
     return {"count": len(reqs), "by_type": by_type}
 
 
-def _script_posted_credentials(data: CaptureData) -> dict[str, Any]:
+_SCRIPT_POST_TYPES = ("fetch", "xhr", "ping", "websocket")
+# A request body carrying a credential field (form-encoded or JSON key).
+_CREDENTIAL_BODY = re.compile(
+    r"(?i)(^|[&{,\s\"'])(pw|pass(word|wd)?|pwd|passcode|passwd|loginfmt|credential|secret)"
+    r"[\"']?\s*[:=]",
+)
+
+
+def _script_posted_credentials(
+    data: CaptureData, reqs: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """DE-PHI-003: a password field posted by fetch/XHR/beacon (not a <form action>) to
-    another site. Needs the A3 request log (initiator + resource type); 0 without it."""
+    another site. Needs the A3 request log (initiator + resource type); 0 without it.
+
+    script_posts counts every such cross-site script POST from a password page (SPAs
+    submit through a handler, so the page side is broad); script_posted_credentials only
+    those whose HAR body carries a credential field (R-02). Requests whose type is
+    unknown ("", "other") are not counted: they are what made stray POSTs match."""
+    bodies: dict[tuple[str, str], list[str]] = {}
+    for r in reqs if reqs is not None else _har_requests(data):
+        bodies.setdefault((r["method"], r["url"]), []).append(r.get("post") or "")
     pw_hosts: set[str] = set()
     for frame in _all_frames(data):
         host = _host(frame.get("url"))
@@ -1439,7 +1457,7 @@ def _script_posted_credentials(data: CaptureData) -> dict[str, Any]:
         for r in data.requests:
             if str(r.get("method", "")).upper() not in ("POST", "PUT"):
                 continue
-            if str(r.get("type") or "").lower() not in ("fetch", "xhr", "ping", "websocket", "other", ""):  # noqa: E501
+            if str(r.get("type") or "").lower() not in _SCRIPT_POST_TYPES:
                 continue
             fhost = _host(r.get("frame_url") or r.get("document_url"))
             thost = _host(r.get("url"))
@@ -1449,9 +1467,16 @@ def _script_posted_credentials(data: CaptureData) -> dict[str, Any]:
                 and not _same_site(fhost, thost, data.brands)
                 and site(thost) not in data.allowlisted
             ):
-                posts.append({"from": fhost, "to": thost, "type": r.get("type")})
+                method = str(r.get("method", "")).upper()
+                cred = any(
+                    _CREDENTIAL_BODY.search(b) for b in bodies.get((method, r.get("url", "")), [])
+                )
+                posts.append(
+                    {"from": fhost, "to": thost, "type": r.get("type"), "credential_body": cred}
+                )
     return {
-        "script_posted_credentials": len(posts),
+        "script_posts": len(posts),
+        "script_posted_credentials": sum(p["credential_body"] for p in posts),
         "script_posted_targets": posts[:10],
     }
 
@@ -1596,8 +1621,8 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
     blocked = r.get("blocked", [])
     internal = [b for b in blocked if "scheme" not in b.get("reason", "")]
     hidden = sorted({src for f in _all_frames(data) for src in _suspicious_hidden(f, data)})
-    forms = {**_forms(data), **_script_posted_credentials(data)}
     reqs = _har_requests(data)
+    forms = {**_forms(data), **_script_posted_credentials(data, reqs)}
     jsapi = _jsapi_facts(data)
     challenge_gate = _challenge_gate(data, reqs)
     nav_cause = _navigation_cause(data)
