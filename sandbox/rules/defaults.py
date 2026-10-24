@@ -554,6 +554,196 @@ BEHAVIOUR_RULES = [
         },
         ["websocket.connections", "final.url"],
     ),
+    # --- script-posted credentials (DE-PHI-003, needs A3 request log) ---------------
+    _rule(
+        "script_posted_credentials",
+        "high",
+        ["phishing", "credential-harvest"],
+        ["T1056.003", "T1041"],
+        "A page with a password field and no real form action posted (fetch/XHR/beacon) to "
+        "another site: the script-posted credential path that form-action rules miss.",
+        {"fact": "forms.script_posted_credentials", "op": "gt", "value": 0},
+        ["forms.script_posted_targets", "final.url"],
+    ),
+    # --- runtime obfuscated execution (DE-OBF-002, needs A1 exec hook) --------------
+    _rule(
+        "runtime_dynamic_execution",
+        "medium",
+        ["obfuscation"],
+        ["T1027", "T1059.007"],
+        "The page ran large, high-entropy strings through eval/Function/setTimeout at "
+        "runtime (packed code that only appears after decoding).",
+        {
+            "all": [
+                {"fact": "js.dynamic_exec_count", "op": "gte", "value": 2},
+                {"fact": "js.dynamic_exec_max_len", "op": "gt", "value": 1024},
+                {"fact": "js.dynamic_exec_max_entropy", "op": "gt", "value": 4.5},
+            ]
+        },
+        ["js.dynamic_exec_count", "final.url"],
+    ),
+    # --- HTML smuggling binary (DE-OBF-005, needs A1 blob hook) ---------------------
+    _rule(
+        "html_smuggling_binary_blob",
+        "high",
+        ["smuggling", "malware-download"],
+        ["T1027.006", "T1204.002"],
+        "The page built a large Blob/File and a risky file download happened in the same "
+        "session: HTML smuggling that assembles the payload in the browser.",
+        {
+            "all": [
+                {"fact": "js.blob_constructs", "op": "gt", "value": 0},
+                {
+                    "any": [
+                        {"fact": "downloads.executable", "op": "gt", "value": 0},
+                        {"fact": "downloads.disguised", "op": "gt", "value": 0},
+                        {"fact": "downloads.archive", "op": "gt", "value": 0},
+                    ]
+                },
+            ]
+        },
+        ["js.blob_details", "downloads.files"],
+    ),
+    # --- archive deliveries (DE-DLD-001/002, needs A10 archive listing) -------------
+    _rule(
+        "risky_archive_contents",
+        "high",
+        ["malware-download"],
+        ["T1204.002", "T1105"],
+        "A downloaded archive contains an executable, script or shortcut.",
+        {"fact": "downloads.archive_inner_risky", "op": "gt", "value": 0},
+        ["downloads.archives"],
+    ),
+    _rule(
+        "password_protected_archive_with_password",
+        "high",
+        ["malware-download", "defense-evasion"],
+        ["T1027.013", "T1204.002"],
+        "A downloaded archive is encrypted and the page prints the password: the pattern "
+        "that stops SEGs and browsers scanning the contents.",
+        {
+            "all": [
+                {"fact": "downloads.archive_encrypted", "op": "gt", "value": 0},
+                {"fact": "downloads.archive_password_on_page", "op": "eq", "value": True},
+            ]
+        },
+        ["downloads.archives", "final.url"],
+    ),
+    # --- tech-support / push / history scams (DE-SCM-001/002/003, A1 hooks) ---------
+    _rule(
+        "tech_support_browser_locker",
+        "high",
+        ["tech-support-scam", "scam"],
+        ["T1656", "T1204.001"],
+        "The page used lock-in APIs (fullscreen re-entry, pointer/keyboard lock, forced "
+        "audio) and shows a support phone number with scare wording.",
+        {
+            "all": [
+                {
+                    "any": [
+                        {"fact": "js.fullscreen", "op": "gt", "value": 0},
+                        {"fact": "js.pointer_lock", "op": "gt", "value": 0},
+                        {"fact": "js.keyboard_lock", "op": "gt", "value": 0},
+                    ]
+                },
+                {"fact": "lure.tech_support_phone", "op": "gt", "value": 0},
+            ]
+        },
+        ["lure.tech_support_phones", "final.url"],
+    ),
+    _rule(
+        "history_flooding",
+        "medium",
+        ["scam", "browser-hijack"],
+        ["T1185"],
+        "The page flooded session history (many pushState/replaceState calls): back-button "
+        "hijacking used by browser lockers.",
+        {"fact": "js.history_floods", "op": "gte", "value": 20},
+        ["js.history_floods", "final.url"],
+    ),
+    _rule(
+        "push_notification_bait",
+        "medium",
+        ["scam", "push-abuse"],
+        ["T1204.001", "T1566"],
+        "The page asked for notification permission with 'click Allow to continue/verify' "
+        "coercion wording.",
+        {
+            "all": [
+                {"fact": "js.notification_prompt", "op": "gt", "value": 0},
+                {"fact": "lure.allow_notifications_bait", "op": "eq", "value": True},
+            ]
+        },
+        ["final.url"],
+    ),
+    # --- cloaking bounce to a decoy (DE-EVA-005) ------------------------------------
+    _rule(
+        "cloaking_scripted_bounce",
+        "medium",
+        ["cloaking", "evasion"],
+        ["T1497", "T1036"],
+        "A script bounced the top-level page to a decoy (about:blank, a 404, a big brand "
+        "homepage) on a young, free-hosted or obfuscated submitted site.",
+        {
+            "all": [
+                {"fact": "navigation.scripted_bounce", "op": "gt", "value": 0},
+                {
+                    "any": [
+                        {"fact": "domains.chain_youngest_age_days", "op": "lt", "value": 90},
+                        {"fact": "final.free_hosting", "op": "exists", "value": True},
+                        {"fact": "scripts.max_obfuscation_score", "op": "gte", "value": 3},
+                    ]
+                },
+            ]
+        },
+        ["navigation.scripted_bounces", "final.url"],
+    ),
+    # --- trusted redirector wrapper + a lure (DE-PHI-010, booster) ------------------
+    _rule(
+        "trusted_redirector_to_lure",
+        "medium",
+        ["redirector-abuse", "phishing"],
+        ["T1566.002", "T1204.001"],
+        "A trusted redirector / open redirect (Google AMP, ad click, Safe Links, a URL "
+        "shortener) was in the chain and the run also tripped a phishing/ClickFix/download "
+        "signal.",
+        {
+            "all": [
+                {"fact": "network.trusted_redirectors", "op": "exists", "value": True},
+                {
+                    "any": [
+                        {"fact": "brand.credential_prompt", "op": "eq", "value": True},
+                        {"fact": "clipboard.command_like", "op": "gt", "value": 0},
+                        {"fact": "downloads.unprompted_risky", "op": "gt", "value": 0},
+                    ]
+                },
+            ]
+        },
+        ["network.trusted_redirectors", "final.url"],
+    ),
+    # --- CAPTCHA-gated credential page (DE-PHI-011, booster) ------------------------
+    _rule(
+        "captcha_gated_credential_page",
+        "medium",
+        ["phishing", "evasion"],
+        ["T1497", "T1566.002"],
+        "A CAPTCHA/Turnstile gate preceded a credential prompt on a non-allowlisted host: "
+        "antibot gating used to keep crawlers off the harvester.",
+        {
+            "all": [
+                {"fact": "capture.gated", "op": "eq", "value": True},
+                {
+                    "any": [
+                        {"fact": "brand.credential_prompt", "op": "eq", "value": True},
+                        {"fact": "idp.ms_clone_pages", "op": "gt", "value": 0},
+                        {"fact": "forms.password_forms", "op": "gt", "value": 0},
+                    ]
+                },
+                {"not": {"fact": "final.allowlisted", "op": "eq", "value": True}},
+            ]
+        },
+        ["final.url"],
+    ),
     # --- DevTools / context-menu blocking (DE-EVA-001, booster) ---------------------
     _rule(
         "devtools_blocking",
@@ -799,6 +989,17 @@ DEFAULT_WEIGHTS = {
     "credential_relay_websocket": 50,
     "wallet_drainer_signature": 60,
     "devtools_blocking": 20,
+    "script_posted_credentials": 50,
+    "runtime_dynamic_execution": 25,
+    "html_smuggling_binary_blob": 60,
+    "risky_archive_contents": 50,
+    "password_protected_archive_with_password": 50,
+    "tech_support_browser_locker": 60,
+    "history_flooding": 20,
+    "push_notification_bait": 30,
+    "cloaking_scripted_bounce": 30,
+    "trusted_redirector_to_lure": 20,
+    "captcha_gated_credential_page": 25,
 }
 
 # (name, keywords, domains). Keywords match whole words, case-insensitively. A domain
