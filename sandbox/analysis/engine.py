@@ -408,14 +408,17 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
         for a in by_kind.get("download", []):
             if store.exists(a.object_key):
                 with store.open(a.object_key) as fh:
-                    heads[a.sha256] = fh.read(16)
-        dom_pages = [
-            parse_dom(
-                store.read_bytes(a.object_key).decode("utf-8", "replace"), a.meta.get("url", "")
-            )
+                    # Enough to reach the ISO 9660 "CD001" marker at 0x8001 for magic typing.
+                    heads[a.sha256] = fh.read(32780)
+        dom_html = [
+            {
+                "url": a.meta.get("url", ""),
+                "html": store.read_bytes(a.object_key).decode("utf-8", "replace"),
+            }
             for a in by_kind.get("dom", [])
             if store.exists(a.object_key)
         ]
+        dom_pages = [parse_dom(p["html"], p["url"]) for p in dom_html]
 
         data = CaptureData(
             result=result,
@@ -424,6 +427,7 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
             scripts=scripts,
             download_heads=heads,
             dom_pages=dom_pages,
+            dom_html=dom_html,
             brands=await load_brands(db),
         )
         hosts = contacted_hosts(data)
@@ -543,6 +547,7 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
             "urls": "url",
             "hashes": "hash",
             "emails": "email",
+            "eth_addresses": "eth_address",
         }
         for group, values in ev.iocs.items():
             for value in values:

@@ -2,6 +2,7 @@
 extraction. Pure functions over stored data, so a stored analysis can be re-evaluated
 with newer rules without detonating again (ANA-13, FED-13)."""
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -67,7 +68,13 @@ _MAGIC = {
     b"L\x00\x00\x00\x01\x14\x02\x00": "lnk",
     b"\xcf\xfa\xed\xfe": "macho",
     b"\xd0\xcf\x11\xe0": "ole",
+    b"MSCF": "cab",
+    b"ITSF": "chm",
+    b"conectix": "vhd",
+    b"vhdxfile": "vhdx",
 }
+# Content-based types that are risky deliveries regardless of extension.
+_RISKY_MAGIC = {"pe", "elf", "macho", "lnk", "iso", "cab", "chm", "vhd", "vhdx", "ole"}
 _COMMAND = re.compile(
     r"\b(powershell|pwsh|cmd(\.exe)?\s*/[ck]|mshta|rundll32|regsvr32|bitsadmin|certutil|wscript|"
     r"cscript|curl\s+|wget\s+|iex\b|invoke-(expression|webrequest)|msiexec|start-process|"
@@ -111,10 +118,12 @@ _PADDED_DECOY = re.compile(r"^[^\n]*\S([ \t]{12,}|[-_=]{10,})[^\n]*[A-Za-z][^\n]
 _CARET_OBFUSCATION = re.compile(r"(\w\^+){3,}\w")
 _RUN_DIALOG = re.compile(
     r"(win(dows)?(\s*(key|logo))?\s*\+\s*r\b|⊞|press\s+(the\s+)?windows\s+(key|button)|"
-    r"open\s+(the\s+)?(run\s+dialog|terminal|powershell)|win\s*\+\s*x|cmd\s*\+\s*space)",
+    r"open\s+(the\s+)?(run\s+dialog|terminal|powershell|windows\s+terminal)|"
+    r"powershell\s*\(\s*admin\s*\)|win\s*\+\s*x|cmd\s*\+\s*space|command\s*\+\s*space|"
+    r"ctrl\s*\+\s*l\b|explorer('s)?\s+address\s+bar|file\s+explorer)",
     re.I,
 )
-_PASTE = re.compile(r"(ctrl|cmd|⌘)\s*\+\s*v\b|\bpaste\b", re.I)
+_PASTE = re.compile(r"(ctrl|cmd|⌘)\s*\+\s*v\b|\bpaste\b|لصق", re.I)
 # Why a page says you must pay: the smishing pretexts behind most card-harvesting pages
 # (parcel redelivery and customs fees, traffic fines, tolls), in English and Arabic.
 _PAYMENT_PRETEXT = re.compile(
@@ -165,6 +174,9 @@ class CaptureData:
     domain_ages: dict[str, int | None] = field(default_factory=dict)
     # Pages seen earlier in the session, parsed from DOM snapshots (sandbox.analysis.dom).
     dom_pages: list[dict[str, Any]] = field(default_factory=list)
+    # Raw DOM snapshot HTML per page ({"url", "html"}): structural markers (ESTS $Config,
+    # input ids) that the parsed text drops. Empty for old captures, which yield neutral facts.
+    dom_html: list[dict[str, str]] = field(default_factory=list)
 
 
 def _host(url: str | None) -> str:
@@ -305,13 +317,13 @@ def _downloads(data: CaptureData) -> dict[str, Any]:
         parts = name.lower().split(".")
         ext = parts[-1] if len(parts) > 1 else ""
         head = data.download_heads.get(sha or "", b"")
-        magic = next((kind for sig, kind in _MAGIC.items() if head.startswith(sig)), None)
-        is_exec = ext in EXECUTABLE_EXTENSIONS or magic in ("pe", "elf", "macho", "lnk")
-        is_archive = ext in ARCHIVE_EXTENSIONS or magic in ("zip", "rar", "7z")
+        magic = _magic_type(head)
+        is_exec = ext in EXECUTABLE_EXTENSIONS or magic in _RISKY_MAGIC
+        is_archive = ext in ARCHIVE_EXTENSIONS or magic in ("zip", "rar", "7z", "cab")
         # invoice.pdf.exe, or a "report.pdf" that is really a PE file.
         is_disguised = (
             len(parts) > 2 and parts[-2] in _DECOY_EXTENSIONS and ext in EXECUTABLE_EXTENSIONS
-        ) or (ext in _DECOY_EXTENSIONS and magic in ("pe", "elf", "macho", "lnk"))
+        ) or (ext in _DECOY_EXTENSIONS and magic in _RISKY_MAGIC)
         unprompted += not prompted
         unprompted_risky += not prompted and (is_exec or is_archive or is_disguised)
         executable += is_exec
@@ -338,15 +350,22 @@ def _downloads(data: CaptureData) -> dict[str, Any]:
         "executable": executable,
         "archive": archive,
         "disguised": disguised,
+        "types": sorted({f["magic"] for f in files if f["magic"]}),
         "files": files,
     }
+
+
+def _is_filefix(text: str) -> bool:
+    return bool(_FILEFIX.search(text))
 
 
 def _is_clickfix(text: str) -> bool:
     if _CARET_OBFUSCATION.search(text) or _PADDED_DECOY.search(text.strip()):
         return True
+    if _is_filefix(text):
+        return True
     plain = _CMD_NOISE.sub("", text)
-    return any(p.search(plain) for p in _CLICKFIX)
+    return any(p.search(plain) for p in _CLICKFIX) or any(p.search(plain) for p in _MAC_CLICKFIX)
 
 
 def _clipboard(data: CaptureData) -> dict[str, Any]:
@@ -360,13 +379,28 @@ def _clipboard(data: CaptureData) -> dict[str, Any]:
     ]
     commands = [c for c in writes if _COMMAND.search(_CMD_NOISE.sub("", c.get("text", "")))]
     clickfix = [c for c in commands if _is_clickfix(c.get("text", ""))]
+    path_disguised = [c for c in writes if _is_filefix(c.get("text", ""))]
+    # A page write with no user gesture (new A1 field), or a command-like write later
+    # overwritten / cleared (evidence-blanking). Old captures lack the field: neutral.
+    no_gesture = [c for c in writes if c.get("user_activation") is False]
+    overwritten = 0
+    prev_cmd = False
+    for c in writes:
+        cur = bool(_COMMAND.search(_CMD_NOISE.sub("", c.get("text", ""))))
+        if prev_cmd and (not c.get("text", "").strip() or not cur):
+            overwritten += 1
+        prev_cmd = cur
     return {
         "writes": len(writes),
         "command_like": len(commands),
         "clickfix_like": len(clickfix),
-        "commands": [{"api": c.get("api"), "text": c.get("text", "")[:1000]} for c in commands][
-            :10
-        ],
+        "path_disguised": len(path_disguised),
+        "no_gesture_writes": len(no_gesture),
+        "overwritten_command": overwritten,
+        "commands": [
+            {"api": c.get("api"), "text": c.get("text", "")[:1000], "frame_url": c.get("frame_url")}
+            for c in commands
+        ][:10],
     }
 
 
@@ -394,6 +428,15 @@ def _lure(data: CaptureData) -> dict[str, Any]:
         "payment_pretext": len(pretexts),
         "payment_pretexts": pretexts[:10],
     }
+
+
+def _magic_type(head: bytes) -> str | None:
+    if head[32769:32774] == b"CD001":
+        return "iso"
+    for sig, kind in _MAGIC.items():
+        if head.startswith(sig):
+            return kind
+    return None
 
 
 _ANALYST_INPUT = ("click", "key", "form_submit", "input")
@@ -462,10 +505,13 @@ def _redirects(data: CaptureData) -> dict[str, Any]:
         str(hop.get("from", "")).startswith("https:") and str(hop.get("to", "")).startswith("http:")
         for hop in chain
     )
+    bounce = _oauth_error_bounce(chain)
     return {
         "count": len(chain),
         "cross_domain": cross,
         "https_downgrade": downgrade,
+        "oauth_error_bounce": bounce[:10],
+        "oauth_error_bounce_count": len(bounce),
         "types": sorted({hop.get("type", "") for hop in chain}),
         "chain": [{k: hop.get(k) for k in ("from", "to", "type", "ms")} for hop in chain][:30],
         # Shown in the report but never scored.
@@ -672,6 +718,437 @@ def _brand(data: CaptureData, cross_forms: list[dict[str, Any]]) -> dict[str, An
     return best
 
 
+# --- HAR access (pure over the stored HAR) --------------------------------------------
+
+_JSONRPC_METHODS = {"eth_call", "eth_getstorageat", "eth_gettransactionbyhash", "eth_getcode"}
+_ETH_ADDRESS = re.compile(r"\b0x[0-9a-fA-F]{40}\b")
+# Published malicious EtherHiding contract / deployer addresses (analyst-curated local
+# feed; extend over time). Matched case-insensitively.
+KNOWN_WEB3_ADDRESSES = {
+    "0x8eac3198dd72f3e07108c4c7cff43108ad48a71c",
+    "0xa1decfb75c8c0ca28c10517ce56b710baf727d2e",
+    "0xd71f4cdc84420d2bd07f50787b4f998b4c2d5290",
+}
+_TELEGRAM_BOT = re.compile(
+    r"^/bot(\d{5,})(?::[A-Za-z0-9_-]{30,})?/"
+    r"(sendMessage|sendDocument|sendPhoto|sendMediaGroup|getUpdates|getMe)",
+    re.I,
+)
+_DISCORD_WEBHOOK = re.compile(r"^/api/webhooks/(\d{15,22})/[A-Za-z0-9_.-]{20,}", re.I)
+_DISCORD_HOSTS = {"discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com"}
+# Form-backend / no-code collector services a phishing page with no backend posts to
+# (analyst-curated; tune on local data).
+FORM_COLLECTORS = {
+    "formspree.io", "getform.io", "formsubmit.co", "api.web3forms.com", "submit-form.com",
+    "formcarry.com", "api.emailjs.com", "sheetdb.io", "hooks.zapier.com", "webhook.site",
+    "api.jsonbin.io",
+}  # fmt: skip
+# Client-side IP / ASN / geo lookup services used to geofence and spot sandboxes.
+IP_LOOKUP_HOSTS = {
+    "api.ipapi.is", "ipapi.co", "ip-api.com", "ipinfo.io", "ipwho.is", "get.geojs.io",
+    "api.ipify.org", "api.bigdatacloud.net", "ip-info.ff.avast.com", "ipgeolocation.io",
+    "freeipapi.com", "extreme-ip-lookup.com", "ip.sb", "ifconfig.me", "api.db-ip.com",
+    "wtfismyip.com",
+}  # fmt: skip
+# Identity-provider CDNs that serve sign-in branding assets.
+_IDP_CDN = re.compile(
+    r"(^|\.)(aadcdn\.msftauth\.net|aadcdn\.msauth\.net|logincdn\.msauth\.net"
+    r"|[a-z0-9-]+\.oktacdn\.com)$",
+    re.I,
+)
+# Microsoft Entra / ESTS session cookie names an AiTM proxy relays.
+MS_ESTS_COOKIES = {
+    "estsauth", "estsauthpersistent", "estsauthlight", "buid", "fpc", "x-ms-gateway-slice",
+}  # fmt: skip
+# Microsoft first-party OAuth app client ids (a small, common subset; extend as data).
+FIRST_PARTY_MS_APP_IDS = {
+    "29d9ed98-a469-4536-ade2-f981bc1d605e",  # Microsoft Authentication Broker
+    "d3590ed6-52b3-4102-aeff-aad2292ab01c",  # Microsoft Office
+    "1950a258-227b-4e31-a9cf-717495945fc2",  # Azure PowerShell
+    "04b07795-8ddb-461a-bbee-02f9e1bf7b46",  # Azure CLI
+    "00000003-0000-0000-c000-000000000000",  # Microsoft Graph
+}
+_HIGH_RISK_SCOPES = {
+    "mail.readwrite", "mail.read", "mail.send", "files.readwrite.all", "files.read.all",
+    "sites.readwrite.all", "chat.read", "user.readwrite.all", "directory.readwrite.all",
+    "full_access_as_user", "ews.accessasuser.all",
+}  # fmt: skip
+_MS_AUTH_HOSTS = {"login.microsoftonline.com", "login.microsoft.com", "login.live.com"}
+_MS_AUTH_PATH = re.compile(
+    r"/(common|organizations|consumers|[0-9a-f-]{36}|[a-z0-9.-]+\.onmicrosoft\.com)/"
+    r"(oauth2/(v2\.0/)?authorize|login|getcredentialtype|reprocess|sas/|kmsi|oauth2/deviceauth)"
+    r"|/(ppsecure/post\.srf|login\.srf)",
+    re.I,
+)
+_OAUTH_ERROR = re.compile(
+    r"error=(interaction_required|access_denied|consent_required|login_required)", re.I
+)
+# Microsoft sign-in structural markers (survive text obfuscation).
+_MS_MARKERS = [
+    ("ests_config", re.compile(
+        r"\$Config\s*=.{0,4000}(urlGetCredentialType|sCanaryTokenName|urlMsaSignUp|sCtx)", re.S)),
+    ("input_i0116", re.compile(r"\bi011[68]\b")),
+    ("si_button", re.compile(r"\bidSIButton9\b")),
+    ("aadcdn_asset", re.compile(r"aadcdn\.ms(ft)?auth\.net", re.I)),
+    ("ms_login_host", re.compile(r"login\.microsoftonline\.com", re.I)),
+    ("ms_title", re.compile(r"Sign in to your account", re.I)),
+]
+_IPFS_URL = re.compile(
+    r"^https?://[^/]+/ip[fn]s/(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{50,})"
+    r"|^https?://(b[a-z2-7]{50,}|k51[a-z0-9]{50,})\.ip[fn]s\.",
+    re.I,
+)
+# Fake verification / CAPTCHA UI (page context for a ClickFix clipboard command).
+_FAKE_CAPTCHA = re.compile(
+    r"(?i)verify (you are|you'?re) (a )?human|i'?m not a robot|i am not a robot"
+    r"|verification (id|hash|code)|security check|ray id|recaptcha|cloudflare",
+)
+# Real challenge resources: their presence lowers, not suppresses, the rule.
+_GENUINE_CHALLENGE = re.compile(
+    r"challenges\.cloudflare\.com/turnstile|/cdn-cgi/challenge-platform"
+    r"|www\.google\.com/recaptcha/|www\.recaptcha\.net/recaptcha/|hcaptcha\.com",
+    re.I,
+)
+# Fake browser / software update overlay text.
+_FAKE_UPDATE = re.compile(
+    r"(?i)(update|install) (google )?chrome"
+    r"|(chrome|edge|firefox|safari|browser) (is )?(out of date|outdated|update (required|availab"
+    r"le))"
+    r"|your browser (version )?is (out of date|not supported)",
+)
+_BROWSER_VENDORS = ("google.com", "microsoft.com", "apple.com", "mozilla.org", "opera.com",
+                    "brave.com", "browser-update.org")  # fmt: skip
+# FileFix: a shell command padded with a long whitespace run then a '#' commenting out a
+# decoy Windows file path, so only the path shows in Explorer's address bar.
+_FILEFIX = re.compile(
+    r"(?i)^\s*(powershell|pwsh|cmd|mshta|conhost|curl|rundll32|msiexec)\b.*"
+    r"([ \t  ]{8,}|\^+)#\s*[A-Za-z]:\\.*\.(docx?|pdf|xlsx?|txt|rtf)\s*$",
+    re.S,
+)
+# macOS / Linux terminal ClickFix traits beyond the Windows set in _CLICKFIX.
+_MAC_CLICKFIX = [
+    re.compile(r"\bosascript\b", re.I),
+    re.compile(r"\bxattr\s+-[cdr]\b.{0,80}(chmod\s+\+x|\./)", re.I | re.S),
+    re.compile(r"\bdscl\s+\.\s+-authonly\b", re.I),
+    re.compile(r"\bbase64\s+(-d|--decode|-D)\b[^|\n]{0,80}\|\s*(ba|z)?sh\b", re.I),
+    re.compile(r"\becho\s+[A-Za-z0-9+/=]{40,}\s*\|\s*base64\b", re.I),
+]
+_TERMINAL_CTX = re.compile(
+    r"(?i)(open|launch) terminal|command\s*\+\s*(space|v)|complete .{0,40}in terminal",
+)
+
+
+def _har_requests(data: CaptureData) -> list[dict[str, Any]]:
+    out = []
+    for e in data.har_entries:
+        req = e.get("request", {})
+        url = req.get("url", "")
+        if not url.startswith(("http:", "https:")):
+            continue
+        parts = urlsplit(url)
+        headers = {h.get("name", "").lower(): h.get("value", "") for h in req.get("headers", [])}
+        resp = e.get("response", {})
+        set_cookie = [
+            h.get("value", "")
+            for h in resp.get("headers", [])
+            if h.get("name", "").lower() == "set-cookie"
+        ]
+        out.append(
+            {
+                "method": (req.get("method") or "GET").upper(),
+                "url": url,
+                "host": (parts.hostname or "").lower(),
+                "path": parts.path or "/",
+                "query": parts.query,
+                "headers": headers,
+                "post": (req.get("postData") or {}).get("text") or "",
+                "status": resp.get("status"),
+                "set_cookie": set_cookie,
+                "resp_text": (resp.get("content") or {}).get("text") or "",
+                "resource_type": e.get("_resourceType"),
+            }
+        )
+    return out
+
+
+def _page_hosts_with_prompt(data: CaptureData) -> set[str]:
+    """Hosts of frames that show a credential prompt (any secret)."""
+    out = set()
+    for frame in _all_frames(data):
+        host = _host(frame.get("url"))
+        if host and _credential_prompt(frame):
+            out.add(host)
+    return out
+
+
+def _ms_owned(host: str, brands: list[BrandRef]) -> bool:
+    owner = brand_owner(host, brands)
+    return owner is not None and owner.name == "Microsoft"
+
+
+def _exfil(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
+    telegram, discord, collectors = [], [], []
+    for r in reqs:
+        if r["host"] == "api.telegram.org" and (m := _TELEGRAM_BOT.match(r["path"])):
+            telegram.append(
+                {"method": m.group(2), "bot_id": m.group(1), "has_post": bool(r["post"])}
+            )
+        elif r["host"] in _DISCORD_HOSTS and _DISCORD_WEBHOOK.match(r["path"]):
+            discord.append({"host": r["host"], "has_post": bool(r["post"])})
+        elif r["host"] in FORM_COLLECTORS and r["method"] in ("POST", "PUT"):
+            collectors.append(r["host"])
+    return {
+        "telegram": telegram[:20],
+        "telegram_count": len(telegram),
+        "discord": discord[:20],
+        "discord_count": len(discord),
+        "form_collectors": sorted(set(collectors))[:20],
+        "form_collector_count": len(set(collectors)),
+    }
+
+
+def _ms_markers(html: str) -> list[str]:
+    return [name for name, pat in _MS_MARKERS if pat.search(html)]
+
+
+def _html_credential_prompt(html: str) -> bool:
+    low = html.lower()
+    return "type=password" in low.replace('"', "").replace("'", "").replace(" ", "") or bool(
+        re.search(r"<input[^>]+type\s*=\s*['\"]?password", low) or _SIGN_IN.search(html)
+    )
+
+
+def _idp(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
+    clone_pages, markers_seen = [], []
+    for page in data.dom_html:
+        host = _host(page.get("url"))
+        html = page.get("html", "")
+        if not host or _ms_owned(host, data.brands) or site(host) in data.allowlisted:
+            continue
+        found = _ms_markers(html)
+        if len(found) >= 2 and _html_credential_prompt(html):
+            clone_pages.append({"host": host, "url": page.get("url"), "markers": found})
+            markers_seen.extend(found)
+    # IdP CDN branding assets on a foreign credential page.
+    cdn_assets = sorted({r["url"][:300] for r in reqs if _IDP_CDN.search(r["host"] or "")})
+    prompt_hosts = _page_hosts_with_prompt(data)
+    foreign_prompt = any(
+        not _ms_owned(h, data.brands) and site(h) not in data.allowlisted for h in prompt_hosts
+    )
+    cdn_on_foreign = bool(cdn_assets) and foreign_prompt
+    # Microsoft auth paths served from a non-Microsoft host (AiTM reverse proxy).
+    foreign_paths = []
+    for r in reqs:
+        if not r["host"] or _ms_owned(r["host"], data.brands) or r["host"] in _MS_AUTH_HOSTS:
+            continue
+        if site(r["host"]) in data.allowlisted or not _MS_AUTH_PATH.search(r["path"]):
+            continue
+        has_ests = bool(_ms_markers(r["resp_text"])) or any(
+            c.split("=", 1)[0].strip().lower() in MS_ESTS_COOKIES for c in r["set_cookie"]
+        )
+        if has_ests:
+            foreign_paths.append({"host": r["host"], "path": r["path"]})
+    # Entra consent / authorize requests (illicit consent grant).
+    authorize = []
+    for url in _chain_urls(data) + [r["url"] for r in reqs]:
+        info = _parse_authorize(url)
+        if info and info["client_id"] not in FIRST_PARTY_MS_APP_IDS:
+            if info["high_risk"]:
+                authorize.append(info)
+    # Microsoft session cookies set by a non-Microsoft host.
+    foreign_cookies = []
+    for r in reqs:
+        host = r["host"]
+        if not host or _ms_owned(host, data.brands) or site(host) in data.allowlisted:
+            continue
+        for c in r["set_cookie"]:
+            name = c.split("=", 1)[0].strip().lower()
+            if name in MS_ESTS_COOKIES:
+                foreign_cookies.append({"host": r["host"], "cookie": name})
+    return {
+        "ms_clone_pages": len(clone_pages),
+        "ms_clone_page_details": clone_pages[:10],
+        "ms_markers": sorted(set(markers_seen)),
+        "cdn_assets_on_foreign_page": cdn_on_foreign,
+        "cdn_assets": cdn_assets[:10],
+        "ms_paths_on_foreign_host": len(foreign_paths),
+        "ms_foreign_paths": foreign_paths[:10],
+        "oauth_authorize_requests": authorize[:10],
+        "high_risk_consent": len(authorize),
+        "cookies_on_foreign_host": len(foreign_cookies),
+        "idp_cookies": foreign_cookies[:10],
+    }
+
+
+def _parse_authorize(url: str) -> dict[str, Any] | None:
+    from urllib.parse import parse_qs
+
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if host not in ("login.microsoftonline.com", "login.microsoft.com"):
+        return None
+    if not re.search(
+        r"/(oauth2/(v2\.0/)?authorize|v2\.0/adminconsent|adminconsent)", parts.path, re.I
+    ):
+        return None
+    q = parse_qs(parts.query)
+    prompt = (q.get("prompt") or [""])[0].lower()
+    if prompt == "none":  # silent SSO / error-bounce case (DE-M365-006), not consent
+        return None
+    scopes = {s.lower() for s in re.split(r"[ +]", (q.get("scope") or [""])[0]) if s}
+    high = bool(scopes & _HIGH_RISK_SCOPES) and (
+        "offline_access" in scopes or prompt == "consent" or "adminconsent" in parts.path.lower()
+    )
+    redirect_host = _host((q.get("redirect_uri") or [""])[0])
+    return {
+        "client_id": (q.get("client_id") or [""])[0].lower(),
+        "scopes": sorted(scopes),
+        "redirect_uri_host": redirect_host,
+        "prompt": prompt,
+        "high_risk": high,
+    }
+
+
+def _chain_urls(data: CaptureData) -> list[str]:
+    r = data.result
+    urls = [r.get("url"), r.get("final_url")]
+    for hop in r.get("redirects", []):
+        urls += [hop.get("from"), hop.get("to")]
+    for nav in r.get("navigations", []):
+        urls.append(nav.get("url"))
+    return [u for u in urls if u]
+
+
+def _oauth_error_bounce(chain: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from urllib.parse import parse_qs
+
+    out = []
+    for i, hop in enumerate(chain[:-1]):
+        a = urlsplit(hop.get("to") or "")
+        ahost = (a.hostname or "").lower()
+        is_authorize = ahost in {*_MS_AUTH_HOSTS, "accounts.google.com"} and re.search(
+            r"/oauth2/(v2\.0/)?authorize|/o/oauth2/(v2/)?auth", a.path, re.I
+        )
+        if not is_authorize or (parse_qs(a.query).get("prompt") or [""])[0].lower() != "none":
+            continue
+        nxt = urlsplit(chain[i + 1].get("to") or "")
+        nhost = (nxt.hostname or "").lower()
+        if nhost and nhost not in {*_MS_AUTH_HOSTS, "accounts.google.com"}:
+            if _OAUTH_ERROR.search(nxt.query) or _OAUTH_ERROR.search(nxt.fragment):
+                out.append({"idp": ahost, "redirect_host": nhost})
+    return out
+
+
+def _web3(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
+    calls, addresses = [], set()
+    for r in reqs:
+        if r["method"] != "POST" or not r["post"]:
+            continue
+        body = r["post"]
+        if '"jsonrpc"' not in body:
+            continue
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            continue
+        items = payload if isinstance(payload, list) else [payload]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            method = str(item.get("method", "")).lower()
+            if item.get("jsonrpc") == "2.0" and method in _JSONRPC_METHODS:
+                params = item.get("params") or []
+                to = ""
+                for p in params:
+                    if isinstance(p, dict) and p.get("to"):
+                        to = str(p["to"])
+                calls.append({"host": r["host"], "method": method, "to": to.lower()})
+                if to:
+                    addresses.add(to.lower())
+    known = sorted(a for a in addresses if a in KNOWN_WEB3_ADDRESSES)
+    # Fake EIP-1193 wallet provider log (A6): present only when the wallet profile is on.
+    # Drainer signals: Permit/Permit2 typed-data signing, unlimited approve/setApprovalForAll.
+    wallet = data.result.get("wallet_requests", [])
+    drainer = [
+        w
+        for w in wallet
+        if str(w.get("primaryType", "")).lower().startswith("permit")
+        or w.get("unlimited") is True
+        or str(w.get("selector", "")).lower() in ("0x095ea7b3", "0xa22cb465")
+    ]
+    out = {
+        "rpc_calls": calls[:20],
+        "rpc_call_count": len(calls),
+        "contract_addresses": sorted(addresses)[:20],
+        "known_malicious_contract": len(known),
+        "known_contracts": known,
+    }
+    if wallet:
+        out["wallet_requests"] = wallet[:20]
+        out["wallet_drainer"] = len(drainer)
+    return out
+
+
+def _ip_lookups(reqs: list[dict[str, Any]]) -> list[str]:
+    return sorted({r["host"] for r in reqs if r["host"] in IP_LOOKUP_HOSTS})
+
+
+def _final_ipfs(final_url: str | None) -> dict[str, str] | None:
+    return {"url": final_url} if final_url and _IPFS_URL.search(final_url) else None
+
+
+def _fake_captcha(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
+    evidence = set()
+    for frame in _all_frames(data):
+        text = f"{frame.get('title', '')} {frame.get('text', '')}"
+        for m in _FAKE_CAPTCHA.finditer(text):
+            evidence.add(m.group(0).strip().lower())
+    genuine = any(_GENUINE_CHALLENGE.search(r["url"]) for r in reqs)
+    return {
+        "fake_captcha": bool(evidence),
+        "fake_captcha_evidence": sorted(evidence)[:10],
+        "genuine_challenge": genuine,
+    }
+
+
+def _fake_update(data: CaptureData) -> list[str]:
+    out = []
+    for frame in _all_frames(data):
+        host = _host(frame.get("url"))
+        text = f"{frame.get('title', '')} {frame.get('text', '')}"
+        if host and not any(host == v or host.endswith("." + v) for v in _BROWSER_VENDORS):
+            if _FAKE_UPDATE.search(text):
+                out.append(frame.get("url", ""))
+    return sorted(set(out))[:10]
+
+
+def _evasion(data: CaptureData) -> dict[str, Any]:
+    blocked = data.result.get("blocked_input", [])
+    devtools = sorted({b.get("key", "") for b in blocked if b.get("kind") == "devtools_key"})
+    context_menu = any(b.get("kind") == "contextmenu" for b in blocked)
+    return {
+        "devtools_blocked": len(devtools),
+        "devtools_blocked_keys": devtools,
+        "context_menu_blocked": context_menu,
+    }
+
+
+def _websocket(data: CaptureData) -> dict[str, Any]:
+    conns: dict[str, dict[str, Any]] = {}
+    for fr in data.result.get("websocket_frames", []):
+        url = fr.get("url", "")
+        c = conns.setdefault(url, {"url": url, "host": _host(url), "sent": 0, "received": 0,
+                                   "events": set()})  # fmt: skip
+        if fr.get("direction") == "sent":
+            c["sent"] += 1
+        else:
+            c["received"] += 1
+        if ev := fr.get("event"):
+            c["events"].add(ev)
+    out = [{**c, "events": sorted(c["events"])[:20]} for c in conns.values()]
+    return {"connections": out[:20], "count": len(out)}
+
+
 def build_facts(data: CaptureData) -> dict[str, Any]:
     r = data.result
     final_url = r.get("final_url") or r.get("url")
@@ -702,6 +1179,17 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
     internal = [b for b in blocked if "scheme" not in b.get("reason", "")]
     hidden = sorted({src for f in _all_frames(data) for src in _suspicious_hidden(f, data)})
     forms = _forms(data)
+    reqs = _har_requests(data)
+    # Credential/credential-like form pages served from blob: or about: documents
+    # (HTML smuggling), which Chromium allows for script-created top-level/frame docs.
+    smuggled = sorted(
+        {
+            f.get("url", "")
+            for f in _all_frames(data)
+            if str(f.get("url", "")).startswith(("blob:", "about:srcdoc", "about:blank"))
+            and _credential_prompt(f)
+        }
+    )
 
     return {
         "final": {
@@ -711,6 +1199,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "display_host": display_host(final_host) if final_host else None,
             "allowlisted": bool(final_host) and site(final_host) in data.allowlisted,
             "free_hosting": free_hosting(final_host) if final_host else None,
+            "ipfs": _final_ipfs(final_url),
             "title": r.get("title") or "",
         },
         "capture": {
@@ -732,7 +1221,16 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
         },
         "downloads": _downloads(data),
         "clipboard": _clipboard(data),
-        "lure": _lure(data),
+        "lure": {
+            **_lure(data),
+            **_fake_captcha(data, reqs),
+            "fake_update_pages": _fake_update(data),
+        },
+        "exfil": _exfil(data, reqs),
+        "idp": _idp(data, reqs),
+        "web3": _web3(data, reqs),
+        "websocket": _websocket(data),
+        "evasion": _evasion(data),
         "domains": {
             "count": len(regs),
             "hosts": hosts[:200],
@@ -759,12 +1257,15 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "hosts": len(hosts),
             "blocked_internal": len(internal),
             "blocked": blocked[:20],
+            "ip_lookups": _ip_lookups(reqs),
         },
         "frames": {
             "count": len(_frames(r)),
             "pages_seen": len({f.get("url") for f in data.dom_pages}),
             "hidden_iframes": len(hidden),
             "hidden_iframe_urls": hidden[:10],
+            "smuggled_credential_pages": len(smuggled),
+            "smuggled_credential_urls": smuggled[:10],
         },
         "popups": {"count": max(0, len(r.get("pages", [])) - 1)},
         "dialogs": {
@@ -775,9 +1276,10 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
 
 
 def extract_iocs(data: CaptureData, facts: dict[str, Any]) -> dict[str, list[str]]:
-    """IOCs from a capture (ANA-9): domains, IPs, URLs, hashes and emails."""
+    """IOCs from a capture (ANA-9): domains, IPs, URLs, hashes, emails and eth addresses."""
     r = data.result
     domains, ips, urls, hashes, emails = set(), set(), set(), set(), set()
+    eth_addresses: set[str] = set()
     for host in facts["domains"]["hosts"]:
         if re.fullmatch(r"[\d.]+|[0-9a-f:]+", host):
             ips.add(host)
@@ -814,10 +1316,25 @@ def extract_iocs(data: CaptureData, facts: dict[str, Any]) -> dict[str, list[str
         for link in frame.get("links", []):
             if str(link).lower().startswith("mailto:"):
                 emails.add(str(link)[7:].split("?")[0].lower())
+    # Clipboard payloads: the de-obfuscated command often names the next-stage URL/host,
+    # the only pointer to the payload in a browser-only sandbox (DE-CFX-008).
+    for c in r.get("clipboard", []):
+        text = _CMD_NOISE.sub("", str(c.get("text", "")))
+        if not (c.get("api") or not c.get("trusted")):
+            continue
+        for u in re.findall(r"https?://[^\s'\"<>|)]{4,2000}", text):
+            urls.add(u)
+            if host := _host(u):
+                (ips if re.fullmatch(r"[\d.]+", host) else domains).add(host)
+        eth_addresses.update(a.lower() for a in _ETH_ADDRESS.findall(text))
+    for call in facts.get("web3", {}).get("rpc_calls", []):
+        if call.get("to"):
+            eth_addresses.add(call["to"].lower())
     return {
         "domains": sorted(domains),
         "ips": sorted(ips),
         "urls": sorted(urls)[:1000],
         "hashes": sorted(hashes),
         "emails": sorted(emails)[:200],
+        "eth_addresses": sorted(eth_addresses)[:100],
     }

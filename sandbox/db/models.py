@@ -28,7 +28,7 @@ ANALYSIS_STATUSES = ("queued", "running", "analysing", "finished", "failed", "ca
 VERDICTS = ("benign", "suspicious", "malicious", "unknown")
 RULE_ENGINES = ("yara", "suricata", "behaviour")
 SEVERITIES = ("info", "low", "medium", "high", "critical")
-IOC_TYPES = ("domain", "ip", "url", "hash", "email")
+IOC_TYPES = ("domain", "ip", "url", "hash", "email", "eth_address")
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
