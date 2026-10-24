@@ -1,0 +1,134 @@
+"""Process configuration (NFR-9).
+
+Static settings come from environment variables prefixed ``SANDBOX_``. Values that
+analysts or admins change at runtime (weights, quotas, feed settings) belong in
+Postgres, not here.
+"""
+
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="SANDBOX_", env_file=".env", extra="ignore")
+
+    env: Literal["dev", "test", "prod"] = "dev"
+    database_url: str = "postgresql+asyncpg://sandbox:sandbox@localhost:5432/sandbox"
+    log_level: str = "INFO"
+
+    # "dev" trusts X-Dev-User / X-Dev-Roles headers; "oidc" validates SSO tokens and
+    # sessions against the configured issuer. Service tokens work in both modes.
+    auth_mode: Literal["dev", "oidc"] = "dev"
+    # Signs stream, embed, download and login-session tokens. Must be set in prod and be
+    # the same on every API instance.
+    secret_key: SecretStr = SecretStr("dev-insecure-secret-change-me")
+
+    # OIDC single sign-on (ADM-1). Roles come from the ``oidc_roles_claim`` claim, mapped
+    # through ``oidc_role_map`` (IdP group -> sandbox role) when given.
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: SecretStr | None = None
+    oidc_redirect_url: str | None = None
+    oidc_scopes: str = "openid email profile"
+    oidc_roles_claim: str = "roles"
+    oidc_role_map: dict[str, str] = Field(default_factory=dict)
+    oidc_audience: str | None = None
+    session_cookie_name: str = "sandbox_session"
+    session_ttl_s: int = 8 * 3600
+
+    max_url_length: int = 2048
+    # CIDRs that are refused in addition to every non-global address.
+    ssrf_extra_blocked_cidrs: list[str] = Field(default_factory=list)
+    # CIDRs exempted from the block, e.g. the local test server in integration tests.
+    # Never set in production.
+    ssrf_allowed_cidrs: list[str] = Field(default_factory=list)
+
+    # External enrichment for the IoC lookup page (ANA-10). Unset keys disable that vendor.
+    vt_api_key: SecretStr | None = None
+    abuseipdb_api_key: SecretStr | None = None
+    intel_timeout_s: float = 15.0
+    # VirusTotal URL scans: how long to wait for a fresh submission to finish.
+    vt_url_poll_attempts: int = 10
+    vt_url_poll_interval_s: float = 2.0
+    redirect_max_hops: int = 15
+
+    # Artifact storage (local filesystem; the store interface allows S3 later). The
+    # quarantine root holds downloaded files and is kept separate (NFR-5).
+    artifact_root: str = "./var/artifacts"
+    quarantine_root: str = "./var/quarantine"
+
+    # Session containers (ORC-1, NFR-3).
+    docker_url: str | None = None  # None: DOCKER_HOST or the local socket
+    session_image: str = "sandbox-session:latest"
+    pcap_image: str = "sandbox-pcap:latest"
+    # Docker network the session containers join; the API must be on it for the live view.
+    session_network: str = "sandbox_sessions"
+    # Egress isolation (NFR-3). The session network is a bridge with a fixed interface
+    # name and subnet so the egress-guard service (docker/egress-guard.sh) can firewall
+    # it: sessions reach the public internet only. The API's fixed address on it is the
+    # one host allowed to open connections to sessions (the live view).
+    session_bridge: str = "sbx-sessions"
+    session_subnet: str = "172.31.213.0/24"
+    session_api_ip: str = "172.31.213.2"
+    # Before starting sessions the worker runs a probe container on the session network
+    # that tries to reach internal targets. "enforce" refuses to start sessions if any
+    # answers, "warn" logs and continues, "off" skips the probe (tests only).
+    egress_guard: Literal["enforce", "warn", "off"] = "enforce"
+    # Extra host:port targets that must be unreachable; the API and the Docker host are
+    # always probed.
+    egress_probe_extra_targets: list[str] = Field(default_factory=list)
+    # A public host:port that should be reachable; only reported, never enforced.
+    egress_probe_public: str = "1.1.1.1:443"
+    egress_probe_ttl_s: int = 300
+    # "runsc" for gVisor where installed; None uses Docker's default runtime.
+    session_runtime: str | None = None
+    session_memory: str = "2g"
+    session_cpus: float = 2.0
+    session_pids_limit: int = 512
+    capture_pcap: bool = True
+    # Seconds an automated run watches the page after it loads.
+    automated_observe_s: int = 20
+    # Grace after the time limit before the reaper force-removes a container (ORC-5).
+    reaper_grace_s: int = 60
+    worker_id: str | None = None
+    worker_poll_s: float = 2.0
+
+    # Suricata over session pcaps (ANA-2). Empty disables it.
+    suricata_image: str | None = None
+
+    # RDAP lookups for domain registration age (CAP-8); empty disables.
+    rdap_base_url: str | None = "https://rdap.org"
+
+    # Bearer token required by /metrics when set (ADM-5).
+    metrics_token: SecretStr | None = None
+    # Extra origins allowed to frame the UI besides the embed page (normally none).
+    ui_frame_ancestors: str = "'self'"
+
+    def egress_probe_targets(self) -> list[str]:
+        return [
+            f"{self.session_api_ip}:8000",  # the API on the session network
+            "host.docker.internal:8000",  # the Docker host (Docker Desktop), API port
+            "host.docker.internal:5432",  # ...and Postgres
+            "169.254.169.254:80",  # cloud metadata
+            *self.egress_probe_extra_targets,
+        ]
+
+    @field_validator(
+        "vt_api_key",
+        "abuseipdb_api_key",
+        "suricata_image",
+        "metrics_token",
+        "oidc_client_secret",
+        mode="before",
+    )
+    @classmethod
+    def _blank_key_is_unset(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

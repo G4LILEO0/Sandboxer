@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sandbox
+          POSTGRES_PASSWORD: sandbox
+          POSTGRES_DB: sandbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sandbox"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://sandbox:sandbox@localhost:5432/sandbox_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest -ra
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f docker/api.Dockerfile .
+      - run: docker build -f docker/pcap.Dockerfile -t sandbox-pcap:ci .
+      - run: docker build -f docker/session.Dockerfile -t sandbox-session:ci .
+      # Smoke-test the session image under the same hardening the worker applies.
+      - run: >-
+          docker run --rm --read-only --tmpfs /tmp --tmpfs /home/runner:uid=10002
+          --cap-drop ALL --security-opt no-new-privileges --shm-size 1g
+          -e SANDBOX_RUN_SPEC='{"analysis_id":"ci","url":"https://example.com/","observe_s":3}'
+          sandbox-session:ci | grep -q '"kind": "session_end"'

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Admin · URL Sandbox</title>
+  <script src="js/theme.js?v=20261010-2"></script>
+  <link rel="stylesheet" href="css/style.css?v=20261010-2" />
+  <link rel="stylesheet" href="css/report.css?v=20261010-2" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>URL Sandbox</a>
+    <nav class="nav" aria-label="Main">
+      <a href="index.html#lookup">Look up</a>
+      <a href="index.html#sandbox">Sandbox</a>
+      <a href="admin.html" aria-current="page">Admin</a>
+    </nav>
+    <div class="topbar-end">
+      <div id="identity" class="identity"></div>
+      <button type="button" class="icon-btn" id="theme-toggle" title="Switch between light and dark">◐</button>
+    </div>
+  </header>
+  <main>
+    <p id="denied" class="alert" hidden>Your role can't use the admin pages. Detection engineers manage feeds, rules and brands; admins manage everything.</p>
+    <div class="admin-layout">
+      <nav class="admin-tabs" id="admin-tabs" aria-label="Admin sections">
+        <button type="button" data-tab="feeds" class="active">Threat feeds</button>
+        <button type="button" data-tab="rules">Detection rules</button>
+        <button type="button" data-tab="bundles">Rule bundles and scoring</button>
+        <button type="button" data-tab="indicators">Suppressions and allowlist</button>
+        <button type="button" data-tab="brands">Brands</button>
+        <button type="button" data-tab="clients" data-role="admin">API clients</button>
+        <button type="button" data-tab="config" data-role="admin">Configuration</button>
+        <button type="button" data-tab="audit" data-role="admin">Audit log</button>
+      </nav>
+      <section class="panel" id="panel"></section>
+    </div>
+  </main>
+  <script src="js/config.js?v=20261010-2"></script>
+  <script src="js/api.js?v=20261010-2"></script>
+  <script src="js/admin.js?v=20261010-2"></script>
+</body>
+</html>

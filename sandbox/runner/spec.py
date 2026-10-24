@@ -1,0 +1,34 @@
+"""What the orchestrator tells a runner to do. Passed as JSON in ``SANDBOX_RUN_SPEC``."""
+
+import json
+from dataclasses import asdict, dataclass, field
+from typing import Any
+
+
+@dataclass
+class RunSpec:
+    analysis_id: str
+    url: str
+    interactive: bool = False
+    # Hard cap for the runner itself; the orchestrator normally stops it first.
+    time_limit_s: int = 600
+    observe_s: int = 20
+    locale: str = "en-US"
+    timezone: str = "UTC"
+    viewport_width: int = 1366
+    viewport_height: int = 768
+    user_agent_profile: str = "chrome-windows"
+    max_body_bytes: int = 2 * 1024 * 1024
+    max_screenshots: int = 60
+    screenshot_interval_s: int = 5
+    ssrf_extra_blocked_cidrs: list[str] = field(default_factory=list)
+    ssrf_allowed_cidrs: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, raw: str) -> "RunSpec":
+        data: dict[str, Any] = json.loads(raw)
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in data.items() if k in known})
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self))

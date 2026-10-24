@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>URL Sandbox</title>
+  <script src="js/theme.js?v=20261010-2"></script>
+  <link rel="stylesheet" href="css/style.css?v=20261010-2" />
+  <link rel="stylesheet" href="css/report.css?v=20261010-2" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>URL Sandbox</a>
+    <nav class="nav" aria-label="Main">
+      <button type="button" data-view="lookup">Look up</button>
+      <button type="button" data-view="sandbox">Sandbox</button>
+      <a href="admin.html" data-role="detection_engineer,admin" hidden>Admin</a>
+    </nav>
+    <div class="topbar-end">
+      <div id="identity" class="identity"></div>
+      <button type="button" class="icon-btn" id="theme-toggle" title="Switch between light and dark">◐</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Look up: reputation of IPs, domains, URLs and hashes (VirusTotal, AbuseIPDB) -->
+    <div id="view-lookup" class="view">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Look up indicators</h1>
+          <p class="lede">Paste IPs, domains, URLs or file hashes, one per line or comma-separated. Defanged input works. URLs VirusTotal has never seen are submitted to it for scanning.</p>
+        </div>
+      </div>
+
+      <section class="panel intake">
+        <label class="visually-hidden" for="ioc-input">Indicators to look up</label>
+        <textarea id="ioc-input" placeholder="185.220.101.4&#10;hxxps://login-secure[.]example/verify&#10;44d88612fea8a8f36de82e1278abb02f"></textarea>
+        <div id="chips" class="chips" aria-label="Detected types (change one if it was detected wrongly)"></div>
+        <div class="intake-actions">
+          <button id="analyze-btn" class="btn" type="button">Look up</button>
+          <span class="hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
+          <label class="check"><input type="checkbox" id="defang-output" checked /> Defang results</label>
+          <span id="vendor-status" class="vendor-note"></span>
+        </div>
+      </section>
+
+      <section id="batch-summary" class="results-bar" aria-live="polite">
+        <span id="counts">No results yet</span>
+        <span id="rate-status" class="rate-status"></span>
+        <span class="spacer"></span>
+        <span id="copy-template-summary" class="copy-summary-label"></span>
+        <button id="copy-fields-btn" class="copy-btn" type="button" aria-expanded="false" aria-controls="copy-template">Choose copy fields</button>
+        <button id="copy-all-summaries-btn" class="copy-btn" type="button">Copy all results</button>
+      </section>
+
+      <!-- What every copy button copies: fields, order and format (js/copy-report.js) -->
+      <section id="copy-template" class="panel copy-template" hidden></section>
+
+      <div class="workspace">
+        <section id="results" class="results" aria-live="polite"></section>
+        <aside id="report-basket" class="panel report-basket" aria-label="Report">
+          <div class="row"><h2>Report <span class="muted">(<span id="basket-count">0</span>)</span></h2>
+            <button id="basket-clear" class="copy-btn quiet" type="button">Clear</button></div>
+          <div id="basket-list" class="basket-list"></div>
+          <div class="basket-actions">
+            <button id="basket-copy-md" class="copy-btn" type="button">Copy Markdown</button>
+            <button id="basket-copy-csv" class="copy-btn" type="button">Copy CSV</button>
+            <button id="basket-export-json" class="copy-btn" type="button" style="grid-column: 1 / -1">Download JSON</button>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- Sandbox: detonate URLs and follow analyses -->
+    <div id="view-sandbox" class="view" hidden>
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Detonate URLs</h1>
+          <p class="lede">Each URL opens in a disposable, isolated browser and gets its own report. In an interactive session the live browser opens for you to drive.</p>
+        </div>
+      </div>
+
+      <form id="sandbox-form" class="panel intake">
+        <label class="visually-hidden" for="sandbox-urls">URLs to detonate</label>
+        <textarea id="sandbox-urls" placeholder="One URL per line. Defanged input works; internal addresses are refused." required></textarea>
+        <div class="run-options">
+          <div class="field"><span>Mode</span>
+            <div class="segmented" role="radiogroup" aria-label="Mode">
+              <label><input type="radio" name="mode" value="automated" checked /> Automated</label>
+              <label><input type="radio" name="mode" value="interactive" /> Interactive</label>
+            </div>
+          </div>
+          <label class="field"><span>Time limit</span>
+            <select id="sandbox-time-limit">
+              <option value="">Default</option><option value="60">1 min</option><option value="300">5 min</option>
+              <option value="600">10 min</option><option value="1200">20 min</option><option value="1800">30 min</option><option value="3600">60 min</option>
+            </select>
+          </label>
+          <label class="field"><span>Browser</span><select id="sandbox-profile"></select></label>
+          <label class="check" title="Sends the final domain and download hashes to VirusTotal"><input type="checkbox" id="sandbox-enrich" /> VirusTotal enrichment</label>
+          <label class="check" title="Show a recent finished report for the same URL instead of detonating again"><input type="checkbox" id="sandbox-reuse" /> Reuse a recent report</label>
+          <span class="spacer"></span>
+          <button type="submit" class="btn" id="sandbox-submit">Detonate</button>
+        </div>
+        <details class="more-options">
+          <summary>More options <span id="more-summary" class="muted"></span></summary>
+          <div class="run-options">
+            <label class="field"><span>Locale</span><input id="sandbox-locale" value="en-US" size="8" /></label>
+            <label class="field"><span>Timezone</span><input id="sandbox-timezone" value="UTC" size="16" /></label>
+            <div class="field"><span>Viewport</span>
+              <div><input id="sandbox-vw" type="number" value="1366" min="320" max="3840" class="num" aria-label="Viewport width" /> × <input id="sandbox-vh" type="number" value="768" min="240" max="2160" class="num" aria-label="Viewport height" /></div>
+            </div>
+            <label class="field" style="flex: 1; min-width: 260px"><span>Visible only to</span><input id="sandbox-restrict" placeholder="user@corp, … (leave empty for everyone)" /></label>
+          </div>
+        </details>
+        <p id="enrich-warning" class="vendor-note" hidden>VirusTotal enrichment sends this analysis's final domain and download hashes to a third party.</p>
+        <div id="sandbox-submit-result" class="submit-result" aria-live="polite"></div>
+      </form>
+
+      <section class="panel analyses-panel">
+        <div class="analyses-head">
+          <h2 class="section-title">Analyses</h2>
+          <span id="sandbox-list-status" class="small muted"></span>
+          <span class="spacer"></span>
+          <label class="check"><input type="checkbox" id="only-mine" /> Only mine</label>
+          <button type="button" id="sandbox-refresh" class="copy-btn">Refresh</button>
+        </div>
+        <form id="search-form" class="filters analyses-filters">
+          <input name="q" placeholder="URL contains" aria-label="URL contains" />
+          <input name="ioc" placeholder="Seen an indicator? Domain, IP, URL, hash or email" aria-label="Indicator" />
+          <select name="verdict" aria-label="Verdict"><option value="">Any verdict</option><option value="malicious">Malicious</option><option value="suspicious">Suspicious</option><option value="benign">Benign</option><option value="unknown">Unknown</option></select>
+          <select name="status" aria-label="Status"><option value="">Any status</option><option value="queued">Queued</option><option value="running">Running</option><option value="analysing">Analysing</option><option value="finished">Finished</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select>
+          <select name="mode" aria-label="Mode"><option value="">Any mode</option><option value="automated">Automated</option><option value="interactive">Interactive</option></select>
+          <button type="submit" class="copy-btn">Search</button>
+          <button type="reset" class="copy-btn quiet">Clear</button>
+          <details>
+            <summary class="small">More filters</summary>
+            <div class="filters">
+              <input name="domain" placeholder="Domain" aria-label="Domain" />
+              <input name="tag" placeholder="Tag" size="14" aria-label="Tag" />
+              <input name="submitted_by" id="filter-submitted-by" placeholder="Analyst" size="18" aria-label="Analyst" />
+              <label class="field"><span>From</span><input type="date" name="created_after" /></label>
+              <label class="field"><span>To</span><input type="date" name="created_before" /></label>
+            </div>
+          </details>
+        </form>
+        <div class="table-wrap">
+          <table class="analyses">
+            <colgroup><col class="c-verdict" /><col /><col class="c-status" /><col class="c-mode col-wide" /><col class="c-analyst col-wide" /><col class="c-when" /></colgroup>
+            <thead><tr><th>Verdict</th><th>URL</th><th>Status</th><th class="col-wide">Mode</th><th class="col-wide">Analyst</th><th>Submitted</th></tr></thead>
+            <tbody id="sandbox-list"></tbody>
+          </table>
+        </div>
+        <div class="pager"><span id="page-info" class="small muted"></span><button type="button" id="page-prev" class="copy-btn">Newer</button><button type="button" id="page-next" class="copy-btn">Older</button></div>
+      </section>
+    </div>
+  </main>
+
+  <script src="js/config.js?v=20261010-2"></script>
+  <script src="js/api.js?v=20261010-2"></script>
+  <script src="js/detector.js?v=20261010-2"></script>
+  <script src="js/cache.js?v=20261010-2"></script>
+  <script src="js/vt-client.js?v=20261010-2"></script>
+  <script src="js/abuseipdb-client.js?v=20261010-2"></script>
+  <script src="js/unwrap-url.js?v=20261010-2"></script>
+  <script src="js/redirect-check.js?v=20261010-2"></script>
+  <script src="js/url-heuristics.js?v=20261010-2"></script>
+  <script src="js/normalize.js?v=20261010-2"></script>
+  <script src="js/render.js?v=20261010-2"></script>
+  <script src="js/copy-report.js?v=20261010-2"></script>
+  <script src="js/sandbox.js?v=20261010-2"></script>
+  <script src="js/app.js?v=20261010-2"></script>
+</body>
+</html>
