@@ -108,6 +108,9 @@ class Settings(BaseSettings):
     # signing/sending request, to observe drainer flows (DE-W3B-005/006). Touches no network
     # and holds no keys, but announcing a wallet is an interaction, so it is off by default.
     fake_wallet: bool = False
+    # Register service workers and record their script URLs / push endpoints (DE-SCM-003).
+    # Default off: service workers stay blocked (safer); turn on to observe push-abuse flows.
+    allow_service_workers: bool = False
     # Grace after the time limit before the reaper force-removes a container (ORC-5).
     reaper_grace_s: int = 60
     worker_id: str | None = None

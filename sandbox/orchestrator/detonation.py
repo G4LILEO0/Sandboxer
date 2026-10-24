@@ -93,6 +93,7 @@ async def run_detonation(ctx: WorkerContext, analysis_id: str) -> None:
             "canary_fill": ctx.settings.canary_fill,
             "key_probe": ctx.settings.key_probe,
             "fake_wallet": ctx.settings.fake_wallet,
+            "allow_service_workers": ctx.settings.allow_service_workers,
             # Hard cap inside the runner: the most an analyst could extend to, plus grace.
             "time_limit_s": config["max_session_s"] + ctx.settings.reaper_grace_s,
         }

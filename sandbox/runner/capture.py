@@ -60,6 +60,8 @@ _NAV_REASON_TYPES = {
 }
 _PASS_SCHEMES = {"data", "blob", "about"}
 _MAX_DOM_BYTES = 5 * 1024 * 1024
+_MAX_REQUEST_LOG = 5000
+_MAX_DYNAMIC_SCRIPTS = 50
 _LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
     # Keep WebRTC from opening direct UDP paths around the request filter.
@@ -131,6 +133,11 @@ class Capture:
         self.websocket_frames: list[dict[str, Any]] = []
         self.wallet_requests: list[dict[str, Any]] = []
         self.blocked_input: list[dict[str, Any]] = []
+        self.cdp_requests: list[dict[str, Any]] = []
+        self.pw_requests: list[dict[str, Any]] = []
+        self.cookies: list[dict[str, Any]] = []
+        self.jsapi: dict[str, Any] = {}
+        self.dynamic_scripts = 0
         self.console: list[dict[str, Any]] = []
         self.errors: list[str] = []
         self.screenshots: list[dict[str, Any]] = []
@@ -312,6 +319,10 @@ class Capture:
             tree = await cdp.send("Page.getFrameTree")
             self.main_frame_ids[page] = tree["frameTree"]["frame"]["id"]
             cdp.on("Page.frameRequestedNavigation", lambda e: self._on_requested_nav(page, e))
+            # A3: initiator type / script URL / stack top per request on this target.
+            cdp.on("Network.requestWillBeSent", lambda e: self._on_cdp_request(page, e))
+            cdp.on("Network.webSocketCreated", lambda e: self._on_cdp_ws(page, e))
+            await cdp.send("Network.enable")
         except PlaywrightError as exc:
             self.errors.append(f"cdp attach {pid}: {exc.message[:200]}")
 
@@ -359,6 +370,105 @@ class Capture:
             await download.delete()
         self.downloads.append(entry)
         self.events.emit("download", "browser", **entry)
+
+    @staticmethod
+    def _initiator(raw: dict[str, Any] | None) -> dict[str, Any]:
+        raw = raw or {}
+        out: dict[str, Any] = {"type": raw.get("type")}
+        url = raw.get("url")
+        stack = raw.get("stack") or {}
+        frames = list(stack.get("callFrames") or [])
+        while not frames and stack.get("parent"):
+            stack = stack["parent"]
+            frames = list(stack.get("callFrames") or [])
+        if frames:
+            top = frames[0]
+            url = url or top.get("url")
+            out["function"] = (top.get("functionName") or "")[:80]
+            out["line"] = top.get("lineNumber")
+        out["script_url"] = (url or "")[:500] or None
+        return out
+
+    def _on_cdp_request(self, page: Page, event: dict[str, Any]) -> None:
+        if len(self.cdp_requests) >= _MAX_REQUEST_LOG:
+            return
+        req = event.get("request") or {}
+        self.cdp_requests.append(
+            {
+                "url": str(req.get("url", ""))[:2000],
+                "method": req.get("method"),
+                "type": event.get("type"),
+                "frame_id": event.get("frameId"),
+                "document_url": str(event.get("documentURL", ""))[:2000],
+                "has_post": bool(req.get("hasPostData")),
+                "page": self._page_id(page),
+                "initiator": self._initiator(event.get("initiator")),
+                "ms": self._elapsed_ms(),
+                "source": "cdp",
+            }
+        )
+
+    def _on_cdp_ws(self, page: Page, event: dict[str, Any]) -> None:
+        if len(self.cdp_requests) >= _MAX_REQUEST_LOG:
+            return
+        self.cdp_requests.append(
+            {
+                "url": str(event.get("url", ""))[:2000],
+                "method": "GET",
+                "type": "WebSocket",
+                "page": self._page_id(page),
+                "initiator": self._initiator(event.get("initiator")),
+                "ms": self._elapsed_ms(),
+                "source": "cdp",
+            }
+        )
+
+    def _on_pw_request(self, request: Request) -> None:
+        """Every request from every frame, OOPIF and worker (Playwright sees them all)."""
+        if len(self.pw_requests) >= _MAX_REQUEST_LOG:
+            return
+        frame_url = None
+        with contextlib.suppress(Exception):
+            frame_url = request.frame.url
+        worker = None
+        with contextlib.suppress(Exception):
+            sw = request.service_worker
+            worker = sw.url if sw else None
+        self.pw_requests.append(
+            {
+                "url": request.url[:2000],
+                "method": request.method,
+                "type": request.resource_type,
+                "frame_url": (frame_url or "")[:2000] or None,
+                "worker_url": worker,
+                "navigation": request.is_navigation_request(),
+                "ms": self._elapsed_ms(),
+                "source": "playwright",
+            }
+        )
+
+    def write_request_log(self) -> None:
+        """requests.jsonl (A3): browser-side request records joined to CDP initiators."""
+        by_url: dict[tuple[str, str | None], list[dict[str, Any]]] = {}
+        for c in self.cdp_requests:
+            by_url.setdefault((c["url"], c.get("method")), []).append(c)
+        lines = []
+        for r in self.pw_requests:
+            match = by_url.get((r["url"], r["method"]))
+            cdp = match.pop(0) if match else None
+            entry = dict(r)
+            if cdp:
+                entry["initiator"] = cdp["initiator"]
+                entry["document_url"] = cdp.get("document_url")
+                entry["has_post"] = cdp.get("has_post")
+            lines.append(entry)
+        # CDP-only records (WebSockets, requests Playwright did not surface).
+        for rest in by_url.values():
+            lines.extend(rest)
+        lines.sort(key=lambda e: e.get("ms") or 0)
+        with (self.out / "requests.jsonl").open("w", encoding="utf-8") as fh:
+            for entry in lines[:_MAX_REQUEST_LOG]:
+                fh.write(json.dumps(entry, default=str, ensure_ascii=False) + "\n")
 
     def _on_websocket_frames(self, ws) -> None:
         """Record WebSocket frames (A2) for relay/skimmer detection; cross-checked against
@@ -439,6 +549,9 @@ class Capture:
             if len(self.blocked_input) < 200:
                 self.blocked_input.append({"page": pid, **data})
             return
+        if kind in ("js_exec", "js_decode", "js_blob", "js_api"):
+            self._on_jsapi(kind, data)
+            return
         if kind == "form_submit" and not data.get("trusted"):
             self.events.emit("form_submit", "browser", page=pid, **data)
             return
@@ -447,6 +560,38 @@ class Capture:
         self.events.emit(kind, "analyst", page=pid, **data)
         if kind == "click" and page is not None:
             self._spawn(self._after_click(page))
+
+    def _on_jsapi(self, kind: str, data: dict[str, Any]) -> None:
+        """A1/A14: aggregate runtime hook events. Decoded code over 1 KB is written as a
+        dynamic script artifact so the YARA pass scans stages that only exist at runtime."""
+        j = self.jsapi
+        if kind == "js_exec":
+            execs = j.setdefault("exec", {"count": 0, "max_len": 0, "max_entropy": 0.0, "apis": []})
+            execs["count"] += 1
+            execs["max_len"] = max(execs["max_len"], data.get("len", 0))
+            execs["max_entropy"] = max(execs["max_entropy"], data.get("entropy", 0) or 0)
+            if data.get("api") and data["api"] not in execs["apis"]:
+                execs["apis"].append(data["api"])
+            code = data.get("code") or ""
+            if len(code) >= 1024 and self.dynamic_scripts < _MAX_DYNAMIC_SCRIPTS:
+                body = code.encode("utf-8", "replace")
+                sha = hashlib.sha256(body).hexdigest()
+                path = self.out / "scripts" / f"dynamic-{sha}.js"
+                if not path.exists():
+                    path.write_bytes(body)
+                    self.dynamic_scripts += 1
+        elif kind == "js_blob":
+            blobs = j.setdefault("blobs", [])
+            if len(blobs) < 200:
+                blobs.append(data)
+        else:  # js_decode, js_api
+            counts = j.setdefault("apis", {})
+            key = data.get("api", kind)
+            counts[key] = counts.get(key, 0) + 1
+            if kind == "js_api" and data.get("url"):
+                j.setdefault("sw_scripts", [])
+                if data["url"] not in j["sw_scripts"] and len(j["sw_scripts"]) < 50:
+                    j["sw_scripts"].append(data["url"])
 
     async def _after_click(self, page: Page) -> None:
         await asyncio.sleep(1.0)
@@ -508,7 +653,7 @@ class Capture:
                 timezone_id=spec.timezone,
                 accept_downloads=True,
                 ignore_https_errors=True,
-                service_workers="block",
+                service_workers="allow" if spec.allow_service_workers else "block",
                 record_har_path=str(self.out / "network.har"),
                 record_har_content="embed",
                 record_video_dir=str(self.out / "video"),
@@ -518,10 +663,23 @@ class Capture:
             await context.route_web_socket(re.compile(r".*"), self.on_websocket)
             await context.expose_binding(BINDING, self.on_binding)
             await context.add_init_script(INIT_SCRIPT)
+            if self.profile.platform:
+                plat = json.dumps(self.profile.platform)
+                await context.add_init_script(
+                    f"Object.defineProperty(navigator,'platform',{{get:()=>{plat}}});"
+                )
+            # Grant clipboard so hooked writes don't fail silently; notifications only when
+            # service workers are allowed (so a push-bait flow can proceed and be recorded).
+            perms = ["clipboard-read", "clipboard-write"]
+            if spec.allow_service_workers:
+                perms.append("notifications")
+            with contextlib.suppress(PlaywrightError):
+                await context.grant_permissions(perms)
             if spec.fake_wallet:
                 # Active-probe capture (DE-W3B-005/006); off unless configured (legal sign-off).
                 await context.add_init_script(WALLET_SCRIPT)
             context.on("page", lambda p: self._spawn(self.attach_page(p)))
+            context.on("request", self._on_pw_request)
 
             page = await context.new_page()
             await self.attach_page(page)
@@ -542,15 +700,38 @@ class Capture:
                     await self.screenshot(context.pages[0], "final-fullpage", full_page=True)
                 if self._tasks:
                     await asyncio.wait(self._tasks, timeout=10)
+                await self._collect_cookies(context)
                 await context.close()
                 await browser.close()
 
         truncate_har(self.out / "network.har", spec.max_body_bytes)
+        self.write_request_log()
         self.events.emit("session_end", "runner", reason=self.end_reason)
         result = self.result()
         (self.out / "result.json").write_text(json.dumps(result, default=str, indent=1))
         self.events.close()
         return result
+
+    async def _collect_cookies(self, context: BrowserContext) -> None:
+        """A12: cookie jar at the end of the session. Names, domains and flags only; the
+        value is replaced by a short hash because session cookies are secrets."""
+        try:
+            jar = await context.cookies()
+        except PlaywrightError:
+            return
+        for c in jar[:500]:
+            value = str(c.get("value", "")).encode("utf-8", "replace")
+            self.cookies.append(
+                {
+                    "name": str(c.get("name", ""))[:200],
+                    "domain": str(c.get("domain", ""))[:255],
+                    "path": c.get("path"),
+                    "secure": c.get("secure"),
+                    "http_only": c.get("httpOnly"),
+                    "same_site": c.get("sameSite"),
+                    "value_sha256": hashlib.sha256(value).hexdigest()[:16],
+                }
+            )
 
     async def _navigate(self, page: Page) -> None:
         try:
@@ -649,6 +830,8 @@ class Capture:
             "websocket_frames": self.websocket_frames,
             "wallet_requests": self.wallet_requests,
             "blocked_input": self.blocked_input,
+            "cookies": self.cookies,
+            "jsapi": self.jsapi,
             "console": self.console[:500],
             "screenshots": self.screenshots,
             "dom_snapshots": self.dom_snapshots,
