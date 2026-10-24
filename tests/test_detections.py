@@ -956,6 +956,68 @@ def test_illicit_consent_grant_fires_and_first_party_is_quiet():
     assert "illicit_consent_grant" not in _hits(_cap("https://x.example/", navigations=[{"url": fp}]))  # noqa: E501
 
 
+# ConsentFix (DE-M365-013/014): Azure CLI is first-party; its redirect is loopback.
+_AZ_CLI = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
+_CFX_AUTH = (
+    "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize?client_id="
+    + _AZ_CLI + "&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A8400"
+    "&scope=https%3A%2F%2Fmanagement.core.windows.net%2F.default"
+)
+_PASTE_TEXT = "Sign in, then copy the URL from your address bar and paste it here to continue."
+
+
+def _cfx_page(url, text=_PASTE_TEXT, links=(_CFX_AUTH,)):
+    page = _page(url, title="Verify your email", text=text)
+    page["frames"][0]["links"] = list(links)
+    return page
+
+
+def test_consentfix_paste_back_fires_and_ms_docs_are_quiet():
+    url = "https://secure-verify.pages.dev/"
+    hits = _hits(_cap(url, [_cfx_page(url)]))
+    assert {"consentfix_authcode_paste_back", "firstparty_app_loopback_authorize"} <= hits
+    # Microsoft's own docs page showing the same flow is not a lure.
+    docs = "https://learn.microsoft.com/cli/azure/authenticate"
+    assert not {"consentfix_authcode_paste_back", "firstparty_app_loopback_authorize"} & _hits(
+        _cap(docs, [_cfx_page(docs)])
+    )
+
+
+def test_consentfix_url_in_inline_script_is_found():
+    """The 'Sign in' button opens the authorize URL from script (JSON-escaped)."""
+    url = "https://secure-verify.pages.dev/"
+    escaped = _CFX_AUTH.replace("/", "\\/").replace("&", "\\u0026")
+    dom = [{"url": url, "html": f"<script>btn.onclick=()=>window.open('{escaped}')</script>"}]
+    data = _cap(url, [_cfx_page(url, links=())], dom_html=dom)
+    assert "consentfix_authcode_paste_back" in _hits(data)
+
+
+def test_firstparty_loopback_without_paste_back_is_only_the_booster():
+    url = "https://onboarding.example.net/"
+    hits = _hits(_cap(url, [_cfx_page(url, text="Device setup guide")]))
+    assert "firstparty_app_loopback_authorize" in hits
+    assert "consentfix_authcode_paste_back" not in hits
+
+
+def test_consentfix_needs_first_party_loopback_and_a_foreign_origin():
+    url = "https://secure-verify.pages.dev/"
+    third_party = _CFX_AUTH.replace(_AZ_CLI, "11111111-2222-3333-4444-555555555555")
+    assert "firstparty_app_loopback_authorize" not in _hits(
+        _cap(url, [_cfx_page(url, links=(third_party,))])
+    )
+    web_redirect = _CFX_AUTH.replace("http%3A%2F%2Flocalhost%3A8400", "https%3A%2F%2Fapp.example")
+    assert "firstparty_app_loopback_authorize" not in _hits(
+        _cap(url, [_cfx_page(url, links=(web_redirect,))])
+    )
+    # An analyst pasting a CLI sign-in URL: the chain starts on Microsoft.
+    assert "firstparty_app_loopback_authorize" not in _hits(_cap(_CFX_AUTH))
+    # An allowlisted developer site linking the flow.
+    gh = "https://github.com/Azure/azure-cli/issues/1"
+    assert "firstparty_app_loopback_authorize" not in _hits(
+        _cap(gh, [_cfx_page(gh, text="Device setup guide")], allowlisted=["github.com"])
+    )
+
+
 def _rpc(host="bsc-dataseed.binance.org", to="0x1111111111111111111111111111111111111111"):
     body = (
         '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":'
