@@ -23,6 +23,7 @@ _LAYOUT = [
     ("events.jsonl", "events_log", "application/x-ndjson"),
     ("runner_error.json", "runner_error", "application/json"),
     ("network.har", "har", "application/json"),
+    ("requests.jsonl", "requests_log", "application/x-ndjson"),
     ("capture.pcap", "pcap", "application/vnd.tcpdump.pcap"),
     ("screenshots/*.png", "screenshot", "image/png"),
     ("dom/*.html", "dom", "text/html"),

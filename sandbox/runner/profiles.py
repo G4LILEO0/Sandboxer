@@ -11,6 +11,8 @@ class BrowserProfile:
     is_mobile: bool = False
     has_touch: bool = False
     device_scale_factor: float = 1.0
+    # navigator.platform override, so platform-gated kits (macOS ClickFix) show real content.
+    platform: str = ""
     description: str = ""
 
 
@@ -23,24 +25,28 @@ PROFILES: dict[str, BrowserProfile] = {
             "chrome-windows",
             f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
             f"Chrome/{_CHROME} Safari/537.36",
+            platform="Win32",
             description="Chrome on Windows 10/11 desktop",
         ),
         BrowserProfile(
             "edge-windows",
             f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
             f"Chrome/{_CHROME} Safari/537.36 Edg/131.0.0.0",
+            platform="Win32",
             description="Edge on Windows desktop",
         ),
         BrowserProfile(
             "chrome-mac",
             f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like "
             f"Gecko) Chrome/{_CHROME} Safari/537.36",
-            description="Chrome on macOS",
+            platform="MacIntel",
+            description="Chrome on macOS (opt-in macOS detonation profile, A16)",
         ),
         BrowserProfile(
             "chrome-linux",
             f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
             f"Chrome/{_CHROME} Safari/537.36",
+            platform="Linux x86_64",
             description="Chrome on Linux desktop",
         ),
         BrowserProfile(
@@ -50,6 +56,7 @@ PROFILES: dict[str, BrowserProfile] = {
             is_mobile=True,
             has_touch=True,
             device_scale_factor=2.625,
+            platform="Linux armv8l",
             description="Chrome on an Android phone (mobile viewport, touch)",
         ),
         BrowserProfile(
@@ -59,6 +66,7 @@ PROFILES: dict[str, BrowserProfile] = {
             is_mobile=True,
             has_touch=True,
             device_scale_factor=3,
+            platform="iPhone",
             description="iPhone user agent (rendered by Chromium)",
         ),
     ]

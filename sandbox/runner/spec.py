@@ -27,6 +27,7 @@ class RunSpec:
     canary_fill: str = "off"  # off | automated | always
     key_probe: bool = False
     fake_wallet: bool = False
+    allow_service_workers: bool = False
 
     @classmethod
     def from_json(cls, raw: str) -> "RunSpec":

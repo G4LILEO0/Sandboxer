@@ -117,6 +117,92 @@ INIT_SCRIPT = r"""
     }, 'preventDefault');
   } catch (e) {}
 
+  // --- A1 runtime exec / obfuscation / smuggling hooks ------------------------------
+  // All observe-only. Arguments are size-gated and the decoded code is reported so the
+  // analysis-side YARA pass (A14) can scan stages that only exist after decoding.
+  const entropy = (s) => {
+    try {
+      const n = Math.min(s.length, 4096); if (!n) return 0;
+      const freq = {}; for (let i = 0; i < n; i++) { const c = s[i]; freq[c] = (freq[c] || 0) + 1; }
+      let e = 0; for (const k in freq) { const p = freq[k] / n; e -= p * Math.log2(p); } return +e.toFixed(2);
+    } catch (x) { return 0; }
+  };
+  let execCount = 0;
+  const execSink = (api, arg) => {
+    const s = typeof arg === 'string' ? arg : '';
+    if (s.length < 24) return;
+    if (execCount++ < 400) send('js_exec', { api, len: s.length, entropy: entropy(s), code: s.slice(0, 200000), script_url: scriptUrl() });
+  };
+  try {
+    const g = (typeof globalThis !== 'undefined') ? globalThis : window;
+    const E = g.eval;
+    g.eval = nativeize(function (a) { execSink('eval', a); return E.call(this, a); }, 'eval');
+    const OF = g.Function;
+    g.Function = new Proxy(OF, { apply(t, th, args) { if (args.length) execSink('Function', String(args[args.length - 1])); return Reflect.apply(t, th, args); }, construct(t, args) { if (args.length) execSink('Function', String(args[args.length - 1])); return Reflect.construct(t, args); } });
+    g.Function.prototype = OF.prototype;
+    for (const name of ['setTimeout', 'setInterval']) {
+      const O = g[name]; if (!O) continue;
+      g[name] = nativeize(function (fn, ...r) { if (typeof fn === 'string') execSink(name, fn); return O.call(this, fn, ...r); }, name);
+    }
+  } catch (e) {}
+  try {
+    const OW = Document.prototype.write, OWL = Document.prototype.writeln;
+    Document.prototype.write = nativeize(function (...a) { execSink('document.write', a.join('')); return OW.apply(this, a); }, 'write');
+    Document.prototype.writeln = nativeize(function (...a) { execSink('document.writeln', a.join('')); return OWL.apply(this, a); }, 'writeln');
+  } catch (e) {}
+  try {
+    const d = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+    if (d && d.set) {
+      Object.defineProperty(Element.prototype, 'innerHTML', { configurable: true, enumerable: d.enumerable, get: d.get,
+        set: nativeize(function (v) { execSink('innerHTML', String(v)); return d.set.call(this, v); }, 'set') });
+    }
+  } catch (e) {}
+  try {
+    const A = g.atob;
+    if (A) g.atob = nativeize(function (s) { const r = A.call(this, s); try { send('js_decode', { api: 'atob', len: (r || '').length }); } catch (x) {} return r; }, 'atob');
+  } catch (e) {}
+  // HTML smuggling: Blob/File construction and object-URL download (DE-OBF-005).
+  const hexHead = (parts) => { try { const b = new Uint8Array((parts && parts[0]) instanceof ArrayBuffer ? parts[0] : new ArrayBuffer(0)); return Array.from(b.slice(0, 16)).map((x) => x.toString(16).padStart(2, '0')).join(''); } catch (x) { return ''; } };
+  try {
+    for (const ctor of ['Blob', 'File']) {
+      const O = window[ctor]; if (!O) continue;
+      window[ctor] = new Proxy(O, { construct(t, args) {
+        try { const inst = Reflect.construct(t, args); const opt = (args[1] || {}); if (inst.size > 1024) send('js_blob', { ctor, size: inst.size, mime: inst.type || opt.type || '', magic: hexHead(args[0]) }); return inst; } catch (x) { return Reflect.construct(t, args); } } });
+      window[ctor].prototype = O.prototype;
+    }
+  } catch (e) {}
+  // A11 permission / service-worker / push bait (DE-SCM-003) and fullscreen-locker APIs.
+  try {
+    if (window.Notification && Notification.requestPermission) {
+      const R = Notification.requestPermission.bind(Notification);
+      Notification.requestPermission = nativeize((...a) => { send('js_api', { api: 'Notification.requestPermission' }); return R(...a); }, 'requestPermission');
+    }
+  } catch (e) {}
+  try {
+    if (navigator.serviceWorker && navigator.serviceWorker.register) {
+      const R = navigator.serviceWorker.register.bind(navigator.serviceWorker);
+      navigator.serviceWorker.register = nativeize((url, ...a) => { send('js_api', { api: 'serviceWorker.register', url: String(url).slice(0, 500) }); return R(url, ...a); }, 'register');
+    }
+  } catch (e) {}
+  try {
+    for (const [obj, api] of [[Element.prototype, 'requestFullscreen'], [Element.prototype, 'requestPointerLock'], [HTMLMediaElement.prototype, 'play']]) {
+      if (!obj || !obj[api]) continue;
+      const O = obj[api];
+      obj[api] = nativeize(function (...a) { send('js_api', { api }); return O.apply(this, a); }, api);
+    }
+    if (navigator.keyboard && navigator.keyboard.lock) {
+      const O = navigator.keyboard.lock.bind(navigator.keyboard);
+      navigator.keyboard.lock = nativeize((...a) => { send('js_api', { api: 'keyboard.lock' }); return O(...a); }, 'lock');
+    }
+  } catch (e) {}
+  // History flooding / back-button hijack (DE-SCM-002).
+  try {
+    for (const api of ['pushState', 'replaceState']) {
+      const O = history[api].bind(history);
+      history[api] = nativeize((...a) => { send('js_api', { api: 'history.' + api }); return O(...a); }, api);
+    }
+  } catch (e) {}
+
   // Analyst actions (only trusted, i.e. real input events).
   document.addEventListener('click', (ev) => {
     if (!ev.isTrusted) return;
