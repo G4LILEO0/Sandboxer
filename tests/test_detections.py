@@ -1971,3 +1971,32 @@ def test_apps_script_survey_and_google_login_are_quiet():
     assert "apps_script_credential_page" not in _hits(survey)
     assert build_facts(login)["forms"]["apps_script_pages"] == 0
     assert "apps_script_credential_page" not in _hits(login)
+
+
+# --- explorer dead drop / drainer lure (DE-W3B-003 / DE-W3B-006) --------------------
+
+
+def test_explorer_api_read_on_plain_site_fires_and_dapp_is_quiet():
+    url = "https://blog.example-host.com/"
+    har = [_req("https://api.ethplorer.io/getAddressHistory/0xabc?apiKey=freekey")]
+    data = _cap(url, [_page(url, "Recipes", text="Weekly recipes")], har=har)
+    assert build_facts(data)["web3"]["explorer_api_hosts"] == ["api.ethplorer.io"]
+    assert "explorer_api_dead_drop" in _hits(data)
+    dapp = _cap(url, [_page(url, "Portfolio", text="Connect wallet to see balances")], har=har)
+    assert "explorer_api_dead_drop" not in _hits(dapp)
+
+
+def _drainer(url, text, age):
+    page = _page(url, "Claim", text=text)
+    page["frames"][0]["scripts"] = [{"src": "https://cdn.example-cdn.com/walletconnect@2.9.0/index.js"}]
+    data = _cap(url, [page])
+    data.domain_ages = {"example-host.com": age}
+    return data
+
+
+def test_wallet_drainer_lure_needs_wording_library_and_young_domain():
+    url = "https://claim.example-host.com/"
+    assert "wallet_drainer_lure" in _hits(_drainer(url, "Claim your airdrop allocation now", 10))
+    # A real, older dApp with the same wording, and a young dApp with no claim wording.
+    assert "wallet_drainer_lure" not in _hits(_drainer(url, "Claim your airdrop allocation", 900))
+    assert "wallet_drainer_lure" not in _hits(_drainer(url, "Swap tokens", 10))

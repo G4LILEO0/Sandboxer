@@ -1106,6 +1106,12 @@ IP_LOOKUP_HOSTS = {
     "freeipapi.com", "extreme-ip-lookup.com", "ip.sb", "ifconfig.me", "api.db-ip.com",
     "wtfismyip.com",
 }  # fmt: skip
+# Block-explorer APIs a page can read a dead-drop transaction or token note from
+# (DE-W3B-003, EtherHiding variants querying Ethplorer's free key).
+EXPLORER_API_HOSTS = {
+    "api.ethplorer.io", "api.binplorer.com", "api.blockchair.com", "api.blockcypher.com",
+    "api.etherscan.io", "api.bscscan.com", "api.polygonscan.com", "api.tronscan.org",
+}  # fmt: skip
 # Identity-provider CDNs that serve sign-in branding assets.
 _IDP_CDN = re.compile(
     r"(^|\.)(aadcdn\.msftauth\.net|aadcdn\.msauth\.net|logincdn\.msauth\.net"
@@ -1691,6 +1697,7 @@ def _web3(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
         "known_malicious_contract": len(known),
         "known_contracts": known,
         "rpc_large_string_results": len(large),
+        "explorer_api_hosts": sorted({r["host"] for r in reqs if r["host"] in EXPLORER_API_HOSTS}),
         # Decoded values for the linked-exec check only; not a reported fact.
         "_rpc_large_strings": large[:10],
     }
@@ -1701,6 +1708,12 @@ def _web3(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 _WALLET_CONNECTOR_LIBS = {"walletconnect", "web3modal", "wagmi", "rainbowkit"}
+_WALLET_LIBS = _WALLET_CONNECTOR_LIBS | {"web3", "ethers"}
+_DRAINER_WORDING = re.compile(
+    r"(?i)\bairdrop\b|\bclaim\s+(your\s+)?(free\s+)?(tokens?|rewards?|allocation|nfts?)\b"
+    r"|\b(verify|validate|synchroni[sz]e|rectify|migrate)\s+(your\s+)?wallet\b"
+    r"|\bwallet\s+(verification|validation|synchroni[sz]ation)\b",
+)
 # A page that offers to connect a wallet is a dApp (or a drainer lure, DE-W3B-006), not
 # an EtherHiding loader on an unrelated site.
 _DAPP_UI = re.compile(
@@ -1746,8 +1759,24 @@ def _web3_derived(
         and jsapi.get("code_exec_max_len", 0) >= 1024
         and (not final_allowlisted or lure_page)
     )
+    # Explorer-API dead drop (DE-W3B-003): a page with no wallet UI reading an explorer.
+    explorer = web3.get("explorer_api_hosts") or []
+    explorer_reads = bool(
+        explorer and not dapp_ui and not web3.get("wallet_requests") and not final_allowlisted
+    )
+    # Drainer lure (DE-W3B-006): claim/airdrop/wallet-verification wording on a top-level
+    # page that loads a wallet library. The domain-age/lookalike/free-hosting half is in
+    # the rule, where those facts live.
+    wallet_lib = any(lib.get("name") in _WALLET_LIBS for lib in libraries)
+    drainer_wording = any(
+        _DRAINER_WORDING.search(f"{f.get('title', '')} {f.get('text', '')}")
+        for f in _top_frames(data)
+    )
     return {
         "dapp_ui": dapp_ui,
+        "explorer_dead_drop": explorer_reads,
+        "wallet_library": wallet_lib,
+        "drainer_lure": bool(wallet_lib and drainer_wording and not final_allowlisted),
         "etherhiding_rpc": etherhiding,
         "rpc_result_linked_exec": linked,
         "rpc_result_executed": executed,
