@@ -2063,3 +2063,14 @@ def test_bitb_tutorial_and_linked_login_are_quiet():
     with_link = _cap(url, [page], dom_html=[{"url": url, "html": linked}])
     assert "browser_in_the_browser_window" not in _hits(tutorial)
     assert "browser_in_the_browser_window" not in _hits(with_link)
+
+
+# --- JSFuck symbol-set YARA (L2-NEW-2) -----------------------------------------------
+
+
+def test_jsfuck_symbol_set_yara():
+    rule = _yara("jsfuck_symbol_set")
+    assert rule.match(data=b"<script>" + b"(![]+[])[+[]]" * 30 + b"</script>")
+    # Minified code is bracket-heavy but always has letters and digits between them.
+    assert not rule.match(data=b"a[0](b[1])+c[2]!d;" * 60)
+    assert not rule.match(data=b"[]" * 99)

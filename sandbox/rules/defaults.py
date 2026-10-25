@@ -1200,6 +1200,20 @@ rule html_smuggling_blob_download : malware_download
         $blob and $url and $dl and $click and (1 of ($risky*) or ($b64 and 1 of ($dec*)))
 }
 """,
+    "jsfuck_symbol_set": r"""
+rule jsfuck_symbol_set : obfuscation
+{
+    meta:
+        description = "200+ bytes written only with JSFuck symbols []()+! (JSFuck / JSFireTruck), injected on compromised sites to bounce search visitors to a TDS"
+        severity = "medium"
+        mitre_attack = "T1027"
+    strings:
+        // Fixed length: YARA caps how long a regex match can be.
+        $run = /[\[\]()+!]{200}/
+    condition:
+        $run
+}
+""",
     "bip39_wordlist_embedded": r"""
 rule bip39_wordlist_embedded : crypto
 {
