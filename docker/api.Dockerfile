@@ -18,7 +18,9 @@ COPY tests ./tests
 RUN useradd --system --uid 10001 --no-create-home app \
     && mkdir -p /data/artifacts /data/quarantine
 # The API runs as "app"; the worker image runs as root for the Docker socket (compose.yaml).
+# Uvicorn's access log is off: it would record the signed tokens carried in live-view,
+# download and embed URLs. The app logs every request itself with those redacted.
 USER app
 
 EXPOSE 8000
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn --factory sandbox.api.main:create_app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn --factory sandbox.api.main:create_app --host 0.0.0.0 --port 8000 --no-access-log"]
