@@ -37,6 +37,9 @@ DEFAULT_SECRET = "dev-insecure-secret-change-me"  # noqa: S105 - the value prod 
 log = logging.getLogger("sandbox.api")
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9\-_.]{1,64}$")
+# Bearer tokens that travel in the URL path (live view, signed downloads, embeds) are
+# replaced before the path is logged.
+_TOKEN_PATH_RE = re.compile(r"^(/v1/(?:stream|files|embed)/)[^/]+")
 
 
 _UI_CSP = (
@@ -49,12 +52,24 @@ _UI_CSP = (
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    secret = settings.secret_key.get_secret_value()
     if settings.env == "prod":
         if settings.auth_mode == "dev":
             raise RuntimeError("auth_mode=dev is not allowed when env=prod")
-        if settings.secret_key.get_secret_value() == DEFAULT_SECRET:
-            raise RuntimeError("Set SANDBOX_SECRET_KEY to a long random value when env=prod")
+        if secret == DEFAULT_SECRET or len(secret) < 32:
+            raise RuntimeError(
+                "Set SANDBOX_SECRET_KEY to a long random value (32+ characters) when env=prod"
+            )
+    if settings.auth_mode == "oidc" and secret == DEFAULT_SECRET:
+        # The key signs SSO session cookies: with the public default anyone could mint an
+        # admin session, whatever SANDBOX_ENV says.
+        raise RuntimeError("Set SANDBOX_SECRET_KEY when auth_mode=oidc")
     configure_logging(settings.log_level)
+    if settings.auth_mode == "dev":
+        log.warning(
+            "auth_mode=dev: any client can act as any user and role via X-Dev-* headers; "
+            "never expose this instance beyond localhost"
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -124,7 +139,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             extra={
                 "request_id": request_id,
                 "method": request.method,
-                "path": request.url.path,
+                "path": _TOKEN_PATH_RE.sub(r"\1[token]", request.url.path),
                 "status": response.status_code,
                 "ms": round((time.perf_counter() - started) * 1000, 1),
             },

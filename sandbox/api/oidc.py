@@ -18,6 +18,12 @@ from sandbox.config import Settings
 
 _CACHE: dict[str, tuple[float, Any]] = {}
 _TTL = 3600
+# Asymmetric algorithms only. The token header is attacker-controlled, so it never picks
+# the algorithm on its own: "none" and HMAC algorithms (which would treat the IdP's
+# public key as a shared secret) are refused.
+ALLOWED_ALGORITHMS = frozenset(
+    {"RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"}
+)
 
 
 class OidcError(Exception):
@@ -51,12 +57,18 @@ async def validate_jwt(http: httpx.AsyncClient, settings: Settings, token: str) 
     except (jwt.PyJWTError, StopIteration) as exc:
         _CACHE.pop(meta["jwks_uri"], None)  # keys may have rotated
         raise OidcError("Unknown signing key") from exc
-    key = jwt.PyJWK(key_data).key
+    alg = header.get("alg", "RS256")
+    if alg not in ALLOWED_ALGORITHMS or key_data.get("alg", alg) != alg:
+        raise OidcError(f"Signing algorithm {alg!r} is not allowed for this key")
+    try:
+        key = jwt.PyJWK(key_data, algorithm=alg).key
+    except jwt.PyJWTError as exc:
+        raise OidcError(f"Unusable signing key: {exc}") from exc
     try:
         return jwt.decode(
             token,
             key=key,
-            algorithms=[header.get("alg", "RS256")],
+            algorithms=[alg],
             audience=settings.oidc_audience or settings.oidc_client_id,
             issuer=meta.get("issuer", settings.oidc_issuer),
             options={"require": ["exp", "iss", "sub"]},
