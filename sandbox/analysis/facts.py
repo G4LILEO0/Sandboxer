@@ -899,6 +899,12 @@ def _keyword(word: str) -> re.Pattern:
     return re.compile(rf"(?<!\w){re.escape(word)}(?!\w)")
 
 
+@lru_cache(maxsize=256)
+def _acronym(word: str) -> re.Pattern:
+    # Case-sensitive, and a hyphen counts as part of the word ("POP-UPS" is not UPS).
+    return re.compile(rf"(?<![\w-]){re.escape(word)}(?![\w-])")
+
+
 def _brand(data: CaptureData, cross_forms: list[dict[str, Any]]) -> dict[str, Any]:
     """Brand impersonation (ANA-5): a page that presents a brand and asks for credentials
     while not hosted on that brand's domains.
@@ -934,14 +940,27 @@ def _brand(data: CaptureData, cross_forms: list[dict[str, Any]]) -> dict[str, An
             # own platform (a "Google" login form on sites.google.com).
             if brand.owns(host) and not platform:
                 continue
-            title_hits = [k for k in brand.keywords if _keyword(k).search(title)]
-            text_hits = [k for k in brand.keywords if _keyword(k).search(text)]
-            if not title_hits and not text_hits:
+            keywords = [k for k in brand.keywords if not k.lower().startswith("acronym:")]
+            title_hits = [k for k in keywords if _keyword(k).search(title)]
+            text_hits = [k for k in keywords if _keyword(k).search(text)]
+            look = lookalike(host, [brand], data.allowlisted)
+            # Acronym brands (UPS): exact upper case, title/headings only, and only with
+            # brand context (a prompt, a login/track title, a lookalike, free hosting).
+            acro_hits = []
+            if brand.acronyms and not title_hits:
+                acro_text = " ".join([frame.get("title", ""), *frame.get("headings", [])[:10]])
+                context = prompt or look or platform or _TITLE_LURE.search(acro_text.lower())
+                if context:
+                    acro_hits = [a for a in brand.acronyms if _acronym(a).search(acro_text)]
+            if not title_hits and not text_hits and not acro_hits:
                 continue
             evidence, confidence = [], 0
             if title_hits:
                 confidence += 35
                 evidence.append(f"title mentions {', '.join(title_hits)}")
+            elif acro_hits:
+                confidence += 20
+                evidence.append(f"title/heading names {', '.join(acro_hits)}")
             if text_hits:
                 confidence += min(20, 10 * len(text_hits))
                 evidence.append(f"page text mentions {', '.join(text_hits)}")
@@ -959,11 +978,10 @@ def _brand(data: CaptureData, cross_forms: list[dict[str, Any]]) -> dict[str, An
             if url in cross_pages:
                 confidence += 10
                 evidence.append("credentials are posted to another site")
-            look = lookalike(host, [brand], data.allowlisted)
             if look:
                 confidence += 20
                 evidence.append(f"{host} imitates {look['imitates']} ({look['kind']})")
-            lure_on_hosting = bool(platform and title_hits and title_lure)
+            lure_on_hosting = bool(platform and (title_hits or acro_hits) and title_lure)
             if lure_on_hosting:
                 confidence += 20
                 evidence.append(f"brand login/wallet title on free hosting ({platform})")

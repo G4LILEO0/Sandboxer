@@ -159,6 +159,16 @@ class BrandRef:
     def owns(self, host: str) -> bool:
         return owned_by(host, self.domains)
 
+    @property
+    def acronyms(self) -> tuple[str, ...]:
+        """Short all-caps names given as ``acronym:UPS`` keywords. Matched
+        case-sensitively in titles/headings with a context co-requirement, never as a
+        plain keyword: a bare "ups" would match "pop-ups" and "sign-ups". Kept inside
+        ``keywords`` so the brands table needs no new column."""
+        return tuple(
+            k.split(":", 1)[1].upper() for k in self.keywords if k.lower().startswith("acronym:")
+        )
+
 
 def brand_owner(host: str, brands: list[BrandRef]) -> BrandRef | None:
     """The brand that owns ``host``. Hosts on free hosting platforms belong to whoever
@@ -245,6 +255,12 @@ def government_lookalike(
 # Brand-domain labels that are ordinary words or infrastructure names. They still catch
 # homoglyphs (``0ffice.com``) but not typo or combo matches, which would flag
 # ``outlook.example.com`` (self-hosted webmail), ``offices.com`` or ``static.com``.
+# Tokens that put a short acronym brand in a delivery/sign-in context (lookalike).
+_ACRONYM_CONTEXT = {
+    "track", "tracking", "parcel", "package", "delivery", "redelivery", "shipping",
+    "shipment", "customs", "login", "signin", "verify", "account", "secure", "pay",
+    "payment", "fee", "update",
+}  # fmt: skip
 _GENERIC_LABELS = {
     "android",
     "apple",
@@ -305,6 +321,13 @@ def lookalike(host: str, brands: list[BrandRef], allowlisted: set[str]) -> dict 
                 and label != kw
             ):
                 return {"host": host, "brand": brand.name, "imitates": kw, "kind": "combo"}
+        # Acronym brands (UPS): a 3-4 letter token only counts next to a delivery or
+        # sign-in context token, so ups-tracking.xyz matches and ups-and-downs.com
+        # does not.
+        for acro in brand.acronyms:
+            low = acro.lower()
+            if len(low) >= 3 and low in tokens and label != low and tokens & _ACRONYM_CONTEXT:
+                return {"host": host, "brand": brand.name, "imitates": low, "kind": "combo"}
         for legit in brand.domains:
             legit_label = legit.removesuffix(".*").split(".")[0]
             if len(legit_label) < 4:

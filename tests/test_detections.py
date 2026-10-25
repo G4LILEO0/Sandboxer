@@ -741,6 +741,47 @@ def test_trezor_seo_page_on_free_hosting():
     assert "brand_on_free_hosting" in _hits(data)
 
 
+def test_ups_login_title_attributes_to_ups():
+    """§3: 'UPS' is an acronym brand: exact case in the title, with login context."""
+    url = "https://parcel-redelivery.example/"
+    page = _page(url, title="UPS Login | Track your parcel", forms=[PASSWORD_FORM])
+    brand = build_facts(_data(url, [page]))["brand"]
+    assert brand["name"] == "UPS"
+    assert brand["credential_prompt"] is True
+
+
+def test_popups_signups_text_not_ups():
+    url = "https://app.example/settings"
+    page = _page(url, title="POP-UPS and SIGN-UPS | Account", forms=[PASSWORD_FORM],
+                 text="Manage your sign-ups and pop-ups. UPS")  # noqa: E501
+    assert build_facts(_data(url, [page]))["brand"]["name"] != "UPS"
+
+
+def test_ups_mention_without_login_context_quiet():
+    url = "https://news.example/markets"
+    page = _page(url, title="UPS reports quarterly earnings", text="Shares rose")
+    assert build_facts(_data(url, [page]))["brand"]["name"] != "UPS"
+
+
+def test_dhl_and_stc_keywords_stay_whole_word():
+    """Recorded disagreement with §3.3: plain keywords are already whole-word, so 'dhl'
+    never matches inside 'dhlpipeline', and moving DHL/STC to case-sensitive acronyms
+    would miss lower-case mentions ('track your dhl parcel')."""
+    from sandbox.analysis.facts import _keyword
+
+    assert not _keyword("dhl").search("dhlpipeline build")
+    assert _keyword("dhl").search("track your dhl parcel")
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [("ups-tracking.xyz", "UPS"), ("ups-and-downs-blog.com", None), ("ups.com", None)],
+)
+def test_acronym_lookalike_needs_a_context_token(host, expected):
+    hit = lookalike(host, BRANDS, set())
+    assert (hit["brand"] if hit else None) == expected
+
+
 @pytest.mark.parametrize(
     ("host", "platform"),
     [
