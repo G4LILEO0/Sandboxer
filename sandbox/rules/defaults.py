@@ -565,6 +565,18 @@ BEHAVIOUR_RULES = [
         },
         ["clipboard.commands", "final.url"],
     ),
+    # --- Apps Script credential host (L2-NEW-5) ---------------------------------------
+    _rule(
+        "apps_script_credential_page",
+        "medium",
+        ["phishing", "trusted-cloud"],
+        ["T1583.006", "T1566.002"],
+        "A Google Apps Script web app (script.google.com/macros/s/.../exec) asks for a "
+        "password, card or code, or posts what was typed: anyone can deploy one, so the "
+        "Google host vouches for nothing.",
+        {"fact": "forms.apps_script_credential", "op": "gt", "value": 0},
+        ["forms.apps_script_credential_pages", "forms.script_posted_targets"],
+    ),
     # --- Salty2FA / Storm-1575 (DE-M365-015) ------------------------------------------
     _rule(
         "salty2fa_kit",
@@ -1228,6 +1240,7 @@ DEFAULT_WEIGHTS = {
     "device_code_handoff": 30,
     "cache_smuggled_payload": 55,
     "salty2fa_kit": 55,
+    "apps_script_credential_page": 25,
     "protocol_handler_lure": 50,
     "protocol_handler_attempt": 30,
     "clipboard_command_tampering": 25,

@@ -730,6 +730,35 @@ def _has_text_box(frame: dict[str, Any]) -> bool:
     )
 
 
+# L2-NEW-5: Apps Script web apps run attacker code under a Google host, so brand
+# ownership and a google.com allowlist would vouch for them. Each /macros/s/<id>/exec
+# deployment (and its script.googleusercontent.com sandbox frame) is judged on its own.
+_APPS_SCRIPT_EXEC = re.compile(r"^(/a/[^/]+)?/macros/s/[^/]+/exec\b")
+
+
+def _apps_script(data: CaptureData) -> dict[str, Any]:
+    pages, cred = set(), set()
+    for frame in _all_frames(data):
+        url = frame.get("url", "")
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if not (
+            (host == "script.google.com" and _APPS_SCRIPT_EXEC.match(parts.path or ""))
+            or host.endswith(("-script.googleusercontent.com", ".script.googleusercontent.com"))
+            or host == "script.googleusercontent.com"
+        ):
+            continue
+        pages.add(url)
+        kinds = _prompt_kinds(frame) & {"password", "payment", "otp", "seed"}
+        if kinds or _frame_script_posted(data, frame):
+            cred.add(url)
+    return {
+        "apps_script_pages": len(pages),
+        "apps_script_credential_pages": sorted(cred)[:10],
+        "apps_script_credential": len(cred),
+    }
+
+
 def _frame_script_posted(data: CaptureData, frame: dict[str, Any]) -> bool:
     return any(
         str(q.get("method", "")).upper() == "POST"
@@ -2217,7 +2246,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
     internal = [b for b in blocked if "scheme" not in b.get("reason", "")]
     hidden = sorted({src for f in _all_frames(data) for src in _suspicious_hidden(f, data)})
     reqs = _har_requests(data)
-    forms = {**_forms(data), **_script_posted_credentials(data, reqs)}
+    forms = {**_forms(data), **_script_posted_credentials(data, reqs), **_apps_script(data)}
     jsapi = _jsapi_facts(data)
     challenge_gate = _challenge_gate(data, reqs)
     nav_cause = _navigation_cause(data)
