@@ -624,7 +624,7 @@ def _lure(data: CaptureData) -> dict[str, Any]:
         }
     )
     phones = set()
-    notify_bait = paste_back = False
+    notify_bait = paste_back = paste_back_input = False
     for f in frames:
         text = f"{f.get('title', '')} {f.get('text', '')}"
         if _SUPPORT_SCARE.search(text):
@@ -633,6 +633,16 @@ def _lure(data: CaptureData) -> dict[str, Any]:
             notify_bait = True
         if _PASTE_BACK.search(text):
             paste_back = True
+            # ConsentFix gives the victim a box to paste into (L2-02); a tutorial that
+            # only describes the step has none. Judged in the same, non-Microsoft frame.
+            host = _host(f.get("url"))
+            if (
+                host
+                and not _ms_owned(host, data.brands)
+                and site(host) not in data.allowlisted
+                and (_has_text_box(f) or _frame_script_posted(data, f))
+            ):
+                paste_back_input = True
     return {
         "run_dialog_instructions": len(pages),
         "run_dialog_pages": pages[:10],
@@ -642,7 +652,31 @@ def _lure(data: CaptureData) -> dict[str, Any]:
         "tech_support_phones": sorted(phones)[:10],
         "allow_notifications_bait": notify_bait,
         "paste_back_instruction": paste_back,
+        "paste_back_with_input": paste_back_input,
     }
+
+
+_TEXT_INPUT_TYPES = ("text", "url", "search", "")
+
+
+def _has_text_box(frame: dict[str, Any]) -> bool:
+    if frame.get("loose_text_inputs", 0):
+        return True
+    return any(
+        fld.get("tag") == "textarea"
+        or (fld.get("tag", "input") == "input" and fld.get("type", "") in _TEXT_INPUT_TYPES)
+        for form in frame.get("forms", [])
+        for fld in form.get("fields", [])
+    )
+
+
+def _frame_script_posted(data: CaptureData, frame: dict[str, Any]) -> bool:
+    return any(
+        str(q.get("method", "")).upper() == "POST"
+        and str(q.get("type") or "").lower() in _SCRIPT_POST_TYPES
+        and _same_url(q.get("frame_url"), frame.get("url"))
+        for q in data.requests
+    )
 
 
 def _magic_type(head: bytes) -> str | None:
@@ -981,8 +1015,14 @@ FIRST_PARTY_MS_APP_IDS = {
     "d3590ed6-52b3-4102-aeff-aad2292ab01c",  # Microsoft Office
     "1950a258-227b-4e31-a9cf-717495945fc2",  # Azure PowerShell
     "04b07795-8ddb-461a-bbee-02f9e1bf7b46",  # Azure CLI
-    "00000003-0000-0000-c000-000000000000",  # Microsoft Graph
+    "14d82eec-204b-4c2f-b7e8-296a70dab67e",  # Microsoft Graph Command Line Tools
+    "de8bc8b5-d9f9-48b1-a8ad-b748da725064",  # Graph Explorer
+    # Microsoft Graph's *resource* app id: never a client_id, kept only so a request
+    # naming it is not mistaken for a third-party app.
+    "00000003-0000-0000-c000-000000000000",
 }
+# Tenant-side check for analysts: a first-party app's service principal is owned by
+# Microsoft's tenant f8cdef31-a31e-4b4a-93e4-5f571e91255a.
 _HIGH_RISK_SCOPES = {
     "mail.readwrite", "mail.read", "mail.send", "files.readwrite.all", "files.read.all",
     "sites.readwrite.all", "chat.read", "user.readwrite.all", "directory.readwrite.all",
@@ -1229,6 +1269,55 @@ _AUTHORIZE_IN_TEXT = re.compile(
 )
 
 
+def _url_sources(
+    data: CaptureData, reqs: list[dict[str, Any]], text_pattern: re.Pattern[str]
+) -> list[tuple[str, str | None]]:
+    """Every URL the capture saw, paired with the host of the page that produced it
+    (L2-02). Never the submitted URL: an MSOC queue is full of Safe Links / Google
+    redirect wrappers, which are Microsoft-owned or allowlisted and would hide the lure.
+
+    - redirect hops: the hop's ``from`` page; navigations: the previous navigation
+    - HAR requests: the Referer; A3 requests: the initiating frame
+    - links: their frame; raw DOM: its page
+    - scripts (``text_pattern`` matches): the frame the script was collected from,
+      falling back to the final page
+    """
+    r = data.result
+    final_host = _host(r.get("final_url") or r.get("url"))
+    out: list[tuple[str, str | None]] = []
+    for hop in r.get("redirects", []):
+        if hop.get("to"):
+            out.append((str(hop["to"]), _host(hop.get("from"))))
+    navs = [str(n["url"]) for n in r.get("navigations", []) if n.get("url")]
+    out += [(cur, _host(prev)) for prev, cur in zip(navs, navs[1:], strict=False)]
+    out += [(q["url"], _host(q["headers"].get("referer"))) for q in reqs]
+    for q in data.requests:
+        out.append((str(q.get("url", "")), _host(q.get("frame_url") or q.get("document_url"))))
+    script_host: dict[str, str | None] = {}
+    src_host: dict[str, str | None] = {}
+    for frame in _all_frames(data):
+        fhost = _host(frame.get("url"))
+        out += [(str(link), fhost) for link in frame.get("links", [])]
+        for s in frame.get("scripts", []):
+            if not isinstance(s, dict):
+                continue
+            if s.get("sha256"):
+                script_host.setdefault(s["sha256"], fhost)
+            if s.get("src"):
+                src_host.setdefault(s["src"], fhost)
+    for rec in r.get("scripts", []):
+        for u in rec.get("urls", []):
+            if u in src_host and rec.get("sha256"):
+                script_host.setdefault(rec["sha256"], src_host[u])
+    for page in data.dom_html:
+        phost = _host(page.get("url"))
+        out += [(m.group(0), phost) for m in text_pattern.finditer(page.get("html", ""))]
+    for key, text in data.scripts.items():
+        host = script_host.get(key.removeprefix("dynamic-")) or final_host
+        out += [(m.group(0), host) for m in text_pattern.finditer(text)]
+    return out
+
+
 def _firstparty_loopback_authorize(
     data: CaptureData, reqs: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -1238,8 +1327,8 @@ def _firstparty_loopback_authorize(
     pastes the localhost URL, which carries the authorization code, back to the attacker.
 
     The sandbox does not click "Sign in", so the URL is looked for in the chain and
-    requests and also in page links, raw DOM and collected scripts. The origin is
-    judged per source: the submitted host for chain URLs, the frame host for links/DOM.
+    requests and also in page links, raw DOM and collected scripts, each judged by the
+    page that produced it (``_url_sources``).
     Developer tooling that legitimately uses a loopback redirect does so from the CLI or
     from Microsoft's own pages, not from a third-party web page."""
     import html as _html
@@ -1249,20 +1338,8 @@ def _firstparty_loopback_authorize(
             return False
         return not _ms_owned(host, data.brands) and site(host) not in data.allowlisted
 
-    candidates: list[tuple[str, str | None]] = []
-    origin = _host(data.result.get("url"))
-    candidates += [(u, origin) for u in _chain_urls(data) + [r["url"] for r in reqs]]
-    for frame in _all_frames(data):
-        fhost = _host(frame.get("url"))
-        candidates += [(str(link), fhost) for link in frame.get("links", [])]
-    for page in data.dom_html:
-        phost = _host(page.get("url"))
-        html_text = page.get("html", "")
-        candidates += [(m.group(0), phost) for m in _AUTHORIZE_IN_TEXT.finditer(html_text)]
-    for text in data.scripts.values():
-        candidates += [(m.group(0), origin) for m in _AUTHORIZE_IN_TEXT.finditer(text)]
     found: dict[str, dict[str, Any]] = {}
-    for raw, src_host in candidates:
+    for raw, src_host in _url_sources(data, reqs, _AUTHORIZE_IN_TEXT):
         if not foreign(src_host):
             continue
         url = _html.unescape(raw.replace("\\/", "/").replace("\\u0026", "&"))
