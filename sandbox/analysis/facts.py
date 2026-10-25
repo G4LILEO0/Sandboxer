@@ -1288,6 +1288,30 @@ def _exfil(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
 _NUMERIC_PHP = re.compile(r"/\d{5,6}\.php$")
 
 
+# L2-NEW-4 browser-in-the-browser: a sign-in URL drawn as element text (a fake address
+# bar), not as a link href, on a page that also has a live password input.
+_FAKE_ADDRESS_BAR = re.compile(
+    r"(?i)>\s*(?:\U0001F512\s*)?(https://(?:login\.microsoftonline\.com|login\.live\.com"
+    r"|login\.microsoft\.com|accounts\.google\.com|appleid\.apple\.com)/[^<\s]{0,300})\s*<"
+)
+_PASSWORD_INPUT = re.compile(r"(?i)<input\b[^>]*\btype\s*=\s*['\"]?password")
+
+
+def _fake_address_bar(data: CaptureData) -> list[dict[str, str]]:
+    live_password = any("password" in _prompt_kinds(f) for f in _all_frames(data))
+    out = []
+    for page in data.dom_html:
+        url = page.get("url", "")
+        host = _host(url)
+        if not host or site(host) in data.allowlisted or brand_owner(host, data.brands):
+            continue
+        html = page.get("html", "")
+        m = _FAKE_ADDRESS_BAR.search(html)
+        if m and (live_password or _PASSWORD_INPUT.search(html)):
+            out.append({"page": url, "shown_url": m.group(1)[:200]})
+    return out[:10]
+
+
 def _ms_markers(html: str) -> list[str]:
     return [name for name, pat in _MS_MARKERS if pat.search(html)]
 
@@ -1372,7 +1396,10 @@ def _idp(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
             and not brand_owner(r["host"], data.brands)
         }
     )
+    fake_bar = _fake_address_bar(data)
     return {
+        "fake_address_bar": len(fake_bar),
+        "fake_address_bar_details": fake_bar,
         "numeric_php_posts": len(numeric_php),
         "numeric_php_hosts": numeric_php[:10],
         "ms_clone_pages": len(clone_pages),
