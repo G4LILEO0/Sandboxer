@@ -90,13 +90,24 @@ def _record(ioc_type: str, raw: str, tags=(), confidence=None) -> Record | None:
     return Record(ioc_type, value, clean_tags, confidence)
 
 
+# Largest file taken out of a feed archive; zip entries are refused by their declared
+# size (which zipfile enforces while reading), tar members by theirs.
+MAX_ARCHIVE_MEMBER = 512 * 1024 * 1024
+
+
+def _zip_read(zf: zipfile.ZipFile, name: str) -> bytes:
+    if zf.getinfo(name).file_size > MAX_ARCHIVE_MEMBER:
+        raise FeedError(f"{name} in the archive is larger than {MAX_ARCHIVE_MEMBER} bytes")
+    return zf.read(name)
+
+
 def _text(data: bytes) -> str:
     if data[:2] == b"PK":
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             names = [n for n in zf.namelist() if not n.endswith("/")]
             if not names:
                 raise FeedError("Empty zip archive")
-            data = zf.read(names[0])
+            data = _zip_read(zf, names[0])
     return data.decode("utf-8", "replace")
 
 
@@ -258,11 +269,13 @@ def rule_archive(data: bytes, suffixes: tuple[str, ...]) -> list[RuleFile]:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             for name in zf.namelist():
                 if name.lower().endswith(suffixes):
-                    files.append(RuleFile(name, zf.read(name).decode("utf-8", "replace")))
+                    files.append(RuleFile(name, _zip_read(zf, name).decode("utf-8", "replace")))
     elif data[:2] == b"\x1f\x8b" or data[257:262] == b"ustar":
         with tarfile.open(fileobj=io.BytesIO(data)) as tar:
             for member in tar.getmembers():
                 if member.isfile() and member.name.lower().endswith(suffixes):
+                    if member.size > MAX_ARCHIVE_MEMBER:
+                        raise FeedError(f"{member.name} in the archive is too large")
                     fh = tar.extractfile(member)
                     if fh:
                         files.append(RuleFile(member.name, fh.read().decode("utf-8", "replace")))

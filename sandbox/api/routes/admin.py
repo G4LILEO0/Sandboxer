@@ -127,7 +127,8 @@ class ClientUpdate(BaseModel):
     rate_limit_per_min: int | None = Field(None, ge=1, le=10_000)
     daily_quota: int | None = Field(None, ge=0, le=100_000)
     enabled: bool | None = None
-    webhook_url: str | None = Field(None, max_length=2000)
+    # Empty clears the webhook; anything else must be http(s), as on create.
+    webhook_url: str | None = Field(None, max_length=2000, pattern=r"^(https?://.*)?$")
     rotate_token: bool = False
 
 
