@@ -420,6 +420,35 @@ BEHAVIOUR_RULES = [
         {"fact": "idp.firstparty_loopback_authorize", "op": "gt", "value": 0},
         ["idp.firstparty_loopback_details", "final.url"],
     ),
+    # --- OAuth device-code phishing (DE-M365-004) -----------------------------------
+    _rule(
+        "device_code_phishing_lure",
+        "high",
+        ["consent-phishing", "phishing"],
+        ["T1566.002", "T1528"],
+        "A non-Microsoft page sends the visitor to Microsoft's real device-code sign-in "
+        "(microsoft.com/devicelogin, aka.ms/devicelogin, oauth2/deviceauth) and shows a "
+        "code to enter, or a shared-document pretext with an email-only form: the victim "
+        "authorises the attacker's device on Microsoft itself, so no clone is present.",
+        {
+            "all": [
+                {"fact": "idp.device_code_handoff", "op": "gt", "value": 0},
+                {"fact": "idp.device_code_lure", "op": "eq", "value": True},
+            ]
+        },
+        ["idp.device_code_sources", "final.url"],
+    ),
+    _rule(
+        "device_code_handoff",
+        "medium",
+        ["consent-phishing"],
+        ["T1528"],
+        "A non-Microsoft, non-allowlisted page links to, opens or navigates to Microsoft's "
+        "device-code sign-in. On its own this can be an IT help page; with a displayed "
+        "code it is device_code_phishing_lure.",
+        {"fact": "idp.device_code_handoff", "op": "gt", "value": 0},
+        ["idp.device_code_sources", "final.url"],
+    ),
     _rule(
         "ms_session_cookie_foreign_host",
         "critical",
@@ -1089,6 +1118,8 @@ DEFAULT_WEIGHTS = {
     "illicit_consent_grant": 50,
     "consentfix_authcode_paste_back": 75,
     "firstparty_app_loopback_authorize": 30,
+    "device_code_phishing_lure": 55,
+    "device_code_handoff": 30,
     "ms_session_cookie_foreign_host": 80,
     "web3_rpc_from_non_wallet_page": 55,
     "etherhiding_payload_executed": 80,

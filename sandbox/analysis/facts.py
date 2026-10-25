@@ -1251,6 +1251,7 @@ def _idp(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
             if info["high_risk"]:
                 authorize.append(info)
     consentfix = _firstparty_loopback_authorize(data, reqs)
+    device_code, device_code_lure = _device_code_handoff(data, reqs)
     # Microsoft session cookies set by a non-Microsoft host.
     foreign_cookies = []
     for r in reqs:
@@ -1274,6 +1275,9 @@ def _idp(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
         "high_risk_consent": len(authorize),
         "firstparty_loopback_authorize": len(consentfix),
         "firstparty_loopback_details": consentfix[:10],
+        "device_code_handoff": len(device_code),
+        "device_code_sources": device_code[:10],
+        "device_code_lure": device_code_lure,
         "cookies_on_foreign_host": len(foreign_cookies),
         "idp_cookies": foreign_cookies[:10],
     }
@@ -1335,6 +1339,69 @@ def _url_sources(
         host = script_host.get(key.removeprefix("dynamic-")) or final_host
         out += [(m.group(0), host) for m in text_pattern.finditer(text)]
     return out
+
+
+# Microsoft device-code sign-in entry points (DE-M365-004).
+_DEVICE_LOGIN = re.compile(
+    r"https?:(?://|\\/\\/)(?:www\.)?(?:microsoft\.com|aka\.ms)(?:/|\\/)devicelogin\b"
+    r"|https?:(?://|\\/\\/)login\.microsoft(?:online)?\.com(?:/|\\/)[^\s\"'<>]{0,80}?"
+    r"oauth2(?:/|\\/)deviceauth\b",
+    re.I,
+)
+_CODE_WORDING = re.compile(
+    r"(?i)\b(enter|use|type|input|copy)\s+(this|the|your|following)?\s*(one-?time\s+)?code\b"
+    r"|\b(device|authentication|sign-?in|verification)\s+code\b",
+)
+# A displayed device code (case-sensitive): 8-9 upper-case letters/digits, optional
+# dash, with at least one digit and one letter.
+_DEVICE_CODE_TOKEN = re.compile(
+    r"\b(?=[A-Z0-9-]*\d)(?=[A-Z0-9-]*[A-Z])[A-Z0-9]{4}-?[A-Z0-9]{4,5}\b"
+)
+_SHARE_PRETEXT = re.compile(
+    r"(?i)\bshared\s+(a\s+|the\s+)?(document|file|folder)\b|\bonedrive\b|\bsharepoint\b"
+    r"|\bview\s+(the\s+)?(document|file)\b|\bsecure\s+(document|message)\b|\be-?fax\b"
+    r"|\bvoice\s?mail\b",
+)
+
+
+def _device_code_handoff(
+    data: CaptureData, reqs: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], bool]:
+    """DE-M365-004: a non-Microsoft, non-allowlisted page that sends the visitor to
+    Microsoft's real device-code sign-in. The victim authenticates on Microsoft itself,
+    so no clone exists for the brand/clone rules to see.
+
+    Returns the hand-offs and whether an originating frame also carries a lure: a
+    displayed code token near code wording, or a document-share pretext with an
+    email-only form. Code wording alone is not a lure (IT help pages describe the step)."""
+
+    def foreign(host: str | None) -> bool:
+        if not host:
+            return False
+        return not _ms_owned(host, data.brands) and site(host) not in data.allowlisted
+
+    hits: dict[tuple[str, str], dict[str, Any]] = {}
+    for raw, src in _url_sources(data, reqs, _DEVICE_LOGIN):
+        url = raw.replace("\\/", "/")
+        if foreign(src) and _DEVICE_LOGIN.match(url):
+            hits.setdefault((src or "", url[:200]), {"source_host": src, "url": url[:200]})
+    sources = {h["source_host"] for h in hits.values()}
+    lure = False
+    for f in _all_frames(data):
+        if _host(f.get("url")) not in sources:
+            continue
+        text = f"{f.get('title', '')} {f.get('text', '')}"
+        for m in _CODE_WORDING.finditer(text):
+            if _DEVICE_CODE_TOKEN.search(text[max(0, m.start() - 80) : m.end() + 80]):
+                lure = True
+        email_only = any(
+            any(fld.get("type") == "email" for fld in form.get("fields", []))
+            and not any(fld.get("type") == "password" for fld in form.get("fields", []))
+            for form in f.get("forms", [])
+        )
+        if email_only and _SHARE_PRETEXT.search(text):
+            lure = True
+    return list(hits.values()), lure
 
 
 def _firstparty_loopback_authorize(
