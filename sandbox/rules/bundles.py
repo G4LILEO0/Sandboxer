@@ -26,7 +26,7 @@ from sandbox.db.audit import record_audit
 from sandbox.db.models import Rule, RuleBundle, RuleOverride
 from sandbox.ids import new_id
 from sandbox.rules.behaviour import RuleSyntaxError, parse_rule
-from sandbox.rules.importer import YARA_EXTERNALS
+from sandbox.rules.importer import YARA_COMPILE_OPTIONS
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ def compile_yara(rules: list[Rule]):
     import yara
 
     # One namespace per rule, so identical rule names from different sets do not clash.
-    return yara.compile(sources={r.id: r.body for r in rules}, externals=YARA_EXTERNALS)
+    return yara.compile(sources={r.id: r.body for r in rules}, **YARA_COMPILE_OPTIONS)
 
 
 def behaviour_definitions(rules: list[Rule]) -> list[dict[str, Any]]:

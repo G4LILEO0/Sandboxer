@@ -18,6 +18,9 @@ from sandbox.ids import new_id
 
 # External variables common community YARA sets reference; defined empty so they compile.
 YARA_EXTERNALS = {"filename": "", "filepath": "", "extension": "", "filetype": "", "owner": ""}
+# Every compile of rule text passes this: an ``include "/path"`` directive would make the
+# compiler open files on the API or worker host (file probing, /dev/zero hangs).
+YARA_COMPILE_OPTIONS = {"externals": YARA_EXTERNALS, "includes": False}
 
 _SID = re.compile(r"\bsid\s*:\s*(\d+)\s*;")
 _MSG = re.compile(r'\bmsg\s*:\s*"((?:[^"\\]|\\.)*)"')
@@ -60,7 +63,7 @@ def validate_yara(body: str) -> str | None:
     except ImportError:  # pragma: no cover - yara-python is a declared dependency
         return "yara-python is not installed"
     try:
-        yara.compile(source=body, externals=YARA_EXTERNALS)
+        yara.compile(source=body, **YARA_COMPILE_OPTIONS)
     except yara.SyntaxError as exc:
         return str(exc)[:1000]
     except yara.Error as exc:

@@ -13,7 +13,7 @@ from sandbox.analysis.engine import Evaluation, evaluate
 from sandbox.analysis.facts import CaptureData
 from sandbox.rules import defaults
 from sandbox.rules.behaviour import parse_rule
-from sandbox.rules.importer import YARA_EXTERNALS, yara_metadata
+from sandbox.rules.importer import YARA_COMPILE_OPTIONS, yara_metadata
 
 
 def load_capture(out: Path, *, allowlisted: set[str] | None = None) -> CaptureData:
@@ -73,7 +73,7 @@ def builtin_behaviour() -> list[dict]:
 def builtin_yara_hits(out: Path) -> list[dict]:
     import yara
 
-    compiled = yara.compile(sources=defaults.BUILTIN_YARA, externals=YARA_EXTERNALS)
+    compiled = yara.compile(sources=defaults.BUILTIN_YARA, **YARA_COMPILE_OPTIONS)
     meta = {name: yara_metadata(body) for name, body in defaults.BUILTIN_YARA.items()}
     hits = []
     for path in [*out.glob("dom/*.html"), *out.glob("scripts/*.js"), *out.glob("quarantine/*")]:

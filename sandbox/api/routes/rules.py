@@ -9,6 +9,7 @@ from sqlalchemy import any_, func, literal, or_, select, update
 
 from sandbox.analysis.engine import load_weights
 from sandbox.analysis.scoring import SEVERITY_FALLBACK
+from sandbox.api.access import visible_clause
 from sandbox.api.auth import Engineer, Principal, require_scope
 from sandbox.api.deps import Db, Store
 from sandbox.db.audit import record_audit
@@ -343,6 +344,8 @@ async def test_rule(body: RuleTest, principal: Engineer, db: Db, store: Store) -
                 (AnalysisVersion.analysis_id == Analysis.id)
                 & (AnalysisVersion.version == Analysis.version),
             )
+            # Restricted analyses (ADM-7) stay out unless the engineer may see them.
+            .where(visible_clause(principal))
             .order_by(Analysis.created_at.desc())
             .limit(body.limit)
         )
@@ -351,9 +354,9 @@ async def test_rule(body: RuleTest, principal: Engineer, db: Db, store: Store) -
     if body.engine == "yara":
         import yara
 
-        from sandbox.rules.importer import YARA_EXTERNALS
+        from sandbox.rules.importer import YARA_COMPILE_OPTIONS
 
-        compiled = yara.compile(source=body.body, externals=YARA_EXTERNALS)
+        compiled = yara.compile(source=body.body, **YARA_COMPILE_OPTIONS)
     parsed = parse_rule(body.body) if body.engine == "behaviour" else None
     results = []
     for analysis, version in rows:
