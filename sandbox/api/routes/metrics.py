@@ -1,5 +1,5 @@
 """Prometheus metrics (ADM-5, FED-6). Read from Postgres, so every API instance reports
-the same numbers. Protect with ``SANDBOX_METRICS_TOKEN`` (bearer) when exposed."""
+the same numbers. Protected with ``SANDBOX_METRICS_TOKEN`` (bearer); required in prod."""
 
 import hmac
 from datetime import UTC, datetime
@@ -32,6 +32,9 @@ class _Out:
 
 @router.get("/metrics", include_in_schema=False)
 async def metrics(request: Request, db: Db, settings: AppSettings) -> PlainTextResponse:
+    if settings.metrics_token is None and settings.env == "prod":
+        # Feed names, queue depth and rule bundles are internal; prod needs the token.
+        raise HTTPException(401, "Set SANDBOX_METRICS_TOKEN to expose metrics in prod")
     if settings.metrics_token:
         supplied = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
         if not hmac.compare_digest(supplied, settings.metrics_token.get_secret_value()):

@@ -111,6 +111,11 @@ class Settings(BaseSettings):
     # Register service workers and record their script URLs / push endpoints (DE-SCM-003).
     # Default off: service workers stay blocked (safer); turn on to observe push-abuse flows.
     allow_service_workers: bool = False
+    # Directory with the noVNC client (e.g. /usr/share/novnc from the Debian "novnc"
+    # package). When set, the API serves the live-view page from here and proxies only
+    # the websocket, so no file from a session container is served on the API origin.
+    # Unset: noVNC's files are proxied from the session container (type-checked).
+    novnc_dir: str | None = None
     # Grace after the time limit before the reaper force-removes a container (ORC-5).
     reaper_grace_s: int = 60
     worker_id: str | None = None
@@ -140,6 +145,7 @@ class Settings(BaseSettings):
         "vt_api_key",
         "abuseipdb_api_key",
         "suricata_image",
+        "novnc_dir",
         "metrics_token",
         "oidc_client_secret",
         mode="before",

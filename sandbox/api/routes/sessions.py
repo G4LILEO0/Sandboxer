@@ -5,15 +5,17 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import mimetypes
 import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 import websockets
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -31,6 +33,25 @@ from sandbox.runtime_config import get_all
 router = APIRouter(prefix="/v1", tags=["sessions"])
 log = logging.getLogger(__name__)
 _SAFE_PATH = re.compile(r"^[A-Za-z0-9_\-./]{0,200}$")
+# The live-view page runs on the API's origin, so whatever it loads can act with the
+# analyst's session. Lock it to its own files and the websocket, and accept only the
+# file types noVNC ships; HTML only for its two pages (the session container runs the
+# hostile site, so its responses are not trusted to be noVNC).
+_STREAM_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; media-src 'self'; font-src 'self'; connect-src 'self'; "
+    "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+)
+_STREAM_PAGES = {"vnc.html", "vnc_lite.html"}
+_STREAM_TYPES = (
+    "text/javascript",
+    "application/javascript",
+    "text/css",
+    "image/",
+    "application/json",
+    "audio/",
+    "font/",
+)
 
 
 def _error(code: int, error: str, detail: str) -> HTTPException:
@@ -386,17 +407,47 @@ async def stream_asset(token: str, path: str, request: Request, settings: AppSet
     if not _SAFE_PATH.match(path) or ".." in path:
         raise HTTPException(400, "Bad path")
     target, _ = await _stream_target(request.app, settings, token)
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": _STREAM_CSP,
+    }
+    if settings.novnc_dir:
+        # Preferred: the API's own copy of noVNC, so nothing from the session container
+        # is ever served on this origin; only the websocket is proxied.
+        return _local_novnc(Path(settings.novnc_dir), path, headers)
     try:
         upstream = await request.app.state.http.get(f"http://{target}/{path}", timeout=10)
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"Live view unreachable: {exc}") from exc
-    headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+    media = upstream.headers.get("content-type", "application/octet-stream")
+    if upstream.status_code == 200 and not _allowed_stream_type(path, media):
+        log.warning("live view asset refused", extra={"path": path, "content_type": media})
+        raise HTTPException(502, "Unexpected live view content")
     return Response(
         upstream.content,
         status_code=upstream.status_code,
         headers=headers,
-        media_type=upstream.headers.get("content-type", "application/octet-stream"),
+        media_type=media,
     )
+
+
+def _allowed_stream_type(path: str, media: str) -> bool:
+    media = media.split(";", 1)[0].strip().lower()
+    if media == "text/html":
+        return path in _STREAM_PAGES
+    return media.startswith(_STREAM_TYPES)
+
+
+def _local_novnc(root: Path, path: str, headers: dict[str, str]) -> Response:
+    base = root.resolve()
+    file = (base / path).resolve()
+    if not file.is_relative_to(base) or not file.is_file():
+        raise HTTPException(404, "Not found")
+    media = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+    if not _allowed_stream_type(path, media):
+        raise HTTPException(404, "Not found")
+    return FileResponse(file, media_type=media, headers=headers)
 
 
 @router.websocket("/stream/{token}/websockify")

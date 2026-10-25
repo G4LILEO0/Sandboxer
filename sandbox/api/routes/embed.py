@@ -136,7 +136,11 @@ async def embed_screenshot(token: str, db: Db, settings: AppSettings, store: Sto
     return FileResponse(
         store.path(shot.object_key),
         media_type="image/png",
-        headers={"Cache-Control": "private, max-age=60", "X-Content-Type-Options": "nosniff"},
+        headers={
+            "Cache-Control": "private, max-age=60",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "sandbox; default-src 'none'",
+        },
     )
 
 

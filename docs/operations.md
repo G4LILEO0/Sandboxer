@@ -7,10 +7,12 @@ For whoever deploys and runs the sandbox. Read the "Before production" list firs
 1. **Network egress isolation.** See [Egress isolation](#egress-isolation) below. Keep the `egress-guard` service running and `SANDBOX_EGRESS_GUARD=enforce`. On a Docker host you don't control (some managed or rootless setups), apply the same rules in the host or cloud firewall instead; the worker's probe tells you whether they work.
 2. **Session network.** The API joins `sandbox_sessions` to proxy the live view. The egress guard lets only the API's fixed address (`SANDBOX_SESSION_API_IP`) open connections to sessions, only on the live-view port. Sessions cannot open connections to the API. In production you can still move the live-view proxy to a dedicated, minimal service.
 3. **Worker privileges.** The worker uses the Docker socket, which is equivalent to root on the host. Run it on a dedicated host or VM, never expose it, and keep it off the session network. Use `SANDBOX_SESSION_RUNTIME=runsc` (gVisor) where available.
-4. **Secrets.** Set `SANDBOX_SECRET_KEY` to a long random value, the same on every API instance. Production refuses to start with the default or with dev auth.
+4. **Secrets.** Set `SANDBOX_SECRET_KEY` to a long random value (32+ characters), the same on every API instance. Production refuses to start with the default, a short key or dev auth, and OIDC mode refuses the default key in every environment because it signs session cookies.
 5. **Single sign-on.** Set `SANDBOX_AUTH_MODE=oidc`, `SANDBOX_OIDC_ISSUER`, `SANDBOX_OIDC_CLIENT_ID`, `SANDBOX_OIDC_CLIENT_SECRET`, `SANDBOX_OIDC_REDIRECT_URL` (`https://<host>/auth/callback`) and map IdP groups to roles with `SANDBOX_OIDC_ROLE_MAP` (JSON, for example `{"sg-soc": "analyst", "sg-soc-leads": "senior_analyst"}`). This has been tested against the token format, not yet against your provider.
 6. **Feeds and terms.** Check each feed's licence and key requirements (Admin → Feeds). abuse.ch services may need a free Auth-Key; PhishTank is disabled by default.
 7. **Legal and safety sign-off** before detonating third-party sites (NFR-10).
+8. **Live-view page.** Set `SANDBOX_NOVNC_DIR` to a local copy of noVNC (for example install the Debian `novnc` package in the API image and point it at `/usr/share/novnc`). The API then serves the live-view page itself and proxies only the websocket, so nothing a compromised session container sends is served on the API's origin. Without it, noVNC's files are proxied from the session container with a type allowlist and a strict CSP. See finding SR-09 in [security-review.md](security-review.md).
+9. **Metrics.** Set `SANDBOX_METRICS_TOKEN`; in production `/metrics` refuses requests without it.
 
 ## Egress isolation
 
@@ -49,7 +51,7 @@ Artifacts are on a filesystem volume (`SANDBOX_ARTIFACT_ROOT`); downloaded files
 
 ## Monitoring
 
-`/metrics` (Prometheus): queue depth, running sessions, failures, verdict counts, job states, feed staleness per feed, active bundle. Set `SANDBOX_METRICS_TOKEN` to require a bearer token. `/healthz` is liveness; `/healthz/ready` fails when Postgres (and so the queue) is unreachable.
+`/metrics` (Prometheus): queue depth, running sessions, failures, verdict counts, job states, feed staleness per feed, active bundle. Set `SANDBOX_METRICS_TOKEN` to require a bearer token (required in production). `/healthz` is liveness; `/healthz/ready` fails when Postgres (and so the queue) is unreachable.
 
 ## Day-to-day
 
