@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from sandbox.analysis.domains import (
     BrandRef,
@@ -1987,6 +1987,81 @@ def _jsapi_facts(data: CaptureData) -> dict[str, Any]:
     }
 
 
+# L2-NEW-6: a page that opens Windows search (search-ms:) or a WebDAV share on a remote
+# host, so Explorer shows the attacker's files as if they were local. The route layer
+# blocks non-http(s) schemes, so the attempt lands in `blocked`; links, meta refresh and
+# the HTML are read too. Plain "search:" needs a query/location to tell it from a label.
+_PROTO_INLINE = re.compile(r"(?i)\b(?:search-ms|ms-search):[^\s\"'<>]{1,1000}")
+_WEBDAV_UNC = re.compile(
+    r"(?i)\\\\([a-z0-9.-]+)@ssl\\davwwwroot|//([a-z0-9.-]+)@ssl/davwwwroot"
+)
+_PROTO_LOCATION = re.compile(r"(?i)location:\s*(?:\\\\|//|https?://)?([a-z0-9.-]+\.[a-z]{2,})")
+_DOC_PRETEXT = re.compile(
+    r"(?i)\b(invoice|remittance|purchase\s+order|payment\s+advice|statement|receipt|"
+    r"contract|scanned\s+document|your\s+(document|file)s?)\b"
+)
+
+
+def _protocol_target(raw: str) -> bool:
+    text = unquote(unquote(raw or "")).strip()
+    scheme = text.split(":", 1)[0].lower() if ":" in text else ""
+    if scheme in ("search-ms", "ms-search"):
+        return True
+    if scheme == "search" and re.search(r"(?i)query=|location:", text):
+        return True
+    return bool(_WEBDAV_UNC.search(text))
+
+
+def _protocol_handler(data: CaptureData) -> dict[str, Any]:
+    final_host = _host(data.result.get("final_url")) or ""
+    targets: list[tuple[str, str]] = []  # (target, page url)
+    if not (final_host and site(final_host) in data.allowlisted):
+        for b in data.result.get("blocked", []):
+            if _protocol_target(str(b.get("url", ""))):
+                targets.append((str(b.get("url")), str(data.result.get("final_url") or "")))
+    pages = [(f.get("url", ""), f) for f in _all_frames(data)]
+    for url, f in pages:
+        host = _host(url)
+        if host and site(host) in data.allowlisted:
+            continue
+        cands = [str(x) for x in f.get("links", [])]
+        cands += [str(m).split("=", 1)[-1] for m in f.get("meta_refresh", []) or []]
+        targets += [(c, url) for c in cands if _protocol_target(c)]
+    for page in data.dom_html:
+        host = _host(page.get("url"))
+        if host and site(host) in data.allowlisted:
+            continue
+        html = page.get("html", "")
+        found = _PROTO_INLINE.findall(html) + [m.group(0) for m in _WEBDAV_UNC.finditer(html)]
+        targets += [(t, page.get("url", "")) for t in found]
+    seen: dict[str, str] = {}
+    for t, url in targets:
+        seen.setdefault(t[:1000], url)
+    hosts: set[str] = set()
+    masquerade = False
+    for t in seen:
+        text = unquote(unquote(t))
+        masquerade = masquerade or "displayname=" in text.lower()
+        for m in _PROTO_LOCATION.finditer(text):
+            hosts.add(m.group(1).lower())
+        for m in _WEBDAV_UNC.finditer(text):
+            hosts.add((m.group(1) or m.group(2)).lower())
+    source_pages = set(seen.values())
+    pretext = any(
+        _DOC_PRETEXT.search(f.get("text", "") + " " + f.get("title", ""))
+        for url, f in pages
+        if url in source_pages
+    )
+    return {
+        "protocol_handler_attempts": len(seen),
+        "protocol_handler_targets": sorted(seen)[:10],
+        "protocol_handler_hosts": sorted(hosts)[:10],
+        "protocol_handler_tunnel": any(free_hosting(h) for h in hosts),
+        "protocol_handler_masquerade": masquerade,
+        "protocol_handler_pretext": pretext,
+    }
+
+
 def _navigation_cause(data: CaptureData) -> dict[str, Any]:
     """DE-EVA-005: a scripted (no-gesture) top-level bounce to a decoy, on a young or
     free-hosted or obfuscated submitted site."""
@@ -2234,7 +2309,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "request_log": _requests_summary(data),
             "trusted_redirectors": _trusted_redirectors(data),
         },
-        "navigation": nav_cause,
+        "navigation": {**nav_cause, **_protocol_handler(data)},
         "cookies": {
             "end_of_session": [c.get("name") for c in data.result.get("cookies", [])][:50],
         },

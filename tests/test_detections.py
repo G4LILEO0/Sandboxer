@@ -1855,3 +1855,54 @@ def test_docs_copy_button_and_gestureless_share_link_are_quiet():
     clip = build_facts(data)["clipboard"]
     assert clip["no_gesture_commands"] == 0 and clip["overwritten_command"] == 0
     assert "clipboard_command_tampering" not in _hits(data)
+
+
+# --- protocol-handler lure (L2-NEW-6) ------------------------------------------------
+
+_SEARCH_MS = (
+    "search-ms:query=invoice&crumb=location:%5C%5Cfiles.trycloudflare.com@SSL%5CDavWWWRoot"
+    "&displayname=Downloads"
+)
+
+
+def _proto_page(url, text="", links=(), meta=()):
+    page = _page(url, text=text)
+    page["frames"][0]["links"] = list(links)
+    page["frames"][0]["meta_refresh"] = list(meta)
+    return page
+
+
+def test_search_ms_to_tunnel_with_invoice_pretext_fires():
+    url = "https://billing.example-host.com/"
+    data = _cap(
+        url,
+        [_proto_page(url, "Your invoice is ready", meta=["0;url=" + _SEARCH_MS])],
+        blocked=[{"url": _SEARCH_MS, "reason": "scheme 'search-ms' is not allowed"}],
+    )
+    nav = build_facts(data)["navigation"]
+    assert nav["protocol_handler_attempts"] >= 1
+    assert nav["protocol_handler_hosts"] == ["files.trycloudflare.com"]
+    assert nav["protocol_handler_tunnel"] and nav["protocol_handler_masquerade"]
+    assert {"protocol_handler_lure", "protocol_handler_attempt"} <= _hits(data)
+
+
+def test_bare_search_ms_link_is_only_the_attempt_booster():
+    url = "https://tools.example-host.com/"
+    data = _cap(url, [_proto_page(url, "Tools", links=["search-ms:query=report"])])
+    hits = _hits(data)
+    assert "protocol_handler_attempt" in hits
+    assert "protocol_handler_lure" not in hits
+
+
+def test_search_label_and_allowlisted_help_page_are_quiet():
+    url = "https://shop.example-host.com/"
+    data = _cap(
+        url,
+        [
+            _proto_page(url, "Search: invoices", links=["search:", "https://shop.example-host.com/s"]),
+            _proto_page("https://help.bigblog.com/", "Invoice help", links=[_SEARCH_MS]),
+        ],
+        allowlisted={"bigblog.com"},
+    )
+    assert build_facts(data)["navigation"]["protocol_handler_attempts"] == 0
+    assert not {"protocol_handler_lure", "protocol_handler_attempt"} & _hits(data)

@@ -565,6 +565,43 @@ BEHAVIOUR_RULES = [
         },
         ["clipboard.commands", "final.url"],
     ),
+    # --- protocol-handler lure (L2-NEW-6) --------------------------------------------
+    _rule(
+        "protocol_handler_lure",
+        "high",
+        ["protocol-handler", "webdav", "malware-download"],
+        ["T1204.001", "T1221"],
+        "The page opens Windows search (search-ms:) or a WebDAV share with a document "
+        "pretext, a renamed results view (displayname) or a tunnel host: Explorer shows "
+        "the attacker's remote files as if they were the visitor's own.",
+        {
+            "all": [
+                {"fact": "navigation.protocol_handler_attempts", "op": "gt", "value": 0},
+                {
+                    "any": [
+                        {"fact": "navigation.protocol_handler_pretext", "op": "eq", "value": True},
+                        {
+                            "fact": "navigation.protocol_handler_masquerade",
+                            "op": "eq",
+                            "value": True,
+                        },
+                        {"fact": "navigation.protocol_handler_tunnel", "op": "eq", "value": True},
+                    ]
+                },
+            ]
+        },
+        ["navigation.protocol_handler_targets", "navigation.protocol_handler_hosts"],
+    ),
+    _rule(
+        "protocol_handler_attempt",
+        "medium",
+        ["protocol-handler"],
+        ["T1204.001"],
+        "A non-allowlisted page tries to open Windows search (search-ms:) or a WebDAV "
+        "share; ordinary web pages do not invoke Explorer.",
+        {"fact": "navigation.protocol_handler_attempts", "op": "gt", "value": 0},
+        ["navigation.protocol_handler_targets", "final.url"],
+    ),
     # --- cache smuggling (L2-NEW-1) ---------------------------------------------------
     _rule(
         "cache_smuggled_payload",
@@ -1171,6 +1208,8 @@ DEFAULT_WEIGHTS = {
     "device_code_phishing_lure": 55,
     "device_code_handoff": 30,
     "cache_smuggled_payload": 55,
+    "protocol_handler_lure": 50,
+    "protocol_handler_attempt": 30,
     "clipboard_command_tampering": 25,
     "mislabeled_image_payload": 30,
     "ms_session_cookie_foreign_host": 80,
