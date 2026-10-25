@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from sqlalchemy import and_, delete, exists, func, or_, select
 
 from sandbox.api.access import get_visible, visible_clause
-from sandbox.api.auth import Principal, Reader, SeniorAnalyst, Submitter, UserOnly
+from sandbox.api.auth import Principal, Reader, Role, SeniorAnalyst, Submitter, UserOnly
 from sandbox.api.deps import AppSettings, Db, DnsResolver, Guard, Store
 from sandbox.api.report import build_report, current_tags, latest_override
 from sandbox.api.schemas import (
@@ -647,12 +647,18 @@ def _stix_bundle(analysis: Analysis, rows: list[Ioc]) -> dict[str, Any]:
         return f"{kind}--{uuid.uuid5(uuid.NAMESPACE_URL, f'{analysis.id}:{kind}:{value}')}"
 
     now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    def lit(v: str) -> str:
+        # STIX pattern string literal: every value comes from a captured page, so escape
+        # backslashes and quotes for all types, not only URLs.
+        return "'" + v.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
     patterns = {
-        "domain": lambda v: f"[domain-name:value = '{v}']",
-        "ip": lambda v: f"[{'ipv6' if ':' in v else 'ipv4'}-addr:value = '{v}']",
-        "url": lambda v: "[url:value = '" + v.replace("\\", "\\\\").replace("'", "\\'") + "']",
-        "hash": lambda v: f"[file:hashes.'{'SHA-256' if len(v) == 64 else 'MD5'}' = '{v}']",
-        "email": lambda v: f"[email-addr:value = '{v}']",
+        "domain": lambda v: f"[domain-name:value = {lit(v)}]",
+        "ip": lambda v: f"[{'ipv6' if ':' in v else 'ipv4'}-addr:value = {lit(v)}]",
+        "url": lambda v: f"[url:value = {lit(v)}]",
+        "hash": lambda v: f"[file:hashes.'{'SHA-256' if len(v) == 64 else 'MD5'}' = {lit(v)}]",
+        "email": lambda v: f"[email-addr:value = {lit(v)}]",
     }
     labels = {"malicious": "malicious-activity", "suspicious": "anomalous-activity"}
     objects = [
@@ -670,6 +676,9 @@ def _stix_bundle(analysis: Analysis, rows: list[Ioc]) -> dict[str, Any]:
             "description": f"Seen in sandbox analysis {analysis.id} of {analysis.normalised_url}",
         }
         for r in rows
+        # STIX 2.1 has no standard object for some types (eth_address); those stay in the
+        # JSON and CSV exports instead of failing the whole bundle.
+        if r.type in patterns
     ]
     return {"type": "bundle", "id": sid("bundle", "iocs"), "objects": objects}
 
@@ -825,8 +834,11 @@ async def reanalyse(
 
 @router.post("/{analysis_id}/cancel", status_code=202)
 async def cancel(analysis_id: str, request: Request, principal: UserOnly, db: Db) -> dict[str, Any]:
-    """Cancel a queued analysis, or end a running session."""
+    """Cancel a queued analysis, or end a running session. Like the session controls,
+    only the submitter or a senior analyst may do this (INT-8)."""
     analysis = await get_visible(db, principal, analysis_id)
+    if principal.subject != analysis.submitted_by and not principal.has_any({Role.SENIOR_ANALYST}):
+        raise HTTPException(403, "Only the submitter or a senior analyst can cancel this analysis")
     if analysis.status == "queued":
         analysis.status, analysis.finished_at = "cancelled", datetime.now(UTC)
     elif analysis.status == "running":
