@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
+from sandbox.core import safehttp
 from sandbox.db.audit import record_audit
 from sandbox.db.models import AllowlistDomain, AttackTechnique, Feed, FeedRun
 from sandbox.feeds import parsers
@@ -38,7 +39,12 @@ async def fetch(ctx: WorkerContext, feed: Feed) -> bytes:
         else:
             # abuse.ch services (URLhaus, ThreatFox, MalwareBazaar) take an Auth-Key header.
             headers["Auth-Key"] = feed.auth_key
-    async with ctx.http.stream("GET", url, headers=headers, timeout=120) as response:
+    # Feed URLs are set by detection engineers and redirect wherever the server says, so
+    # every hop is checked against the SSRF guard and pinned to the checked address.
+    response = await safehttp.guarded_send(
+        ctx.http, "GET", url, guard=ctx.guard, resolver=ctx.resolver, headers=headers, timeout=120
+    )
+    try:
         response.raise_for_status()
         chunks, size = [], 0
         async for chunk in response.aiter_bytes():
@@ -46,6 +52,8 @@ async def fetch(ctx: WorkerContext, feed: Feed) -> bytes:
             if size > _MAX_DOWNLOAD:
                 raise parsers.FeedError(f"Download exceeds {_MAX_DOWNLOAD} bytes")
             chunks.append(chunk)
+    finally:
+        await response.aclose()
     return b"".join(chunks)
 
 

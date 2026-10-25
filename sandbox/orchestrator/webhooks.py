@@ -4,6 +4,10 @@ The body is the analysis summary as JSON. ``X-Sandbox-Signature`` is
 ``sha256=<hex HMAC of "<timestamp>.<body>">`` keyed with the client's webhook secret, and
 ``X-Sandbox-Timestamp`` is that timestamp, so receivers can reject replays. Non-2xx
 responses raise, and the job queue retries with backoff.
+
+The URL is checked against the SSRF guard and the connection pinned to the checked
+address, so a webhook cannot be pointed (directly or by DNS) at internal services.
+Redirects are not followed.
 """
 
 import hashlib
@@ -12,6 +16,7 @@ import json
 import time
 from typing import Any
 
+from sandbox.core import safehttp
 from sandbox.db.models import Analysis, ApiClient
 
 
@@ -44,8 +49,13 @@ async def webhook_job(ctx, payload: dict[str, Any]) -> None:
         ).encode()
         url, secret = client.webhook_url, client.webhook_secret or ""
     timestamp = str(int(time.time()))
-    response = await ctx.http.post(
+    response = await safehttp.guarded_send(
+        ctx.http,
+        "POST",
         url,
+        guard=ctx.guard,
+        resolver=ctx.resolver,
+        max_redirects=0,
         content=body,
         headers={
             "Content-Type": "application/json",
@@ -53,7 +63,7 @@ async def webhook_job(ctx, payload: dict[str, Any]) -> None:
             "X-Sandbox-Signature": sign(secret, timestamp, body),
         },
         timeout=15,
-        follow_redirects=False,
     )
+    await response.aclose()
     if not 200 <= response.status_code < 300:
         raise RuntimeError(f"Webhook returned HTTP {response.status_code}")

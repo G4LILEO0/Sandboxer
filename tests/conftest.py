@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FAKE_DNS = {
     "public.example": ["93.184.216.34"],
     "internal.example": ["10.0.0.5"],
+    "openphish.com": ["93.184.216.34"],
 }
 
 
