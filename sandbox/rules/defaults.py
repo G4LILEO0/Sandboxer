@@ -633,7 +633,7 @@ BEHAVIOUR_RULES = [
             "all": [
                 {
                     "any": [
-                        {"fact": "websocket.count", "op": "gt", "value": 0},
+                        {"fact": "websocket.foreign_count", "op": "gt", "value": 0},
                         {"fact": "websocket.socketio_polling", "op": "gt", "value": 0},
                     ]
                 },

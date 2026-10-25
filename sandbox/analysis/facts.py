@@ -1894,9 +1894,19 @@ def _websocket(data: CaptureData, reqs: list[dict[str, Any]] | None = None) -> d
             c["events"].add(ev)
     out = [{**c, "events": sorted(c["events"])[:20]} for c in conns.values()]
     polling = _socketio_polling(data, reqs or [])
+    # L2-04: chat/analytics widgets open sockets too. A relay is not on an allowlisted
+    # or brand-owned host; same-site sockets stay in (kits relay from their own host).
+    foreign = [
+        c
+        for c in out
+        if c["host"]
+        and site(c["host"]) not in data.allowlisted
+        and not any(b.owns(c["host"]) for b in data.brands)
+    ]
     return {
         "connections": out[:20],
         "count": len(out),
+        "foreign_count": len(foreign),
         "socketio_polling": len(polling),
         "polling_connections": polling[:20],
     }
