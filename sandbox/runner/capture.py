@@ -498,7 +498,9 @@ class Capture:
             "ms": self._elapsed_ms(),
         }
         self.websocket_frames.append(entry)
-        self.events.emit("websocket_frame", "network", url=url[:300], direction=direction, event=event)  # noqa: E501
+        self.events.emit(
+            "websocket_frame", "network", url=url[:300], direction=direction, event=event
+        )  # noqa: E501
 
     def _on_navigated(self, page: Page, frame: Frame) -> None:
         if frame != page.main_frame:

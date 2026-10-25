@@ -510,7 +510,12 @@ def _archive_listing(data: CaptureData) -> dict[str, Any]:
         if not path:
             continue
         head = data.download_heads.get(sha or "", b"")
-        entry: dict[str, Any] = {"name": d.get("suggested_filename"), "format": None, "encrypted": False, "entries": []}  # noqa: E501
+        entry: dict[str, Any] = {
+            "name": d.get("suggested_filename"),
+            "format": None,
+            "encrypted": False,
+            "entries": [],
+        }  # noqa: E501
         try:
             if head.startswith(b"PK\x03\x04") and zipfile.is_zipfile(path):
                 entry["format"] = "zip"
@@ -518,10 +523,19 @@ def _archive_listing(data: CaptureData) -> dict[str, Any]:
                     for info in zf.infolist()[:200]:
                         enc = bool(info.flag_bits & 0x1)
                         entry["encrypted"] = entry["encrypted"] or enc
-                        ext = info.filename.lower().rsplit(".", 1)[-1] if "." in info.filename else ""  # noqa: E501
+                        ext = (
+                            info.filename.lower().rsplit(".", 1)[-1] if "." in info.filename else ""
+                        )  # noqa: E501
                         risky = ext in EXECUTABLE_EXTENSIONS
                         inner_risky += risky
-                        entry["entries"].append({"name": info.filename[:200], "size": info.file_size, "encrypted": enc, "risky": risky})  # noqa: E501
+                        entry["entries"].append(
+                            {
+                                "name": info.filename[:200],
+                                "size": info.file_size,
+                                "encrypted": enc,
+                                "risky": risky,
+                            }
+                        )  # noqa: E501
             elif tarfile.is_tarfile(path):
                 entry["format"] = "tar"
                 with tarfile.open(path) as tf:
@@ -534,7 +548,9 @@ def _archive_listing(data: CaptureData) -> dict[str, Any]:
                         ext = member.name.lower().rsplit(".", 1)[-1] if "." in member.name else ""
                         risky = ext in EXECUTABLE_EXTENSIONS
                         inner_risky += risky
-                        entry["entries"].append({"name": member.name[:200], "size": member.size, "risky": risky})  # noqa: E501
+                        entry["entries"].append(
+                            {"name": member.name[:200], "size": member.size, "risky": risky}
+                        )  # noqa: E501
             else:
                 continue
         except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError):
@@ -653,9 +669,7 @@ def _clipboard(data: CaptureData) -> dict[str, Any]:
     }
 
 
-_SUPPORT_PHONE = re.compile(
-    r"(?:\+?\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}\b"
-)
+_SUPPORT_PHONE = re.compile(r"(?:\+?\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}\b")
 _SUPPORT_SCARE = re.compile(
     r"(?i)(microsoft|windows|defender|apple|support|virus|infected|blocked|trojan|"
     r"spyware|call (us|now|immediately)|do not (restart|shut)|technical support)",
@@ -1162,8 +1176,12 @@ _OAUTH_ERROR = re.compile(
 )
 # Microsoft sign-in structural markers (survive text obfuscation).
 _MS_MARKERS = [
-    ("ests_config", re.compile(
-        r"\$Config\s*=.{0,4000}(urlGetCredentialType|sCanaryTokenName|urlMsaSignUp|sCtx)", re.S)),
+    (
+        "ests_config",
+        re.compile(
+            r"\$Config\s*=.{0,4000}(urlGetCredentialType|sCanaryTokenName|urlMsaSignUp|sCtx)", re.S
+        ),
+    ),
     ("input_i0116", re.compile(r"\bi011[68]\b")),
     ("si_button", re.compile(r"\bidSIButton9\b")),
     ("aadcdn_asset", re.compile(r"aadcdn\.ms(ft)?auth\.net", re.I)),
@@ -2056,9 +2074,7 @@ def _script_posted_credentials(
                 and site(thost) not in data.allowlisted
             ):
                 method = str(r.get("method", "")).upper()
-                cred = any(
-                    _credential_body(b) for b in bodies.get((method, r.get("url", "")), [])
-                )
+                cred = any(_credential_body(b) for b in bodies.get((method, r.get("url", "")), []))
                 posts.append(
                     {"from": fhost, "to": thost, "type": r.get("type"), "credential_body": cred}
                 )
@@ -2125,9 +2141,7 @@ def _jsapi_facts(data: CaptureData) -> dict[str, Any]:
 # blocks non-http(s) schemes, so the attempt lands in `blocked`; links, meta refresh and
 # the HTML are read too. Plain "search:" needs a query/location to tell it from a label.
 _PROTO_INLINE = re.compile(r"(?i)\b(?:search-ms|ms-search):[^\s\"'<>]{1,1000}")
-_WEBDAV_UNC = re.compile(
-    r"(?i)\\\\([a-z0-9.-]+)@ssl\\davwwwroot|//([a-z0-9.-]+)@ssl/davwwwroot"
-)
+_WEBDAV_UNC = re.compile(r"(?i)\\\\([a-z0-9.-]+)@ssl\\davwwwroot|//([a-z0-9.-]+)@ssl/davwwwroot")
 _PROTO_LOCATION = re.compile(r"(?i)location:\s*(?:\\\\|//|https?://)?([a-z0-9.-]+\.[a-z]{2,})")
 _DOC_PRETEXT = re.compile(
     r"(?i)\b(invoice|remittance|purchase\s+order|payment\s+advice|statement|receipt|"
