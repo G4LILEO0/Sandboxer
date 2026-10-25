@@ -18,7 +18,7 @@ Sandboxer is functionally complete for the MVP. All nine steps of the developmen
 | --- | --- | --- |
 | `main` | The original platform (plan steps 1 to 9 plus egress isolation) | Baseline |
 | `detection-rules` | `main` + 35 commits: four rounds of detection rules, facts and capture hooks | Not merged. Tests pass; CI's `ruff format --check` failed on 4 files (fixed on `security-review`) |
-| `security-review` | `detection-rules` + 9 commits: 17 security fixes, 34 regression tests, review document, this document | Not merged. 538 tests pass, ruff clean |
+| `security-review` | `detection-rules` + 11 commits: 17 security fixes, 34 regression tests, review document, this document | Not merged. 538 tests pass, ruff clean |
 
 The repository has no remote yet. CI is defined in `.github/workflows/ci.yml` (tests with Postgres, ruff, image builds and a hardened smoke run of the session image) but has never run, because the code isn't on GitHub.
 

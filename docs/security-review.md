@@ -5,7 +5,7 @@
 | Date | 2026-10-25 |
 | Requested by | Abdulrahman |
 | Code reviewed | branch `detection-rules` at `69a18af` (main plus 35 detection-rule commits) |
-| Fixes | branch `security-review`, 8 commits on top of `69a18af` |
+| Fixes | branch `security-review` on top of `69a18af` (8 fix and test commits, then docs) |
 | Tests before | 504 passed (with PostgreSQL); `ruff check` clean; `ruff format --check` failed on 4 files |
 | Tests after | **538 passed** (504 existing + 34 new regression tests in `tests/test_security_review.py`); `ruff check` and `ruff format --check` both clean |
 
