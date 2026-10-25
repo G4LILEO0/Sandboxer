@@ -1127,6 +1127,50 @@ def test_consentfix_needs_first_party_loopback_and_a_foreign_origin():
     )
 
 
+# DE-M365-004 device-code phishing: the code below is a made-up placeholder.
+_DEVICELOGIN = "https://microsoft.com/devicelogin"
+
+
+def _dc_page(url, text, forms=(), links=(_DEVICELOGIN,)):
+    page = _page(url, title="Document shared with you", text=text, forms=list(forms))
+    page["frames"][0]["links"] = list(links)
+    return page
+
+
+def test_device_code_phishing_lure_fires_and_ms_help_is_quiet():
+    url = "https://docs-share.pages.dev/"
+    text = "To view the file, go to the link and enter this code: QX7T-K2MB9 to continue."
+    hits = _hits(_cap(url, [_dc_page(url, text)]))
+    assert {"device_code_phishing_lure", "device_code_handoff"} <= hits
+    ms = "https://learn.microsoft.com/entra/identity/devices/device-login"
+    assert not {"device_code_phishing_lure", "device_code_handoff"} & _hits(
+        _cap(ms, [_dc_page(ms, text)])
+    )
+
+
+def test_it_help_page_describing_device_login_is_only_the_booster():
+    """Closest FP: an IT help page tells staff to go to devicelogin and 'enter the code
+    shown on your device', with a newsletter email box but no displayed code."""
+    url = "https://it.university.example.net/help/teams-room"
+    text = "Go to microsoft.com/devicelogin and enter the code shown on your device."
+    news = {"action": "/subscribe", "fields": [{"type": "email"}]}
+    hits = _hits(_cap(url, [_dc_page(url, text, forms=[news])]))
+    assert "device_code_handoff" in hits
+    assert "device_code_phishing_lure" not in hits
+
+
+def test_device_code_share_pretext_with_email_gate_and_script_source():
+    """The device-login URL in a script, plus an email-only gate on a share pretext."""
+    url = "https://onedrive-files.example.net/"
+    gate = {"action": "", "fields": [{"type": "email"}]}
+    page = _dc_page(url, "A secure document was shared with you on OneDrive.",
+                    forms=[gate], links=())  # noqa: E501
+    page["frames"][0]["scripts"] = [{"sha256": "dc1", "inline": True}]
+    data = _cap(url, [page])
+    data.scripts = {"dc1": "window.open('https:\\/\\/aka.ms\\/devicelogin')"}
+    assert "device_code_phishing_lure" in _hits(data)
+
+
 def _rpc(host="bsc-dataseed.binance.org", to="0x1111111111111111111111111111111111111111",
          result=None):
     body = (
