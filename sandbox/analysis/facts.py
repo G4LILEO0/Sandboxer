@@ -1864,6 +1864,27 @@ def _crash_repair(data: CaptureData) -> list[str]:
     return sorted(set(out))[:10]
 
 
+# L2-NEW-3: a full-screen fake OS update (JackFix): update-in-progress wording and a
+# progress percentage on the same non-vendor page.
+_FAKE_OS_UPDATE = re.compile(
+    r"(?i)\b(working on|installing|configuring)\s+(windows\s+)?updates?\b"
+    r"|\bdo\s+not\s+(turn\s+off|switch\s+off|shut\s+down|restart)\s+(your\s+)?(computer|pc|device)\b"
+    r"|\bcritical\s+(security\s+)?updates?\b|\bwindows\s+update\b",
+)
+_PROGRESS_PERCENT = re.compile(r"\b\d{1,3}\s?%(\s*complete)?")
+
+
+def _fake_os_update(data: CaptureData) -> list[str]:
+    out = []
+    for frame in _all_frames(data):
+        host = _host(frame.get("url"))
+        text = f"{frame.get('title', '')} {frame.get('text', '')}"
+        if host and not any(host == v or host.endswith("." + v) for v in _BROWSER_VENDORS):
+            if _FAKE_OS_UPDATE.search(text) and _PROGRESS_PERCENT.search(text):
+                out.append(frame.get("url", ""))
+    return sorted(set(out))[:10]
+
+
 def _fake_update(data: CaptureData) -> list[str]:
     out = []
     for frame in _all_frames(data):
@@ -2286,6 +2307,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
         **_fake_captcha(data, reqs),
         "fake_update_pages": _fake_update(data),
         "crash_repair_pages": _crash_repair(data),
+        "fake_os_update_pages": _fake_os_update(data),
     }
     web3 = _web3(data, reqs)
     web3.update(

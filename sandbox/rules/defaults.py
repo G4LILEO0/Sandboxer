@@ -745,6 +745,30 @@ BEHAVIOUR_RULES = [
         },
         ["lure.crash_repair_pages", "clipboard.commands", "evasion.devtools_blocked", "final.url"],
     ),
+    # --- fake full-screen OS update (L2-NEW-3) ----------------------------------------
+    _rule(
+        "fake_os_update_overlay",
+        "high",
+        ["clickfix", "fake-update", "jackfix"],
+        ["T1204.004", "T1036", "T1059"],
+        "A non-vendor page goes full screen with fake 'installing updates... 37%' OS "
+        "update text and blocks DevTools/keys or stages a clipboard command (JackFix): "
+        "the set-up for paste-and-run steps.",
+        {
+            "all": [
+                {"fact": "lure.fake_os_update_pages", "op": "exists", "value": True},
+                {"fact": "js.fullscreen", "op": "gt", "value": 0},
+                {
+                    "any": [
+                        {"fact": "evasion.devtools_blocked", "op": "gt", "value": 0},
+                        {"fact": "js.keyboard_lock", "op": "gt", "value": 0},
+                        {"fact": "clipboard.command_like", "op": "gt", "value": 0},
+                    ]
+                },
+            ]
+        },
+        ["lure.fake_os_update_pages", "clipboard.commands", "evasion.devtools_blocked_keys"],
+    ),
     # --- HTML smuggling credential page (DE-OBF-006) --------------------------------
     _rule(
         "smuggled_credential_page",
@@ -1288,6 +1312,7 @@ DEFAULT_WEIGHTS = {
     "filefix_command_disguised_as_path": 80,
     "fake_browser_update": 70,
     "crashfix_repair_lure": 55,
+    "fake_os_update_overlay": 55,
     "smuggled_credential_page": 55,
     "ipfs_credential_page": 45,
     "client_side_ip_geo_lookup": 20,

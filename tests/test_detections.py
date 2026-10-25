@@ -2000,3 +2000,35 @@ def test_wallet_drainer_lure_needs_wording_library_and_young_domain():
     # A real, older dApp with the same wording, and a young dApp with no claim wording.
     assert "wallet_drainer_lure" not in _hits(_drainer(url, "Claim your airdrop allocation", 900))
     assert "wallet_drainer_lure" not in _hits(_drainer(url, "Swap tokens", 10))
+
+
+# --- fake full-screen OS update (L2-NEW-3) -------------------------------------------
+
+_OS_UPDATE = "Working on updates 37% complete. Don't turn off your computer."
+
+
+def _osu(text, fullscreen=1, keys=True, title="Windows Update"):
+    url = "https://stream.example-host.com/"
+    blocked = [{"kind": "devtools_key", "key": "F11"}] if keys else []
+    return _cap(
+        url,
+        [_page(url, title, text=text)],
+        jsapi={"apis": {"requestFullscreen": fullscreen}},
+        blocked_input=blocked,
+    )
+
+
+def test_fake_os_update_overlay_fires():
+    data = _osu(_OS_UPDATE)
+    assert build_facts(data)["lure"]["fake_os_update_pages"]
+    assert "fake_os_update_overlay" in _hits(data)
+
+
+def test_fullscreen_video_and_update_article_are_quiet():
+    # Full-screen player with key handling but no update wording.
+    assert "fake_os_update_overlay" not in _hits(_osu("Episode 4 - 37% watched", title="Player"))
+    # A news article about Windows Update: no fullscreen, no blocking.
+    article = "How to fix Windows Update stuck at 37%: do not turn off your computer."
+    assert "fake_os_update_overlay" not in _hits(_osu(article, fullscreen=0, keys=False))
+    # The wording alone in full screen with nothing blocked or staged.
+    assert "fake_os_update_overlay" not in _hits(_osu(_OS_UPDATE, keys=False))
