@@ -2074,3 +2074,15 @@ def test_jsfuck_symbol_set_yara():
     # Minified code is bracket-heavy but always has letters and digits between them.
     assert not rule.match(data=b"a[0](b[1])+c[2]!d;" * 60)
     assert not rule.match(data=b"[]" * 99)
+
+
+# --- government lookalike rule (L2-08 housekeeping) ----------------------------------
+
+
+def test_government_lookalike_domain_rule_fires_and_real_gov_is_quiet():
+    fake = "https://absher-gov-sa.com/login"
+    assert "government_lookalike_domain" in _hits(_cap(fake, [_page(fake, "Absher")]))
+    real = "https://www.absher.sa.gov.sa/login"
+    assert "government_lookalike_domain" not in _hits(_cap(real, [_page(real, "Absher")]))
+    vouched = _cap(fake, [_page(fake, "Absher")], allowlisted={"absher-gov-sa.com"})
+    assert "government_lookalike_domain" not in _hits(vouched)
