@@ -1492,6 +1492,31 @@ def test_login_page_third_party_analytics_post_is_quiet(rtype):
     assert "script_posted_credentials" not in _hits(_cap(url, [page], har=har, requests=reqs))
 
 
+@pytest.mark.parametrize("wrap", ["{}", "request={}", "data={}&v=2"])
+def test_script_posted_credentials_decodes_one_base64_layer(wrap):
+    """L2-05: kits post the credential JSON base64-encoded, whole or in one parameter."""
+    import base64
+
+    url = "https://kit.example/login"
+    page = _page(url, forms=[LOOSE_PW])
+    reqs = [{"method": "POST", "type": "fetch", "url": "https://collector.net/x", "frame_url": url}]
+    enc = base64.b64encode(b'{"email":"a@b.c","password":"x"}').decode()
+    har = [_req("https://collector.net/x", "POST", post=wrap.format(enc))]
+    assert "script_posted_credentials" in _hits(_cap(url, [page], har=har, requests=reqs))
+
+
+def test_base64_analytics_body_is_not_credentials():
+    import base64
+
+    url = "https://app.example/login"
+    page = _page(url, title="Log in", forms=[LOOSE_PW])
+    reqs = [{"method": "POST", "type": "fetch", "url": "https://analytics.vendor.net/c",
+             "frame_url": url}]  # noqa: E501
+    enc = base64.b64encode(b'{"event":"page_view","screen":"login"}').decode()
+    har = [_req("https://analytics.vendor.net/c", "POST", post="e=" + enc)]
+    assert "script_posted_credentials" not in _hits(_cap(url, [page], har=har, requests=reqs))
+
+
 def test_script_posted_credentials_with_brand_prompt_fires_on_opaque_body():
     """Kits encrypt the body (Tycoon), so a brand credential prompt stands in for it."""
     url = "https://m365-clone.example/"
