@@ -1389,6 +1389,21 @@ def test_credential_relay_websocket_fires_and_bare_socket_is_quiet():
     assert "credential_relay_websocket" not in _hits(_cap("https://chat.example/", [plain], websocket_frames=frames))  # noqa: E501
 
 
+def test_credential_prompt_with_allowlisted_chat_socket_is_quiet():
+    """L2-04: a support-chat or analytics widget socket is not a relay."""
+    brand = _page("https://m365-clone.example/", title="Sign in to your account",
+                  text="Microsoft", forms=[PASSWORD_FORM])  # noqa: E501
+    chat = [{"url": "wss://nexus-websocket-a.intercom.io/pubsub/x", "direction": "received"}]
+    data = _cap("https://m365-clone.example/", [brand], websocket_frames=chat,
+                allowlisted=["intercom.io"])  # noqa: E501
+    assert "credential_relay_websocket" not in _hits(data)
+    # The kit's own host is kept: relays often run on the phishing host itself.
+    own = [{"url": "wss://m365-clone.example/socket.io/", "direction": "sent"}]
+    assert "credential_relay_websocket" in _hits(
+        _cap("https://m365-clone.example/", [brand], websocket_frames=own)
+    )
+
+
 def test_socketio_polling_relay_fires():
     """R-05: Socket.IO falls back to (or starts in) HTTP long-polling, which never shows
     up as WebSocket frames."""
