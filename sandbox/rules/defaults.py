@@ -610,6 +610,30 @@ BEHAVIOUR_RULES = [
         {"fact": "forms.apps_script_credential", "op": "gt", "value": 0},
         ["forms.apps_script_credential_pages", "forms.script_posted_targets"],
     ),
+    # --- credential form posted to a form-backend service (DE-PHI-005) ----------------
+    _rule(
+        "credential_post_to_form_collector",
+        "high",
+        ["phishing", "exfil", "credential-harvest"],
+        ["T1567", "T1056.003"],
+        "A page that asks for a password, card, one-time code or recovery phrase POSTs "
+        "to a form-backend or webhook service (Formspree, EmailJS, webhook.site...): a "
+        "kit with no backend of its own. Contact forms there ask for none of these.",
+        {
+            "all": [
+                {"fact": "exfil.form_collector_count", "op": "gt", "value": 0},
+                {
+                    "any": [
+                        {"fact": "forms.password_forms", "op": "gt", "value": 0},
+                        {"fact": "forms.payment_card_forms", "op": "gt", "value": 0},
+                        {"fact": "forms.otp_forms", "op": "gt", "value": 0},
+                        {"fact": "forms.seed_phrase_forms", "op": "gt", "value": 0},
+                    ]
+                },
+            ]
+        },
+        ["exfil.form_collectors", "forms.sensitive_prompt_pages", "final.url"],
+    ),
     # --- browser-in-the-browser fake window (L2-NEW-4) --------------------------------
     _rule(
         "browser_in_the_browser_window",
@@ -1323,6 +1347,7 @@ DEFAULT_WEIGHTS = {
     "device_code_handoff": 30,
     "cache_smuggled_payload": 55,
     "salty2fa_kit": 55,
+    "credential_post_to_form_collector": 45,
     "browser_in_the_browser_window": 50,
     "explorer_api_dead_drop": 30,
     "wallet_drainer_lure": 30,
