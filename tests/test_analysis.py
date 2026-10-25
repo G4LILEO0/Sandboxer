@@ -408,17 +408,30 @@ def test_registrable_and_skeleton():
 def _capd(final_url, **result):
     from sandbox.analysis.facts import CaptureData
 
-    base = {"url": final_url, "final_url": final_url, "pages": [], "redirects": [],
-            "navigations": [{"url": final_url}], "hosts": {}}  # noqa: E501
+    base = {
+        "url": final_url,
+        "final_url": final_url,
+        "pages": [],
+        "redirects": [],
+        "navigations": [{"url": final_url}],
+        "hosts": {},
+    }  # noqa: E501
     return CaptureData(result={**base, **result}, brands=BRANDS)
 
 
 def _harreq(url, method="GET", post="", body="", set_cookie=()):
     return {
-        "request": {"method": method, "url": url, "headers": [],
-                    "postData": {"text": post} if post else {}},  # noqa: E501
-        "response": {"status": 200, "content": {"text": body},
-                     "headers": [{"name": "set-cookie", "value": c} for c in set_cookie]},  # noqa: E501
+        "request": {
+            "method": method,
+            "url": url,
+            "headers": [],
+            "postData": {"text": post} if post else {},
+        },  # noqa: E501
+        "response": {
+            "status": 200,
+            "content": {"text": body},
+            "headers": [{"name": "set-cookie", "value": c} for c in set_cookie],
+        },  # noqa: E501
     }
 
 
@@ -436,8 +449,10 @@ def test_facts_backward_compatible_with_old_capture():
 
 def test_web3_rpc_fact_parses_batch_and_method():
     data = _capd("https://x.example/")
-    body = '[{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0xABc"}]},' \
-           '{"jsonrpc":"2.0","method":"eth_getCode","params":["0x1"]}]'
+    body = (
+        '[{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0xABc"}]},'
+        '{"jsonrpc":"2.0","method":"eth_getCode","params":["0x1"]}]'
+    )
     data.har_entries = [_harreq("https://rpc.example/", "POST", post=body)]
     web3 = build_facts(data)["web3"]
     assert web3["rpc_call_count"] == 2
@@ -448,8 +463,11 @@ def test_clipboard_no_gesture_and_overwrite_facts():
     data = _capd(
         "https://x.example/",
         clipboard=[
-            {"api": "navigator.clipboard.writeText", "text": "powershell -enc " + "A" * 60,
-             "user_activation": False},  # noqa: E501
+            {
+                "api": "navigator.clipboard.writeText",
+                "text": "powershell -enc " + "A" * 60,
+                "user_activation": False,
+            },  # noqa: E501
             {"api": "navigator.clipboard.writeText", "text": "   ", "user_activation": True},
         ],
     )
