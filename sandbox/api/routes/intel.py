@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from sandbox.api.auth import CurrentPrincipal
 from sandbox.api.deps import AppSettings, DnsResolver, Guard
 from sandbox.core.netguard import BlockedDestination
+from sandbox.core.safehttp import UnresolvedHost, checked_address, pinned_request
 from sandbox.core.urls import InvalidURL, normalise_url
 
 router = APIRouter(prefix="/v1/intel", tags=["intel"])
@@ -200,14 +201,23 @@ async def redirect_chain(
             break
         seen.add(target.url)
         try:
-            await guard.check_host(target.host, resolver)
+            address = await checked_address(target.host, guard, resolver)
         except BlockedDestination as exc:
             hops.append(_hop(target.url, blocked=str(exc)))
             break
+        except UnresolvedHost as exc:
+            hops.append(_hop(target.url, error=str(exc)))
+            break
         try:
-            # Streamed and closed unread: only the status line and headers are needed.
-            request = http.build_request(
-                "GET", target.url, headers={"User-Agent": "url-sandbox-redirect-walker/0.1"}
+            # Connect to the address that was checked, not whatever the name resolves to
+            # a moment later (DNS rebinding). Streamed and closed unread: only the status
+            # line and headers are needed.
+            request = pinned_request(
+                http,
+                "GET",
+                target.url,
+                address,
+                headers={"User-Agent": "url-sandbox-redirect-walker/0.1"},
             )
             response = await http.send(request, follow_redirects=False, stream=True)
             await response.aclose()

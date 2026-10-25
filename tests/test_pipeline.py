@@ -114,6 +114,7 @@ async def env(database_url, tmp_path):
     )
     backend = FakeBackend()
     ctx = WorkerContext.create(settings, backend=backend)
+    ctx.resolver = fake_resolver  # feed downloads and webhooks go through the SSRF guard
     async with ctx.sessionmaker() as db:
         await db.execute(
             text(

@@ -379,6 +379,8 @@ async def registration_age_days(http: httpx.AsyncClient, base: str, domain: str)
             f"{base.rstrip('/')}/domain/{domain}",
             timeout=8,
             headers={"Accept": "application/rdap+json"},
+            # rdap.org answers with a redirect to the registry's own RDAP server.
+            follow_redirects=True,
         )
         if response.status_code == 200:
             for event in response.json().get("events", []):
