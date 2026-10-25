@@ -1252,7 +1252,7 @@ DEFAULT_BRANDS = [
     # --- delivery and messaging: the most impersonated in SMS phishing -----------------
     ("USPS", ["usps", "postal service"], ["usps.com"]),
     ("FedEx", ["fedex"], ["fedex.com"]),
-    ("UPS", ["ups tracking", "united parcel service"], ["ups.com"]),
+    ("UPS", ["ups tracking", "united parcel service", "acronym:UPS"], ["ups.com"]),
     ("Aramex", ["aramex", "أرامكس"], ["aramex.com"]),
     ("SMSA Express", ["smsa express", "smsa", "سمسا"], ["smsaexpress.com"]),
     ("Naqel Express", ["naqel", "ناقل إكسبرس", "ناقل اكسبرس"], ["naqelexpress.com"]),

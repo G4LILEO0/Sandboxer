@@ -311,12 +311,13 @@ COLLECT_SCRIPT = r"""
   }));
   const meta_refresh = Array.from(document.querySelectorAll('meta[http-equiv]'))
     .filter((m) => (m.httpEquiv || '').toLowerCase() === 'refresh').map((m) => m.content);
+  const headings = Array.from(document.querySelectorAll('h1,h2')).slice(0, 10).map((h) => (h.innerText || '').trim().slice(0, 200)).filter(Boolean);
   const icon = document.querySelector('link[rel~=icon]');
   let text = '';
   try { text = (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').trim().slice(0, 8000); } catch (e) {}
   return {
     url: document.URL, title: document.title || '', forms, loose_password_fields, loose_text_inputs, links, scripts,
-    iframes, meta_refresh, favicon: icon ? abs(icon.getAttribute('href')) : null, text,
+    iframes, meta_refresh, favicon: icon ? abs(icon.getAttribute('href')) : null, text, headings,
   };
 }
 """
