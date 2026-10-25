@@ -1942,3 +1942,32 @@ def test_salty2fa_four_signals_fire():
 def test_salty2fa_needs_every_signal():
     assert "salty2fa_kit" not in _hits(_salty(devtools=False))
     assert "salty2fa_kit" not in _hits(_salty(php="/submit.php"))
+
+
+# --- Apps Script credential host (L2-NEW-5) --------------------------------------------
+
+_EXEC = "https://script.google.com/macros/s/AKfycbxExampleDeploymentId/exec"
+
+
+def test_apps_script_password_page_fires_despite_google_allowlist():
+    frame = "https://n-abc123-0lu-script.googleusercontent.com/userCodeAppPanel"
+    data = _cap(
+        _EXEC,
+        [_page(_EXEC, "Document"), _page(frame, "Sign in", forms=[PASSWORD_FORM])],
+        allowlisted={"google.com", "googleusercontent.com"},
+    )
+    forms = build_facts(data)["forms"]
+    assert forms["apps_script_pages"] == 2
+    assert forms["apps_script_credential_pages"] == [frame]
+    assert "apps_script_credential_page" in _hits(data)
+
+
+def test_apps_script_survey_and_google_login_are_quiet():
+    survey = _cap(_EXEC, [_page(_EXEC, "Team lunch survey", text="Pick a day")])
+    login = _cap(
+        "https://accounts.google.com/signin",
+        [_page("https://accounts.google.com/signin", "Sign in", forms=[PASSWORD_FORM])],
+    )
+    assert "apps_script_credential_page" not in _hits(survey)
+    assert build_facts(login)["forms"]["apps_script_pages"] == 0
+    assert "apps_script_credential_page" not in _hits(login)
