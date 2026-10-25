@@ -996,9 +996,10 @@ _CFX_AUTH = (
 _PASTE_TEXT = "Sign in, then copy the URL from your address bar and paste it here to continue."
 
 
-def _cfx_page(url, text=_PASTE_TEXT, links=(_CFX_AUTH,)):
+def _cfx_page(url, text=_PASTE_TEXT, links=(_CFX_AUTH,), paste_box=True):
     page = _page(url, title="Verify your email", text=text)
     page["frames"][0]["links"] = list(links)
+    page["frames"][0]["loose_text_inputs"] = 1 if paste_box else 0
     return page
 
 
@@ -1020,6 +1021,34 @@ def test_consentfix_url_in_inline_script_is_found():
     dom = [{"url": url, "html": f"<script>btn.onclick=()=>window.open('{escaped}')</script>"}]
     data = _cap(url, [_cfx_page(url, links=())], dom_html=dom)
     assert "consentfix_authcode_paste_back" in _hits(data)
+
+
+def test_consentfix_behind_allowlisted_wrapper_fires():
+    """L2-02: the analyst submits a Safe Links-wrapped URL. The lure page's script holds
+    the authorize URL; it must be judged by the frame it came from, not the wrapper."""
+    wrapper = "https://nam12.safelinks.protection.outlook.com/?url=https%3A%2F%2Fsecure-verify.pages.dev%2F"  # noqa: E501
+    lure = "https://secure-verify.pages.dev/"
+    page = _cfx_page(lure, links=())
+    page["frames"][0]["scripts"] = [{"sha256": "abc123", "inline": True}]
+    data = _cap(lure, [page], redirects=[{"from": wrapper, "to": lure, "type": "http"}])
+    data.result["url"] = wrapper
+    data.scripts = {"abc123": f"document.getElementById('go').href='{_CFX_AUTH}';"}
+    assert "consentfix_authcode_paste_back" in _hits(data)
+
+
+def test_oauth_tutorial_page_is_medium_not_critical():
+    """L2-02: a developer blog explaining the Azure CLI browser sign-in, including the
+    'copy the URL and paste it' step, has no paste box: medium booster only."""
+    url = "https://dev-notes.example.net/azure-cli-login"
+    hits = _hits(_cap(url, [_cfx_page(url, paste_box=False)]))
+    assert "firstparty_app_loopback_authorize" in hits
+    assert "consentfix_authcode_paste_back" not in hits
+
+
+def test_graph_command_line_tools_is_first_party():
+    url = "https://secure-verify.pages.dev/"
+    graph_cli = _CFX_AUTH.replace(_AZ_CLI, "14d82eec-204b-4c2f-b7e8-296a70dab67e")
+    assert "consentfix_authcode_paste_back" in _hits(_cap(url, [_cfx_page(url, links=(graph_cli,))]))  # noqa: E501
 
 
 def test_firstparty_loopback_without_paste_back_is_only_the_booster():

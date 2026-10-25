@@ -396,12 +396,15 @@ BEHAVIOUR_RULES = [
         ["T1528", "T1566.002", "T1204.004"],
         "A non-Microsoft page surfaces a real Entra authorize URL for a first-party "
         "(pre-consented) app such as Azure CLI with a localhost redirect_uri, and tells the "
-        "visitor to paste the resulting URL or code back: the authorization code is handed "
-        "to the attacker (ConsentFix / AuthCodeFix).",
+        "visitor to paste the resulting URL or code back into a box on that page: the "
+        "authorization code is handed to the attacker (ConsentFix / AuthCodeFix). A page "
+        "that only describes the step (a tutorial) gets the medium rule. Tenant check: a "
+        "first-party app's service principal is owned by Microsoft's tenant "
+        "f8cdef31-a31e-4b4a-93e4-5f571e91255a.",
         {
             "all": [
                 {"fact": "idp.firstparty_loopback_authorize", "op": "gt", "value": 0},
-                {"fact": "lure.paste_back_instruction", "op": "eq", "value": True},
+                {"fact": "lure.paste_back_with_input", "op": "eq", "value": True},
             ]
         },
         ["idp.firstparty_loopback_details", "capture.gated", "final.url"],

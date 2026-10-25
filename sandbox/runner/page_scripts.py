@@ -301,6 +301,7 @@ COLLECT_SCRIPT = r"""
     })),
   }));
   const loose_password_fields = Array.from(document.querySelectorAll('input[type=password]')).filter((el) => !el.form).length;
+  const loose_text_inputs = Array.from(document.querySelectorAll('input:not([type]),input[type=text],input[type=url],input[type=search],textarea')).filter((el) => !el.form).length;
   const links = Array.from(document.querySelectorAll('a[href]')).slice(0, 500).map((a) => abs(a.getAttribute('href')));
   const scripts = Array.from(document.scripts).slice(0, 200).map((s) => s.src
     ? { src: abs(s.src) }
@@ -314,7 +315,7 @@ COLLECT_SCRIPT = r"""
   let text = '';
   try { text = (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').trim().slice(0, 8000); } catch (e) {}
   return {
-    url: document.URL, title: document.title || '', forms, loose_password_fields, links, scripts,
+    url: document.URL, title: document.title || '', forms, loose_password_fields, loose_text_inputs, links, scripts,
     iframes, meta_refresh, favicon: icon ? abs(icon.getAttribute('href')) : null, text,
   };
 }
