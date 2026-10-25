@@ -565,6 +565,39 @@ BEHAVIOUR_RULES = [
         },
         ["clipboard.commands", "final.url"],
     ),
+    # --- web3 dead drops and drainer lures (DE-W3B-003 / DE-W3B-006) ------------------
+    _rule(
+        "explorer_api_dead_drop",
+        "medium",
+        ["web3", "etherhiding", "dead-drop"],
+        ["T1102.001"],
+        "A non-allowlisted page with no wallet UI reads a block-explorer API (Ethplorer, "
+        "Blockchair, Etherscan...): EtherHiding variants fetch their next stage from a "
+        "transaction or token note this way.",
+        {"fact": "web3.explorer_dead_drop", "op": "eq", "value": True},
+        ["web3.explorer_api_hosts", "final.url"],
+    ),
+    _rule(
+        "wallet_drainer_lure",
+        "medium",
+        ["web3", "drainer", "phishing"],
+        ["T1566.002", "T1656"],
+        "Claim/airdrop or wallet-verification wording on a page that loads a wallet "
+        "library, served from a young, lookalike or free-hosting domain.",
+        {
+            "all": [
+                {"fact": "web3.drainer_lure", "op": "eq", "value": True},
+                {
+                    "any": [
+                        {"fact": "domains.final_age_days", "op": "lt", "value": 60},
+                        {"fact": "domains.lookalike", "op": "gt", "value": 0},
+                        {"fact": "final.free_hosting", "op": "exists", "value": True},
+                    ]
+                },
+            ]
+        },
+        ["scripts.libraries", "domains.final_age_days", "final.url"],
+    ),
     # --- Apps Script credential host (L2-NEW-5) ---------------------------------------
     _rule(
         "apps_script_credential_page",
@@ -1240,6 +1273,8 @@ DEFAULT_WEIGHTS = {
     "device_code_handoff": 30,
     "cache_smuggled_payload": 55,
     "salty2fa_kit": 55,
+    "explorer_api_dead_drop": 30,
+    "wallet_drainer_lure": 30,
     "apps_script_credential_page": 25,
     "protocol_handler_lure": 50,
     "protocol_handler_attempt": 30,
