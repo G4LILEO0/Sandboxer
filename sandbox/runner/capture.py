@@ -62,6 +62,10 @@ _PASS_SCHEMES = {"data", "blob", "about"}
 _MAX_DOM_BYTES = 5 * 1024 * 1024
 _MAX_REQUEST_LOG = 5000
 _MAX_DYNAMIC_SCRIPTS = 50
+# Hook APIs that compile a string as code (not markup sinks like innerHTML).
+_CODE_EXEC_APIS = {"eval", "Function", "setTimeout", "setInterval"}
+_MAX_CODE_SAMPLES = 20
+_CODE_SAMPLE_CHARS = 4096
 _LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
     # Keep WebRTC from opening direct UDP paths around the request filter.
@@ -573,6 +577,20 @@ class Capture:
             if data.get("api") and data["api"] not in execs["apis"]:
                 execs["apis"].append(data["api"])
             code = data.get("code") or ""
+            # Code-only aggregates (L2-01): document.write and the innerHTML setter carry
+            # markup, and almost every page sets 1 KB+ of innerHTML, so "large dynamic
+            # exec" must be judged on the APIs that compile a string as code.
+            if data.get("api") in _CODE_EXEC_APIS:
+                execs["code_count"] = execs.get("code_count", 0) + 1
+                execs["code_max_len"] = max(execs.get("code_max_len", 0), data.get("len", 0))
+                execs["code_max_entropy"] = max(
+                    execs.get("code_max_entropy", 0.0), data.get("entropy", 0) or 0
+                )
+                # Bounded samples so facts can link a decoded chain result to the code it
+                # became (web3.rpc_result_linked_exec): 20 x 4 KB at most.
+                samples = execs.setdefault("code_samples", [])
+                if len(code) >= 256 and len(samples) < _MAX_CODE_SAMPLES:
+                    samples.append(code[:_CODE_SAMPLE_CHARS])
             if len(code) >= 1024 and self.dynamic_scripts < _MAX_DYNAMIC_SCRIPTS:
                 body = code.encode("utf-8", "replace")
                 sha = hashlib.sha256(body).hexdigest()

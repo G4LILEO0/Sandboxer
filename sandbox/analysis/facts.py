@@ -2,6 +2,8 @@
 extraction. Pure functions over stored data, so a stored analysis can be re-evaluated
 with newer rules without detonating again (ANA-13, FED-13)."""
 
+import base64
+import binascii
 import json
 import re
 from dataclasses import dataclass, field
@@ -1339,8 +1341,44 @@ def _oauth_error_bounce(chain: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _abi_string(hexdata: str, minimum: int = 512) -> str | None:
+    """The value of an ABI-encoded dynamic string/bytes return of ``minimum``+ bytes.
+
+    Layout: a 32-byte offset word, then at that offset a 32-byte length word and the
+    data. Page-load reads on dApps return one or a few 32-byte words; EtherHiding
+    contracts return kilobytes of text (L2-01)."""
+    h = hexdata[2:] if hexdata[:2].lower() == "0x" else hexdata
+    if len(h) < 192 or len(h) % 2 or not re.fullmatch(r"[0-9a-fA-F]+", h):
+        return None
+    raw = bytes.fromhex(h)
+    offset = int.from_bytes(raw[:32], "big")
+    if offset + 32 > len(raw):
+        return None
+    size = int.from_bytes(raw[offset : offset + 32], "big")
+    start = offset + 32
+    if size < minimum or start + size > len(raw):
+        return None
+    return raw[start : start + size].decode("utf-8", "replace")
+
+
+def _rpc_large_strings(resp_text: str) -> list[str]:
+    if '"result"' not in resp_text:
+        return []
+    try:
+        payload = json.loads(resp_text)
+    except ValueError:
+        return []
+    out = []
+    for item in payload if isinstance(payload, list) else [payload]:
+        if isinstance(item, dict) and isinstance(item.get("result"), str):
+            if (s := _abi_string(item["result"])) is not None:
+                out.append(s)
+    return out
+
+
 def _web3(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
     calls, addresses = [], set()
+    large: list[str] = []
     for r in reqs:
         if r["method"] != "POST" or not r["post"]:
             continue
@@ -1365,6 +1403,7 @@ def _web3(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
                 calls.append({"host": r["host"], "method": method, "to": to.lower()})
                 if to:
                     addresses.add(to.lower())
+        large.extend(_rpc_large_strings(r.get("resp_text") or ""))
     known = sorted(a for a in addresses if a in KNOWN_WEB3_ADDRESSES)
     # Fake EIP-1193 wallet provider log (A6): present only when the wallet profile is on.
     # Drainer signals: Permit/Permit2 typed-data signing, unlimited approve/setApprovalForAll.
@@ -1382,6 +1421,9 @@ def _web3(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
         "contract_addresses": sorted(addresses)[:20],
         "known_malicious_contract": len(known),
         "known_contracts": known,
+        "rpc_large_string_results": len(large),
+        # Decoded values for the linked-exec check only; not a reported fact.
+        "_rpc_large_strings": large[:10],
     }
     if wallet:
         out["wallet_requests"] = wallet[:20]
@@ -1413,22 +1455,66 @@ def _web3_derived(
     instead, since the fake-wallet log (wallet_requests) only exists when the opt-in
     SANDBOX_FAKE_WALLET profile is on.
     """
+    # Wording is judged on top-level documents only (L2 §1.1): an ad or price widget
+    # iframe saying "connect wallet" must not switch detection off for the capture.
+    # The library half stays page-wide.
     dapp_ui = any(lib.get("name") in _WALLET_CONNECTOR_LIBS for lib in libraries) or any(
-        _DAPP_UI.search(f"{f.get('title', '')} {f.get('text', '')}") for f in _all_frames(data)
+        _DAPP_UI.search(f"{f.get('title', '')} {f.get('text', '')}") for f in _top_frames(data)
     )
-    etherhiding = bool(
-        web3.get("rpc_call_count", 0) > 0 and not web3.get("wallet_requests") and not dapp_ui
-    )
-    # The contract's answer is decoded and run: a chain read followed by large runtime
-    # eval/Function code. Co-occurrence form; byte-matching the RPC result to the exec
-    # argument is a later refinement. On an allowlisted site it also needs a lure page.
-    executed = bool(
+    large = web3.pop("_rpc_large_strings", [])
+    reads = web3.get("rpc_call_count", 0) > 0 and not web3.get("wallet_requests")
+    # A kilobyte-sized string answer is EtherHiding's shape whatever the page looks like.
+    etherhiding = bool(reads and (not dapp_ui or large))
+    linked = bool(reads and large and _linked_exec(large, data))
+    # The contract's answer is decoded and run (DE-W3B-002). Precise form: a decoded
+    # result (or its base64 layer) shares a 64-char window with eval/Function code, no
+    # other condition. Fallback co-occurrence: large string results plus 1 KB+ of
+    # code-only exec (never innerHTML/document.write, L2-01); on an allowlisted site
+    # it also needs a lure page.
+    executed = linked or bool(
         etherhiding
-        and jsapi.get("dynamic_exec_count", 0) > 0
-        and jsapi.get("dynamic_exec_max_len", 0) >= 1024
+        and large
+        and jsapi.get("code_exec_max_len", 0) >= 1024
         and (not final_allowlisted or lure_page)
     )
-    return {"dapp_ui": dapp_ui, "etherhiding_rpc": etherhiding, "rpc_result_executed": executed}
+    return {
+        "dapp_ui": dapp_ui,
+        "etherhiding_rpc": etherhiding,
+        "rpc_result_linked_exec": linked,
+        "rpc_result_executed": executed,
+    }
+
+
+def _top_frames(data: CaptureData) -> list[dict[str, Any]]:
+    """Main frame of each live page, plus the earlier top-level snapshots."""
+    tops = [p["frames"][0] for p in data.result.get("pages", []) if p.get("frames")]
+    return tops + data.dom_pages
+
+
+_BASE64_SHAPE = re.compile(r"[A-Za-z0-9+/=\s]{64,}")
+
+
+def _linked_exec(large: list[str], data: CaptureData) -> bool:
+    samples = ((data.result.get("jsapi") or {}).get("exec") or {}).get("code_samples") or []
+    if not samples:
+        return False
+    for value in large:
+        candidates = [value]
+        stripped = value.strip()
+        if _BASE64_SHAPE.fullmatch(stripped):
+            try:
+                candidates.append(
+                    base64.b64decode("".join(stripped.split()), validate=False).decode(
+                        "utf-8", "replace"
+                    )
+                )
+            except (ValueError, binascii.Error):
+                pass
+        for cand in candidates:
+            windows = [cand[i : i + 64] for i in range(0, max(len(cand) - 63, 1), 64)][:64]
+            if any(len(w) == 64 and any(w in s for s in samples) for w in windows):
+                return True
+    return False
 
 
 def _ip_lookups(reqs: list[dict[str, Any]]) -> list[str]:
@@ -1633,6 +1719,10 @@ def _jsapi_facts(data: CaptureData) -> dict[str, Any]:
         "dynamic_exec_count": execs.get("count", 0),
         "dynamic_exec_max_len": execs.get("max_len", 0),
         "dynamic_exec_max_entropy": execs.get("max_entropy", 0.0),
+        # eval/Function/string-timer only (L2-01); 0 on captures that predate the split.
+        "code_exec_count": execs.get("code_count", 0),
+        "code_exec_max_len": execs.get("code_max_len", 0),
+        "code_exec_max_entropy": execs.get("code_max_entropy", 0.0),
         "blob_constructs": len(blobs),
         "blob_details": blobs[:10],
         "history_floods": apis.get("history.pushState", 0) + apis.get("history.replaceState", 0),
