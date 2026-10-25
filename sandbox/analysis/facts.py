@@ -1725,6 +1725,35 @@ _CREDENTIAL_BODY = re.compile(
 )
 
 
+_B64_TOKEN = re.compile(r"[A-Za-z0-9+/_-]{16,}={0,2}")
+
+
+def _b64_layer(value: str) -> str | None:
+    value = value.strip()
+    if not _B64_TOKEN.fullmatch(value):
+        return None
+    try:
+        raw = base64.b64decode(value.replace("-", "+").replace("_", "/") + "=" * (-len(value) % 4))
+    except (ValueError, binascii.Error):
+        return None
+    return raw.decode("utf-8", "replace")
+
+
+def _credential_body(body: str) -> bool:
+    """A credential field in the body, or under one base64 layer: the whole body, or the
+    value of a form parameter (Salty2FA-style request=/data=/session=) (L2-05)."""
+    from urllib.parse import parse_qsl
+
+    if _CREDENTIAL_BODY.search(body):
+        return True
+    layers = [_b64_layer(body)]
+    if "=" in body:
+        # A raw "+" is base64, not a form-encoded space.
+        pairs = parse_qsl(body[:20000].replace("+", "%2B"))[:10]
+        layers += [_b64_layer(v) for _, v in pairs]
+    return any(text and _CREDENTIAL_BODY.search(text) for text in layers)
+
+
 def _script_posted_credentials(
     data: CaptureData, reqs: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
@@ -1769,7 +1798,7 @@ def _script_posted_credentials(
             ):
                 method = str(r.get("method", "")).upper()
                 cred = any(
-                    _CREDENTIAL_BODY.search(b) for b in bodies.get((method, r.get("url", "")), [])
+                    _credential_body(b) for b in bodies.get((method, r.get("url", "")), [])
                 )
                 posts.append(
                     {"from": fhost, "to": thost, "type": r.get("type"), "credential_body": cred}
