@@ -97,7 +97,7 @@ function mergeVendorData(norm, vendorName, res) {
     const d = res.data.data;
     const a = d.attributes || {};
 
-    norm.vendor_links.virustotal = `https://www.virustotal.com/gui/${VT_GUI_TYPE[norm.type] || 'search'}/${d.id}`;
+    norm.vendor_links.virustotal = `https://www.virustotal.com/gui/${VT_GUI_TYPE[norm.type] || 'search'}/${encodeURIComponent(d.id)}`;
 
     const stats = a.last_analysis_stats;
     if (stats) {

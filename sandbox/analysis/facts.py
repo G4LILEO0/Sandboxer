@@ -492,6 +492,10 @@ _ARCHIVE_PASSWORD = re.compile(
 )
 
 
+# How far into a (decompressed) tar the download listing reads.
+_TAR_SCAN_LIMIT = 256 * 1024 * 1024
+
+
 def _archive_listing(data: CaptureData) -> dict[str, Any]:
     """A10/DE-DLD-001/002: list archive members with stdlib zipfile/tarfile (directory only,
     never extract), flag encrypted entries, and spot risky inner types. ISO/7z/RAR are not
@@ -521,7 +525,12 @@ def _archive_listing(data: CaptureData) -> dict[str, Any]:
             elif tarfile.is_tarfile(path):
                 entry["format"] = "tar"
                 with tarfile.open(path) as tf:
-                    for member in tf.getmembers()[:200]:
+                    # Iterate lazily and stop before a huge member: getmembers() would
+                    # decompress the whole archive, and a small .tar.gz can expand to
+                    # terabytes (the download is attacker-supplied).
+                    for count, member in enumerate(tf):
+                        if count >= 200 or member.offset_data + member.size > _TAR_SCAN_LIMIT:
+                            break
                         ext = member.name.lower().rsplit(".", 1)[-1] if "." in member.name else ""
                         risky = ext in EXECUTABLE_EXTENSIONS
                         inner_risky += risky

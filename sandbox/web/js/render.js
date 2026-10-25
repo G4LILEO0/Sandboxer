@@ -244,11 +244,19 @@ function renderCard(norm, opts = {}) {
   const urlSection = renderUrlSection(norm);
   if (urlSection) body.appendChild(urlSection);
 
+  // Built as elements, not HTML: the link includes an id taken from the vendor's response.
   const links = document.createElement('div'); links.className = 'small links';
-  const linkParts = [];
-  if (norm.vendor_links.virustotal) linkParts.push(`<a href="${norm.vendor_links.virustotal}" target="_blank" rel="noopener">VirusTotal</a>`);
-  if (norm.vendor_links.abuseipdb) linkParts.push(`<a href="${norm.vendor_links.abuseipdb}" target="_blank" rel="noopener">AbuseIPDB</a>`);
-  links.innerHTML = linkParts.join('') || '<span class="muted">No vendor links</span>';
+  for (const [key, label] of [['virustotal', 'VirusTotal'], ['abuseipdb', 'AbuseIPDB']]) {
+    const href = norm.vendor_links[key];
+    if (!href || !/^https:\/\//.test(href)) continue;
+    const a = document.createElement('a');
+    a.href = href; a.target = '_blank'; a.rel = 'noopener'; a.textContent = label;
+    links.appendChild(a);
+  }
+  if (!links.childNodes.length) {
+    const none = document.createElement('span'); none.className = 'muted'; none.textContent = 'No vendor links';
+    links.appendChild(none);
+  }
   body.appendChild(links);
 
   const actions = document.createElement('div'); actions.className = 'footer-actions';
