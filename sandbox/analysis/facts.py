@@ -611,11 +611,20 @@ def _clipboard(data: CaptureData) -> dict[str, Any]:
     # A page write with no user gesture (new A1 field), or a command-like write later
     # overwritten / cleared (evidence-blanking). Old captures lack the field: neutral.
     no_gesture = [c for c in writes if c.get("user_activation") is False]
+    no_gesture_cmds = [c for c in commands if c.get("user_activation") is False]
+    # Empty writes are kept for this check only: blanking the clipboard right after a
+    # command (or blank-then-refill) is evidence wiping (DE-CFX-006).
     overwritten = 0
     prev_cmd = False
-    for c in writes:
+    for c in data.result.get("clipboard", []):
+        if not (c.get("api") or not c.get("trusted")):
+            continue
         cur = bool(_COMMAND.search(_CMD_NOISE.sub("", c.get("text", ""))))
-        if prev_cmd and (not c.get("text", "").strip() or not cur):
+        blank = not c.get("text", "").strip()
+        # Blanking always counts. Replacing the command with other text counts unless the
+        # visitor made that copy (a docs page's second copy button); old captures
+        # without the field still count.
+        if prev_cmd and (blank or (not cur and c.get("user_activation") is not True)):
             overwritten += 1
         prev_cmd = cur
     return {
@@ -626,6 +635,7 @@ def _clipboard(data: CaptureData) -> dict[str, Any]:
         "installer_cradles": traits.count("installer"),
         "path_disguised": len(path_disguised),
         "no_gesture_writes": len(no_gesture),
+        "no_gesture_commands": len(no_gesture_cmds),
         "overwritten_command": overwritten,
         "commands": [
             {"api": c.get("api"), "text": c.get("text", "")[:1000], "frame_url": c.get("frame_url")}
