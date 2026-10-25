@@ -2086,3 +2086,16 @@ def test_government_lookalike_domain_rule_fires_and_real_gov_is_quiet():
     assert "government_lookalike_domain" not in _hits(_cap(real, [_page(real, "Absher")]))
     vouched = _cap(fake, [_page(fake, "Absher")], allowlisted={"absher-gov-sa.com"})
     assert "government_lookalike_domain" not in _hits(vouched)
+
+
+# --- credential form to a form-backend service (DE-PHI-005) --------------------------
+
+
+def test_password_page_posting_to_form_collector_fires_and_contact_form_is_quiet():
+    url = "https://portal.example-host.com/"
+    har = [_req("https://formspree.io/f/abcdwxyz", "POST", post="email=a%40b.c&message=hi")]
+    login = _cap(url, [_page(url, "Sign in", forms=[PASSWORD_FORM])], har=har)
+    assert "credential_post_to_form_collector" in _hits(login)
+    contact_form = {"action": "", "fields": [{"type": "email"}, {"type": "textarea"}]}
+    contact = _cap(url, [_page(url, "Contact us", forms=[contact_form])], har=har)
+    assert "credential_post_to_form_collector" not in _hits(contact)
