@@ -456,6 +456,37 @@ def _downloads(data: CaptureData) -> dict[str, Any]:
     }
 
 
+# Cache smuggling (L2-NEW-1): a response typed image/* whose body is an archive or
+# executable. The browser caches it silently; a later File Explorer step reads it back.
+_SMUGGLE_MAGIC = {"zip", "rar", "7z", "pe", "cab", "ole"}
+
+
+def _mislabeled_images(data: CaptureData) -> list[dict[str, Any]]:
+    out = []
+    for e in data.har_entries[:3000]:
+        resp = e.get("response") or {}
+        content = resp.get("content") or {}
+        ctype = str(content.get("mimeType") or "")
+        for h in resp.get("headers", []):
+            if str(h.get("name", "")).lower() == "content-type":
+                ctype = str(h.get("value") or ctype)
+        if not ctype.strip().lower().startswith("image/"):
+            continue
+        text = str(content.get("text") or "")
+        if content.get("encoding") == "base64":
+            try:
+                head = base64.b64decode(text[:64] + "=" * (-len(text[:64]) % 4))
+            except (binascii.Error, ValueError):
+                continue
+        else:
+            head = text[:16].encode("latin-1", "ignore")
+        magic = _magic_type(head)
+        if magic in _SMUGGLE_MAGIC:
+            url = str((e.get("request") or {}).get("url", ""))
+            out.append({"url": url[:500], "content_type": ctype[:80], "magic": magic})
+    return out
+
+
 _ARCHIVE_PASSWORD = re.compile(
     r"(?i)(password|pass|pwd|كلمة\s*(?:ال)?مرور)\s*[:：=]?\s*[`'\"]?([^\s`'\"<>]{3,24})",
 )
@@ -2150,7 +2181,12 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "libraries": libraries,
         },
         "js": jsapi,
-        "downloads": {**_downloads(data), **_archive_listing(data)},
+        "downloads": {
+            **_downloads(data),
+            **_archive_listing(data),
+            "mislabeled_image": len(mislabeled := _mislabeled_images(data)),
+            "mislabeled_images": mislabeled[:10],
+        },
         "clipboard": _clipboard(data),
         "lure": lure,
         "exfil": _exfil(data, reqs),
