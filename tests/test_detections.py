@@ -1820,3 +1820,38 @@ def test_real_images_and_typed_archives_are_not_mislabeled():
     data = _cap(url, [_page(url, text=_EXPLORER_STEPS)], har=har)
     assert build_facts(data)["downloads"]["mislabeled_image"] == 0
     assert not {"cache_smuggled_payload", "mislabeled_image_payload"} & _hits(data)
+
+
+# --- DE-CFX-006 no-gesture / overwritten clipboard ------------------------------------
+
+_CMD_WRITE = "powershell -nop -c Write-Host hello"
+
+
+def _cwrite(text, gesture=True, api="navigator.clipboard.writeText"):
+    return {"api": api, "text": text, "trusted": False, "user_activation": gesture}
+
+
+def test_command_blanked_after_write_counts_as_overwritten():
+    """Regression: an empty write after a command was filtered out before the overwrite
+    check, so blank-then-refill evidence wiping was invisible."""
+    url = "https://verify.example-host.com/"
+    data = _cap(url, [_page(url)], clipboard=[_cwrite(_CMD_WRITE), _cwrite("", gesture=False)])
+    assert build_facts(data)["clipboard"]["overwritten_command"] == 1
+    assert "clipboard_command_tampering" in _hits(data)
+
+
+def test_command_written_without_gesture_is_the_booster():
+    url = "https://verify.example-host.com/"
+    data = _cap(url, [_page(url)], clipboard=[_cwrite(_CMD_WRITE, gesture=False)])
+    assert build_facts(data)["clipboard"]["no_gesture_commands"] == 1
+    assert "clipboard_command_tampering" in _hits(data)
+
+
+def test_docs_copy_button_and_gestureless_share_link_are_quiet():
+    url = "https://docs.example-host.com/"
+    link = "https://docs.example-host.com/page"
+    clips = [_cwrite(link, gesture=False), _cwrite(_CMD_WRITE), _cwrite(link), _cwrite("")]
+    data = _cap(url, [_page(url)], clipboard=clips)
+    clip = build_facts(data)["clipboard"]
+    assert clip["no_gesture_commands"] == 0 and clip["overwritten_command"] == 0
+    assert "clipboard_command_tampering" not in _hits(data)

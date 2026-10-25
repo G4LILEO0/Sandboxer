@@ -548,6 +548,23 @@ BEHAVIOUR_RULES = [
         {"fact": "clipboard.path_disguised", "op": "gt", "value": 0},
         ["clipboard.commands", "final.url"],
     ),
+    # --- clipboard tampering booster (DE-CFX-006) -----------------------------------
+    _rule(
+        "clipboard_command_tampering",
+        "medium",
+        ["clickfix"],
+        ["T1204.004", "T1070"],
+        "The page wrote a shell-like command to the clipboard with no user gesture, or "
+        "overwrote/blanked a command it had written: ClickFix kits do both, copy buttons "
+        "on documentation pages do neither.",
+        {
+            "any": [
+                {"fact": "clipboard.no_gesture_commands", "op": "gt", "value": 0},
+                {"fact": "clipboard.overwritten_command", "op": "gt", "value": 0},
+            ]
+        },
+        ["clipboard.commands", "final.url"],
+    ),
     # --- cache smuggling (L2-NEW-1) ---------------------------------------------------
     _rule(
         "cache_smuggled_payload",
@@ -1154,6 +1171,7 @@ DEFAULT_WEIGHTS = {
     "device_code_phishing_lure": 55,
     "device_code_handoff": 30,
     "cache_smuggled_payload": 55,
+    "clipboard_command_tampering": 25,
     "mislabeled_image_payload": 30,
     "ms_session_cookie_foreign_host": 80,
     "web3_rpc_from_non_wallet_page": 55,
