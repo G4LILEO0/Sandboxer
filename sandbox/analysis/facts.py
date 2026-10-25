@@ -163,29 +163,48 @@ INSTALLER_SOURCES: dict[str, tuple[str, ...] | None] = {
         "/Homebrew/install/", "/nvm-sh/nvm/", "/ohmyzsh/ohmyzsh/", "/pyenv/pyenv-installer/",
     ),
 }  # fmt: skip
+# Whole URL tokens (parsed with urlsplit, not a host regex): with a scheme, or the bare
+# argument of a fetch verb.
 _CRADLE_SOURCE = re.compile(
-    r"https?://([a-z0-9.-]+)(/[^\s'\"|);]*)?"
+    r"(https?://[^\s'\"|);]+)"
     r"|\b(?:irm|iwr|curl|wget|invoke-restmethod|invoke-webrequest)\b(?:\s+-{1,2}[\w-]+)*\s+"
-    r"[\"']?([a-z0-9-]+(?:\.[a-z0-9-]+)+)(/[^\s'\"|);]*)?",
+    r"[\"']?([a-z0-9-]+(?:\.[a-z0-9-]+)+[^\s'\"|);]*)",
     re.I,
 )
 
 
-def _is_installer_cradle(plain: str) -> bool:
-    """Every source the command fetches from is a known installer (R-01)."""
-    sources = [
-        ((m.group(1) or m.group(3) or "").lower(), m.group(2) or m.group(4) or "/")
-        for m in _CRADLE_SOURCE.finditer(plain)
-    ]
-    if not sources:
-        return False
-    for host, path in sources:
+def _cradle_sources(plain: str) -> str:
+    """'installer' when every fetched source is a known installer, 'unambiguous' when a
+    source hides its real host or path, else 'cradle' (R-01, hardened in L2 §1.1).
+
+    Userinfo (installer.host@other.host), any dot segment, literal or %-encoded
+    (/Homebrew/install/../../x), and an explicit port are used to make a URL read as an
+    installer while fetching elsewhere; no installer one-liner uses them. Owner/repo
+    prefixes compare case-insensitively, as GitHub resolves them."""
+    from urllib.parse import unquote
+
+    tokens = [m.group(1) or "https://" + m.group(2) for m in _CRADLE_SOURCE.finditer(plain)]
+    if not tokens:
+        return "cradle"
+    verdict = "installer"
+    for tok in tokens:
+        try:
+            parts = urlsplit(tok)
+            port = parts.port
+        except ValueError:
+            return "unambiguous"
+        segments = unquote(unquote(parts.path)).replace("\\", "/").split("/")
+        if "@" in parts.netloc or port is not None or any(s in (".", "..") for s in segments):
+            return "unambiguous"
+        host = (parts.hostname or "").lower()
         if host not in INSTALLER_SOURCES:
-            return False
+            verdict = "cradle"
+            continue
         prefixes = INSTALLER_SOURCES[host]
-        if prefixes is not None and not path.startswith(prefixes):
-            return False
-    return True
+        path = unquote(parts.path).lower() or "/"
+        if prefixes is not None and not path.startswith(tuple(p.lower() for p in prefixes)):
+            verdict = "cradle"
+    return verdict
 
 
 # Separate test on the raw text: a one-line command padded with a long run of spaces or
@@ -510,7 +529,7 @@ def _clickfix_traits(text: str) -> str | None:
     ):
         return "unambiguous"
     if any(p.search(plain) for p in _CLICKFIX_FETCH_RUN):
-        return "installer" if _is_installer_cradle(plain) else "cradle"
+        return _cradle_sources(plain)
     return None
 
 
