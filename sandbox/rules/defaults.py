@@ -565,6 +565,25 @@ BEHAVIOUR_RULES = [
         },
         ["clipboard.commands", "final.url"],
     ),
+    # --- Salty2FA / Storm-1575 (DE-M365-015) ------------------------------------------
+    _rule(
+        "salty2fa_kit",
+        "high",
+        ["aitm", "phaas", "microsoft"],
+        ["T1557", "T1566.002", "T1027"],
+        "Four Salty2FA traits together: a Microsoft sign-in clone, a Turnstile-style gate, "
+        "DevTools shortcuts blocked, and a POST to a /<5-6 digits>.php endpoint on a host "
+        "no brand owns.",
+        {
+            "all": [
+                {"fact": "idp.ms_clone_pages", "op": "gt", "value": 0},
+                {"fact": "capture.gated", "op": "eq", "value": True},
+                {"fact": "evasion.devtools_blocked", "op": "gt", "value": 0},
+                {"fact": "idp.numeric_php_posts", "op": "gt", "value": 0},
+            ]
+        },
+        ["idp.numeric_php_hosts", "idp.ms_clone_page_details", "evasion.devtools_blocked_keys"],
+    ),
     # --- protocol-handler lure (L2-NEW-6) --------------------------------------------
     _rule(
         "protocol_handler_lure",
@@ -1208,6 +1227,7 @@ DEFAULT_WEIGHTS = {
     "device_code_phishing_lure": 55,
     "device_code_handoff": 30,
     "cache_smuggled_payload": 55,
+    "salty2fa_kit": 55,
     "protocol_handler_lure": 50,
     "protocol_handler_attempt": 30,
     "clipboard_command_tampering": 25,

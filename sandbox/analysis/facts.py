@@ -1250,6 +1250,9 @@ def _exfil(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+_NUMERIC_PHP = re.compile(r"/\d{5,6}\.php$")
+
+
 def _ms_markers(html: str) -> list[str]:
     return [name for name, pat in _MS_MARKERS if pat.search(html)]
 
@@ -1321,7 +1324,22 @@ def _idp(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
             name = c.split("=", 1)[0].strip().lower()
             if name in MS_ESTS_COOKIES:
                 foreign_cookies.append({"host": r["host"], "cookie": name})
+    # Salty2FA exfil shape (DE-M365-015): a POST with a body to /<5-6 digits>.php on a
+    # host no brand owns.
+    numeric_php = sorted(
+        {
+            r["host"]
+            for r in reqs
+            if r["method"] == "POST"
+            and r["post"]
+            and _NUMERIC_PHP.search(r["path"])
+            and site(r["host"]) not in data.allowlisted
+            and not brand_owner(r["host"], data.brands)
+        }
+    )
     return {
+        "numeric_php_posts": len(numeric_php),
+        "numeric_php_hosts": numeric_php[:10],
         "ms_clone_pages": len(clone_pages),
         "ms_clone_page_details": clone_pages[:10],
         "ms_markers": sorted(set(markers_seen)),
