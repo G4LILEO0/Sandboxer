@@ -446,11 +446,13 @@ BEHAVIOUR_RULES = [
         "critical",
         ["etherhiding", "web3", "obfuscation"],
         ["T1102.001", "T1027", "T1059.007"],
-        "A non-dApp page read a smart contract and then ran a large decoded string through "
-        "eval/Function: the contract's answer is the next-stage script (ClearFake / "
-        "EtherHiding). On an allowlisted site it also needs a fake update/CAPTCHA lure.",
+        "A page read a smart contract whose answer was a kilobyte-sized string, and that "
+        "string (or its base64 layer) became eval/Function code: the contract is the "
+        "next-stage script store (ClearFake / EtherHiding). Without the direct link it "
+        "needs 1 KB+ of code-only exec (innerHTML/document.write do not count), and on an "
+        "allowlisted site a fake update/CAPTCHA lure.",
         {"fact": "web3.rpc_result_executed", "op": "eq", "value": True},
-        ["web3.rpc_calls", "js.dynamic_exec_max_len", "final.url"],
+        ["web3.rpc_calls", "web3.rpc_large_string_results", "js.code_exec_max_len", "final.url"],
     ),
     _rule(
         "web3_known_malicious_contract",
@@ -680,9 +682,9 @@ BEHAVIOUR_RULES = [
         "runtime (packed code that only appears after decoding).",
         {
             "all": [
-                {"fact": "js.dynamic_exec_count", "op": "gte", "value": 2},
-                {"fact": "js.dynamic_exec_max_len", "op": "gt", "value": 1024},
-                {"fact": "js.dynamic_exec_max_entropy", "op": "gt", "value": 4.5},
+                {"fact": "js.code_exec_count", "op": "gte", "value": 2},
+                {"fact": "js.code_exec_max_len", "op": "gt", "value": 1024},
+                {"fact": "js.code_exec_max_entropy", "op": "gt", "value": 4.5},
             ]
         },
         ["js.dynamic_exec_count", "final.url"],

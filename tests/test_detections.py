@@ -1048,12 +1048,27 @@ def test_consentfix_needs_first_party_loopback_and_a_foreign_origin():
     )
 
 
-def _rpc(host="bsc-dataseed.binance.org", to="0x1111111111111111111111111111111111111111"):
+def _rpc(host="bsc-dataseed.binance.org", to="0x1111111111111111111111111111111111111111",
+         result=None):
     body = (
         '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":'
         '[{"to":"' + to + '","data":"0x6d4ce63c"},"latest"]}'
     )
-    return [_req(f"https://{host}/", "POST", post=body)]
+    resp = '{"jsonrpc":"2.0","id":1,"result":"' + result + '"}' if result else ""
+    return [_req(f"https://{host}/", "POST", post=body, body=resp)]
+
+
+def _abi_string_result(text):
+    """An eth_call return holding one ABI-encoded dynamic string."""
+    data = text.encode()
+    pad = b"\0" * ((32 - len(data) % 32) % 32)
+    return "0x" + ((32).to_bytes(32, "big") + len(data).to_bytes(32, "big") + data + pad).hex()
+
+
+# A benign stand-in for a contract-stored stage: ~1 KB of inert script text.
+_STAGE = "console.log('stage marker');var a=[1,2,3];" * 24
+_STAGE_B64 = __import__("base64").b64encode(_STAGE.encode()).decode()
+_WORD_RESULT = "0x" + "00" * 31 + "2a"  # one 32-byte word: a price, a balance
 
 
 def test_web3_rpc_from_non_wallet_page_fires_and_wallet_app_is_quiet():
@@ -1097,33 +1112,62 @@ def test_fake_update_banner_on_dapp_is_not_critical():
     assert "fake_browser_update" in _hits(clearfake)
 
 
-_BIG_EXEC = {"exec": {"count": 2, "max_len": 6000, "max_entropy": 5.4}}
+# innerHTML/document.write markup counts toward exec.max_len but not code_max_len.
+_MARKUP_EXEC = {"exec": {"count": 40, "max_len": 9000, "max_entropy": 4.8}}
+_BIG_CODE = {"exec": {"count": 2, "max_len": 6000, "max_entropy": 5.4,
+                      "code_count": 2, "code_max_len": 6000, "code_max_entropy": 5.4}}  # noqa: E501
 
 
-def test_etherhiding_payload_executed_fires_and_small_eval_is_quiet():
-    """DE-W3B-002: chain read + large runtime-decoded code on a non-dApp page."""
+def test_price_widget_rpc_plus_innerhtml_is_quiet():
+    """L2-01: a read-only chain widget (price ticker, ENS lookup) on a page that sets a
+    lot of innerHTML is not 'payload executed': markup is not code."""
+    data = _cap("https://news.example/", har=_rpc(result=_WORD_RESULT), jsapi=_MARKUP_EXEC)
+    assert "etherhiding_payload_executed" not in _hits(data)
+
+
+def test_rpc_string_result_executed_fires_on_allowlisted():
+    """L2-01: the contract answers with a kilobyte string whose base64 layer is the code
+    later passed to eval: linked, so no allowlist or lure condition applies."""
+    jsapi = {"exec": {**_BIG_CODE["exec"], "code_samples": [_STAGE]}}
+    data = _cap("https://www.bigblog.com/", har=_rpc(result=_abi_string_result(_STAGE_B64)),
+                jsapi=jsapi, allowlisted=["bigblog.com"])  # noqa: E501
+    web3 = build_facts(data)["web3"]
+    assert web3["rpc_large_string_results"] == 1
+    assert web3["rpc_result_linked_exec"] is True
+    assert "_rpc_large_strings" not in web3
+    assert "etherhiding_payload_executed" in _hits(data)
+
+
+def test_etherhiding_payload_executed_fallback_and_small_answers():
+    """Without a direct link: large string answer + 1 KB+ of code-only exec."""
+    big = _rpc(result=_abi_string_result(_STAGE))
     assert "etherhiding_payload_executed" in _hits(
-        _cap("https://compromised.example/", har=_rpc(), jsapi=_BIG_EXEC)
+        _cap("https://compromised.example/", har=big, jsapi=_BIG_CODE)
     )
-    small = {"exec": {"count": 1, "max_len": 60, "max_entropy": 2.1}}
+    # Word-sized answers (a dApp's page-load reads) never escalate, even with code exec.
     assert "etherhiding_payload_executed" not in _hits(
-        _cap("https://compromised.example/", har=_rpc(), jsapi=small)
+        _cap("https://compromised.example/", har=_rpc(result=_WORD_RESULT), jsapi=_BIG_CODE)
     )
-    # A dApp that also evals large code (bundler chunks) stays quiet.
-    dapp = _page("https://dapp.example/", "DEX", "Connect wallet")
-    assert "etherhiding_payload_executed" not in _hits(
-        _cap("https://dapp.example/", [dapp], har=_rpc(), jsapi=_BIG_EXEC)
-    )
-
-
-def test_etherhiding_payload_on_allowlisted_site_needs_a_lure():
+    # On an allowlisted site the fallback also needs a lure page.
     blog = "https://www.bigblog.com/"
-    bare = _cap(blog, har=_rpc(), jsapi=_BIG_EXEC, allowlisted=["bigblog.com"])
+    bare = _cap(blog, har=big, jsapi=_BIG_CODE, allowlisted=["bigblog.com"])
     assert "etherhiding_payload_executed" not in _hits(bare)
     overlay = _page(blog, "Blog", "Your browser is out of date. Update Chrome")
-    lured = _cap("https://www.bigblog.com/", [overlay], har=_rpc(), jsapi=_BIG_EXEC,
-                 allowlisted=["bigblog.com"])  # noqa: E501
+    lured = _cap(blog, [overlay], har=big, jsapi=_BIG_CODE, allowlisted=["bigblog.com"])
     assert "etherhiding_payload_executed" in _hits(lured)
+
+
+def test_large_string_answer_overrides_dapp_ui_and_iframe_wording_does_not_count():
+    """A kilobyte string answer is EtherHiding's shape even on a page with wallet UI; and
+    'connect wallet' inside a third-party iframe does not make the page a dApp."""
+    dapp = _page("https://dapp.example/", "DEX", "Connect wallet")
+    big = _rpc(result=_abi_string_result(_STAGE))
+    assert build_facts(_cap("https://dapp.example/", [dapp], har=big))["web3"]["etherhiding_rpc"]
+    assert not build_facts(_cap("https://dapp.example/", [dapp], har=_rpc()))["web3"]["etherhiding_rpc"]  # noqa: E501
+    page = _page("https://blog.example/", "Blog", "Recipes")
+    page["frames"].append({"url": "https://ads.example/w", "title": "", "text": "Connect wallet",
+                           "forms": [], "iframes": []})  # noqa: E501
+    assert build_facts(_cap("https://blog.example/", [page], har=_rpc()))["web3"]["etherhiding_rpc"]
 
 
 def test_web3_known_malicious_contract_fires():
@@ -1365,10 +1409,34 @@ def test_script_posted_credentials_with_brand_prompt_fires_on_opaque_body():
 
 
 def test_runtime_dynamic_execution_fires_and_small_evals_are_quiet():
-    jsapi = {"exec": {"count": 3, "max_len": 4000, "max_entropy": 5.2}}
+    jsapi = {"exec": {"count": 3, "max_len": 4000, "max_entropy": 5.2,
+                      "code_count": 3, "code_max_len": 4000, "code_max_entropy": 5.2}}  # noqa: E501
     assert "runtime_dynamic_execution" in _hits(_cap("https://x.example/", jsapi=jsapi))
     small = {"exec": {"count": 1, "max_len": 50, "max_entropy": 2.0}}
     assert "runtime_dynamic_execution" not in _hits(_cap("https://x.example/", jsapi=small))
+
+
+def test_runner_keeps_code_exec_apart_from_markup_sinks(tmp_path):
+    """L2-01 capture side: innerHTML/document.write feed exec.* but not exec.code_*."""
+    from types import SimpleNamespace
+
+    from sandbox.runner.capture import Capture
+
+    (tmp_path / "scripts").mkdir()
+    stub = SimpleNamespace(jsapi={}, dynamic_scripts=0, out=tmp_path)
+    Capture._on_jsapi(stub, "js_exec", {"api": "innerHTML", "len": 9000, "entropy": 4.9,
+                                        "code": "<div>" * 1800})  # noqa: E501
+    Capture._on_jsapi(stub, "js_exec", {"api": "eval", "len": 300, "entropy": 4.1,
+                                        "code": "x" * 300})  # noqa: E501
+    ex = stub.jsapi["exec"]
+    assert (ex["count"], ex["max_len"]) == (2, 9000)
+    assert (ex["code_count"], ex["code_max_len"]) == (1, 300)
+    assert ex["code_samples"] == ["x" * 300]
+
+
+def test_runtime_dynamic_execution_ignores_innerhtml_markup():
+    """L2-01: 1 KB+ high-entropy innerHTML (inline SVG, templated markup) is not code."""
+    assert "runtime_dynamic_execution" not in _hits(_cap("https://x.example/", jsapi=_MARKUP_EXEC))
 
 
 def test_html_smuggling_binary_blob_fires_and_csv_export_is_quiet():

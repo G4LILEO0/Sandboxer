@@ -128,10 +128,12 @@ INIT_SCRIPT = r"""
     } catch (x) { return 0; }
   };
   let execCount = 0;
+  let codeCount = 0;  // separate budget: markup sinks must not starve eval/Function
   const execSink = (api, arg) => {
     const s = typeof arg === 'string' ? arg : '';
     if (s.length < 24) return;
-    if (execCount++ < 400) send('js_exec', { api, len: s.length, entropy: entropy(s), code: s.slice(0, 200000), script_url: scriptUrl() });
+    const isCode = api === 'eval' || api === 'Function' || api === 'setTimeout' || api === 'setInterval';
+    if ((isCode ? codeCount++ : execCount++) < 400) send('js_exec', { api, len: s.length, entropy: entropy(s), code: s.slice(0, 200000), script_url: scriptUrl() });
   };
   try {
     const g = (typeof globalThis !== 'undefined') ? globalThis : window;
