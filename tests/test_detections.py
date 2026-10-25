@@ -1906,3 +1906,39 @@ def test_search_label_and_allowlisted_help_page_are_quiet():
     )
     assert build_facts(data)["navigation"]["protocol_handler_attempts"] == 0
     assert not {"protocol_handler_lure", "protocol_handler_attempt"} & _hits(data)
+
+
+# --- Salty2FA (DE-M365-015) ----------------------------------------------------------
+
+_MS_CLONE_HTML = (
+    "<title>Sign in to your account</title><input id=i0116 type=email>"
+    "<input type=password><input type=submit id=idSIButton9>"
+)
+
+
+def _salty(devtools=True, php="/482913.php"):
+    url = "https://portal.example-host.com/"
+    har = [
+        _req("https://challenges.cloudflare.com/turnstile/v0/api.js"),
+        _req("https://collect.example-host.ru" + php, "POST", post="request=YWJj&session=1"),
+    ]
+    blocked = [{"kind": "devtools_key", "key": "F12"}] if devtools else []
+    return _cap(
+        url,
+        [_page(url, "Sign in to your account", forms=[PASSWORD_FORM])],
+        har=har,
+        dom_html=[{"url": url, "html": _MS_CLONE_HTML}],
+        blocked_input=blocked,
+    )
+
+
+def test_salty2fa_four_signals_fire():
+    data = _salty()
+    facts = build_facts(data)
+    assert facts["idp"]["numeric_php_hosts"] == ["collect.example-host.ru"]
+    assert "salty2fa_kit" in _hits(data)
+
+
+def test_salty2fa_needs_every_signal():
+    assert "salty2fa_kit" not in _hits(_salty(devtools=False))
+    assert "salty2fa_kit" not in _hits(_salty(php="/submit.php"))
