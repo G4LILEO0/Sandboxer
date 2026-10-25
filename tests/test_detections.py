@@ -2032,3 +2032,34 @@ def test_fullscreen_video_and_update_article_are_quiet():
     assert "fake_os_update_overlay" not in _hits(_osu(article, fullscreen=0, keys=False))
     # The wording alone in full screen with nothing blocked or staged.
     assert "fake_os_update_overlay" not in _hits(_osu(_OS_UPDATE, keys=False))
+
+
+# --- browser-in-the-browser fake window (L2-NEW-4) -----------------------------------
+
+_BITB_HTML = (
+    '<div class="window"><div class="titlebar"><span class="dots"></span>'
+    '<div class="address">https://login.microsoftonline.com/common/oauth2/authorize</div>'
+    "</div><iframe src=/f></iframe></div>"
+)
+
+
+def test_bitb_fake_address_bar_with_live_password_fires():
+    url = "https://docs-share.example-host.com/"
+    frame = _page("https://docs-share.example-host.com/f", "Sign in", forms=[PASSWORD_FORM])
+    dom = [{"url": url, "html": _BITB_HTML}]
+    data = _cap(url, [_page(url, "Shared file"), frame], dom_html=dom)
+    bar = build_facts(data)["idp"]["fake_address_bar_details"]
+    assert bar[0]["shown_url"].startswith("https://login.microsoftonline.com/")
+    assert "browser_in_the_browser_window" in _hits(data)
+
+
+def test_bitb_tutorial_and_linked_login_are_quiet():
+    url = "https://blog.example-host.com/"
+    # A write-up showing the fake bar as an image/text, with no password input.
+    tutorial = _cap(url, [_page(url, "What is BitB?")], dom_html=[{"url": url, "html": _BITB_HTML}])
+    # A page linking to the real login (URL in href) next to its own password form.
+    linked = '<a href="https://login.microsoftonline.com/">Sign in with Microsoft</a>'
+    page = _page(url, "Log in", forms=[PASSWORD_FORM])
+    with_link = _cap(url, [page], dom_html=[{"url": url, "html": linked}])
+    assert "browser_in_the_browser_window" not in _hits(tutorial)
+    assert "browser_in_the_browser_window" not in _hits(with_link)

@@ -610,6 +610,18 @@ BEHAVIOUR_RULES = [
         {"fact": "forms.apps_script_credential", "op": "gt", "value": 0},
         ["forms.apps_script_credential_pages", "forms.script_posted_targets"],
     ),
+    # --- browser-in-the-browser fake window (L2-NEW-4) --------------------------------
+    _rule(
+        "browser_in_the_browser_window",
+        "high",
+        ["phishing", "bitb", "aitm"],
+        ["T1566.002", "T1036"],
+        "A page draws a real sign-in URL (login.microsoftonline.com, accounts.google.com...) "
+        "as element text, a fake address bar, and has a live password input: a "
+        "browser-in-the-browser popup (Sneaky2FA). Real pages put URLs in href.",
+        {"fact": "idp.fake_address_bar", "op": "gt", "value": 0},
+        ["idp.fake_address_bar_details", "final.url"],
+    ),
     # --- Salty2FA / Storm-1575 (DE-M365-015) ------------------------------------------
     _rule(
         "salty2fa_kit",
@@ -1297,6 +1309,7 @@ DEFAULT_WEIGHTS = {
     "device_code_handoff": 30,
     "cache_smuggled_payload": 55,
     "salty2fa_kit": 55,
+    "browser_in_the_browser_window": 50,
     "explorer_api_dead_drop": 30,
     "wallet_drainer_lure": 30,
     "apps_script_credential_page": 25,
