@@ -1,5 +1,7 @@
 """Browser SSO (ADM-1): authorization-code flow with PKCE, and who-am-I for the UI."""
 
+import hmac
+import re
 import secrets
 from typing import Any
 from urllib.parse import urlencode
@@ -13,6 +15,18 @@ from sandbox.api.deps import AppSettings, Db
 from sandbox.db.audit import record_audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+# Binds the sign-in to the browser that started it (login CSRF): the nonce in the signed
+# state must match this cookie on the callback.
+_NONCE_COOKIE = "sandbox_oidc_nonce"
+_UNSAFE_NEXT = re.compile(r"[\\\x00-\x1f\x7f]")
+
+
+def safe_next(value: str) -> str:
+    """A same-site path to return to after sign-in, or /ui/. Browsers treat ``/\\host``
+    like ``//host``, so backslashes and control characters are refused too."""
+    if not value.startswith("/") or value.startswith("//") or _UNSAFE_NEXT.search(value):
+        return "/ui/"
+    return value
 
 
 @router.get("/me")
@@ -32,14 +46,13 @@ async def login(request: Request, settings: AppSettings, next: str = "/ui/") -> 
     meta = await oidc.discovery(request.app.state.http, settings)
     verifier, challenge = oidc.pkce_pair()
     nonce = secrets.token_urlsafe(16)
-    safe_next = next if next.startswith("/") and not next.startswith("//") else "/ui/"
     state = tokens.issue(
         settings.secret_key.get_secret_value(),
         "oidc_state",
         600,
         v=verifier,
         n=nonce,
-        next=safe_next,
+        next=safe_next(next),
     )
     params = {
         "response_type": "code",
@@ -51,7 +64,17 @@ async def login(request: Request, settings: AppSettings, next: str = "/ui/") -> 
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     }
-    return RedirectResponse(f"{meta['authorization_endpoint']}?{urlencode(params)}")
+    redirect = RedirectResponse(f"{meta['authorization_endpoint']}?{urlencode(params)}")
+    redirect.set_cookie(
+        _NONCE_COOKIE,
+        nonce,
+        max_age=600,
+        httponly=True,
+        secure=settings.env == "prod",
+        samesite="lax",
+        path="/auth/",
+    )
+    return redirect
 
 
 @router.get("/callback")
@@ -70,6 +93,8 @@ async def callback(
         st = tokens.verify(secret, "oidc_state", state)
     except tokens.TokenError as exc:
         raise HTTPException(400, "Sign-in state is invalid or expired; try again") from exc
+    if not hmac.compare_digest(request.cookies.get(_NONCE_COOKIE, ""), str(st.get("n", ""))):
+        raise HTTPException(400, "Sign-in was not started in this browser; try again")
     http = request.app.state.http
     meta = await oidc.discovery(http, settings)
     form = {
@@ -103,7 +128,8 @@ async def callback(
         detail={"roles": roles},
     )
     await db.commit()
-    redirect = RedirectResponse(st.get("next", "/ui/"), status_code=303)
+    redirect = RedirectResponse(safe_next(st.get("next", "/ui/")), status_code=303)
+    redirect.delete_cookie(_NONCE_COOKIE, path="/auth/")
     redirect.set_cookie(
         settings.session_cookie_name,
         session,
