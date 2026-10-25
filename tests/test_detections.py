@@ -1764,3 +1764,59 @@ def test_library_inventory_parses_cdn_versions():
     names = {lib["name"]: lib["version"] for lib in libs}
     assert names.get("crypto-js") == "4.1.1"
     assert names.get("jquery") == "3.6.0"
+
+
+# --- cache smuggling (L2-NEW-1) ------------------------------------------------------
+
+
+def _img_resp(url, head: bytes, ctype="image/jpeg"):
+    import base64
+
+    return {
+        "request": {"method": "GET", "url": url, "headers": []},
+        "response": {
+            "status": 200,
+            "headers": [{"name": "Content-Type", "value": ctype}],
+            "content": {
+                "mimeType": ctype,
+                "encoding": "base64",
+                "text": base64.b64encode(head + b"\x00" * 64).decode(),
+            },
+        },
+    }
+
+
+_EXPLORER_STEPS = (
+    "Compliance check. Open File Explorer, click the address bar, paste the path with "
+    "Ctrl+V and press Enter."
+)
+
+
+def test_cache_smuggled_payload_fires_with_explorer_steps():
+    url = "https://checker.example-host.com/"
+    har = [_img_resp("https://checker.example-host.com/logo.jpg", b"PK\x03\x04")]
+    data = _cap(url, [_page(url, text=_EXPLORER_STEPS)], har=har)
+    facts = build_facts(data)
+    assert facts["downloads"]["mislabeled_image"] == 1
+    assert facts["downloads"]["mislabeled_images"][0]["magic"] == "zip"
+    assert {"cache_smuggled_payload", "mislabeled_image_payload"} <= _hits(data)
+
+
+def test_mislabeled_image_alone_is_only_the_booster():
+    url = "https://cdn.example-host.com/"
+    har = [_img_resp("https://cdn.example-host.com/a.png", b"MZ", "image/png")]
+    hits = _hits(_cap(url, [_page(url, text="Gallery")], har=har))
+    assert "mislabeled_image_payload" in hits
+    assert "cache_smuggled_payload" not in hits
+
+
+def test_real_images_and_typed_archives_are_not_mislabeled():
+    url = "https://cdn.example-host.com/"
+    har = [
+        _img_resp("https://cdn.example-host.com/a.webp", b"RIFF\x00\x00\x00\x00WEBP", "image/webp"),
+        _img_resp("https://cdn.example-host.com/b.jpg", b"\xff\xd8\xff\xe0"),
+        _img_resp("https://cdn.example-host.com/c.zip", b"PK\x03\x04", "application/zip"),
+    ]
+    data = _cap(url, [_page(url, text=_EXPLORER_STEPS)], har=har)
+    assert build_facts(data)["downloads"]["mislabeled_image"] == 0
+    assert not {"cache_smuggled_payload", "mislabeled_image_payload"} & _hits(data)

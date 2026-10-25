@@ -548,6 +548,39 @@ BEHAVIOUR_RULES = [
         {"fact": "clipboard.path_disguised", "op": "gt", "value": 0},
         ["clipboard.commands", "final.url"],
     ),
+    # --- cache smuggling (L2-NEW-1) ---------------------------------------------------
+    _rule(
+        "cache_smuggled_payload",
+        "high",
+        ["filefix", "cache-smuggling", "malware-download"],
+        ["T1027.006", "T1204.004", "T1564"],
+        "A response served as an image is really an archive or executable, and the page "
+        "gives FileFix/ClickFix steps: the browser cached a payload with no download "
+        "prompt for a later File Explorer or Run step to pick up.",
+        {
+            "all": [
+                {"fact": "downloads.mislabeled_image", "op": "gt", "value": 0},
+                {
+                    "any": [
+                        {"fact": "clipboard.path_disguised", "op": "gt", "value": 0},
+                        {"fact": "lure.run_dialog_instructions", "op": "gt", "value": 0},
+                        {"fact": "clipboard.clickfix_like", "op": "gt", "value": 0},
+                    ]
+                },
+            ]
+        },
+        ["downloads.mislabeled_images", "clipboard.commands", "lure.run_dialog_pages"],
+    ),
+    _rule(
+        "mislabeled_image_payload",
+        "medium",
+        ["cache-smuggling"],
+        ["T1027.006", "T1036"],
+        "A response served as an image is really an archive or executable (ZIP, RAR, 7z, "
+        "PE, CAB, OLE). Real CDNs that mislabel content serve another image type, not this.",
+        {"fact": "downloads.mislabeled_image", "op": "gt", "value": 0},
+        ["downloads.mislabeled_images", "final.url"],
+    ),
     # --- fake browser update (DE-DLD-005) -------------------------------------------
     _rule(
         "fake_browser_update",
@@ -1120,6 +1153,8 @@ DEFAULT_WEIGHTS = {
     "firstparty_app_loopback_authorize": 30,
     "device_code_phishing_lure": 55,
     "device_code_handoff": 30,
+    "cache_smuggled_payload": 55,
+    "mislabeled_image_payload": 30,
     "ms_session_cookie_foreign_host": 80,
     "web3_rpc_from_non_wallet_page": 55,
     "etherhiding_payload_executed": 80,
