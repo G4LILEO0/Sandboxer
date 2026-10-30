@@ -15,6 +15,12 @@ function displayValue(v) {
   return isDefangOn() && window.detector ? window.detector.defang(String(v)) : String(v);
 }
 
+// For prose that mentions hosts (warnings, hop notes): only the hosts are defanged.
+function displayText(v) {
+  if (v === null || v === undefined) return '';
+  return isDefangOn() && window.detector ? window.detector.defangText(String(v)) : String(v);
+}
+
 const VERDICT_CLASSES = new Set(['malicious', 'suspicious', 'clean', 'private']);
 
 function makeBadge(verdict) {
@@ -84,7 +90,7 @@ function renderWarnings(warnings) {
   for (const w of warnings) {
     const chip = document.createElement('span');
     chip.className = `warn-chip ${w.level || 'info'}`;
-    chip.textContent = w.message;
+    chip.textContent = displayText(w.message);
     wrap.appendChild(chip);
   }
   return wrap;
@@ -147,8 +153,25 @@ function renderUrlSection(norm) {
     wrap.appendChild(note);
   }
   if (u.redirect_chain && u.redirect_chain.length) {
-    const chainWrap = document.createElement('div'); chainWrap.className = 'redirect-chain small';
-    chainWrap.textContent = 'Redirect chain: ' + u.redirect_chain.map((h) => h.url || h.location).join('  ->  ');
+    // One line per hop, defanged like every other value on the card.
+    const chainWrap = document.createElement('ol'); chainWrap.className = 'redirect-chain small';
+    chainWrap.setAttribute('aria-label', 'Redirect chain');
+    for (const h of u.redirect_chain) {
+      const li = document.createElement('li');
+      const url = document.createElement('span'); url.className = 'monospace'; url.textContent = displayValue(h.url || h.location);
+      li.appendChild(url);
+      const notes = [];
+      if (h.status) notes.push(String(h.status));
+      if (h.via === 'meta-refresh') notes.push('meta refresh');
+      else if (h.via === 'refresh-header') notes.push('Refresh header');
+      if (h.title) notes.push(`title “${h.title}”`);
+      if (h.script_redirect) notes.push('may redirect with script');
+      if (h.blocked) notes.push(`blocked: ${h.blocked}`);
+      if (h.error) notes.push(`error: ${h.error}`);
+      if (h.note) notes.push(h.note);
+      if (notes.length) li.appendChild(document.createTextNode(`  ${displayText(notes.join(', '))}`));
+      chainWrap.appendChild(li);
+    }
     wrap.appendChild(chainWrap);
   }
   const warnEl = renderWarnings(u.warnings);
@@ -200,7 +223,12 @@ function renderCard(norm, opts = {}) {
     const scoreEl = document.createElement('div'); scoreEl.className = 'small scores';
     const parts = [];
     const stat = (label, value) => { const s = document.createElement('span'); const b = document.createElement('strong'); b.textContent = value; s.append(`${label} `, b); return s; };
-    parts.push(stat('VirusTotal', `${norm.score_summary.vt_malicious || 0} of ${norm.score_summary.vt_total_engines || 0} engines`));
+    // "0 of 0 engines" read like a clean result when VirusTotal had not answered at all.
+    let vtText = 'no answer';
+    if (norm.score_summary.vt_total_engines) vtText = `${norm.score_summary.vt_malicious || 0} of ${norm.score_summary.vt_total_engines} engines`;
+    else if (norm.vt_not_found) vtText = 'not seen before';
+    else if (norm.raw && norm.raw.vt && norm.raw.vt.ok) vtText = 'no engine results yet';
+    parts.push(stat('VirusTotal', vtText));
     if (norm.score_summary.abuseipdb_score !== undefined) parts.push(stat('AbuseIPDB confidence', `${norm.score_summary.abuseipdb_score}%`));
     scoreEl.replaceChildren(...parts);
     body.appendChild(scoreEl);
@@ -298,4 +326,4 @@ function renderCard(norm, opts = {}) {
   return container;
 }
 
-window.render = { renderCard, renderLoadingCard, renderErrorCard, escapeHtml, displayValue, makeBadge };
+window.render = { renderCard, renderLoadingCard, renderErrorCard, escapeHtml, displayValue, displayText, makeBadge };

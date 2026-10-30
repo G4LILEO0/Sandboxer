@@ -21,6 +21,9 @@ const TWO_LABEL_SUFFIXES = new Set([
   'com.tw', 'com.sg', 'com.hk', 'co.id', 'com.my',
 ]);
 
+const EXCESSIVE_REDIRECTS = 6;
+const GENERIC_SECOND_LEVELS =new Set(['com', 'net', 'org', 'co', 'gov', 'edu', 'ac', 'or', 'ne', 'go', 'mil']);
+
 function isIpLiteral(hostname) {
   if (!hostname) return false;
   const h = hostname.replace(/^\[/, '').replace(/\]$/, '');
@@ -35,6 +38,11 @@ function registrableDomain(hostname) {
   if (labels.length <= 2) return labels.join('.');
   const lastTwo = labels.slice(-2).join('.');
   if (TWO_LABEL_SUFFIXES.has(lastTwo)) return labels.slice(-3).join('.');
+  // Generic second levels under a country code (google.com.kw, bbc.co.ls): without this
+  // every google.com.<cc> hop was its own "domain" of com.<cc>.
+  if (/^[a-z]{2}$/.test(labels[labels.length - 1]) && GENERIC_SECOND_LEVELS.has(labels[labels.length - 2])) {
+    return labels.slice(-3).join('.');
+  }
   return lastTwo;
 }
 
@@ -55,15 +63,27 @@ function analyzeChain(hops) {
   const warnings = [];
   if (!hops || hops.length === 0) return warnings;
 
-  if (hops.length > 15) {
-    warnings.push({ level: 'warn', code: 'excessive_hops', message: `Excessive redirect hop count (${hops.length}) — possible cloaking/redirect-chain abuse` });
+  // The walk stops at 15 hops, so "more than 15" could never fire. Count the redirects
+  // actually taken; the "hop limit reached" marker is not a hop.
+  const redirects = hops.filter((h) => h.location && !h.note).length;
+  const hitLimit = hops.some((h) => h.note === 'hop limit reached');
+  if (hitLimit || redirects >= EXCESSIVE_REDIRECTS) {
+    warnings.push({ level: 'warn', code: 'excessive_hops', message: `${hitLimit ? 'Redirect walk hit its hop limit' : `${redirects} redirects`} — possible cloaking/redirect-chain abuse` });
   }
 
   hops.forEach((h, i) => {
     if (h.blocked) {
       warnings.push({ level: 'malicious', code: 'internal_hop', message: `Hop ${i + 1} points into an internal address range — walk stopped (${h.blocked})` });
     }
+    if (h.via === 'meta-refresh' || h.via === 'refresh-header') {
+      warnings.push({ level: 'info', code: 'refresh_redirect', message: `Hop ${i + 1} forwards with a ${h.via === 'meta-refresh' ? 'meta refresh tag' : 'Refresh header'}, not an HTTP redirect` });
+    }
   });
+
+  const last = hops[hops.length - 1];
+  if (last && last.script_redirect && !last.location) {
+    warnings.push({ level: 'info', code: 'script_redirect', message: 'The last page looks like it redirects with JavaScript, which this walk does not run: detonate it in the sandbox to see the final destination' });
+  }
 
   const parsedHops = hops.map((h) => ({ raw: h, url: parseHostSafe(h.url || h.location || '') })).filter((h) => h.url);
 

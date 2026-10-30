@@ -31,9 +31,21 @@ function fmt(value) {
   return window.render ? window.render.displayValue(value) : String(value);
 }
 
+function fmtText(value) {
+  if (value === null || value === undefined) return '';
+  return window.render && window.render.displayText ? window.render.displayText(value) : String(value);
+}
+
+// A cell that starts with = + - @ (or a tab/CR) is run as a formula by Excel and
+// Sheets. Page titles, tags and threat names come from attackers, so such cells get
+// a leading apostrophe, which spreadsheets show as plain text.
+function spreadsheetSafe(s) {
+  return /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+}
+
 function csvEscape(value) {
-  const s = value === null || value === undefined ? '' : String(value);
-  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  const s = spreadsheetSafe(value === null || value === undefined ? '' : String(value));
+  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
 
@@ -95,7 +107,7 @@ const FIELDS = [
   { id: 'final_url', label: 'Final URL', group: 'URL', value: (n) => (n.urls && n.urls.vt_final_url ? fmt(n.urls.vt_final_url) : null) },
   { id: 'page_title', label: 'Page title', group: 'URL', value: (n) => (n.urls && n.urls.vt_title) || null },
   { id: 'redirects', label: 'Redirect chain', group: 'URL', value: (n) => (n.urls && n.urls.redirect_chain && n.urls.redirect_chain.length ? n.urls.redirect_chain.map((h) => fmt(h.url || h.location)).join(' -> ') : null) },
-  { id: 'url_warnings', label: 'URL warnings', group: 'URL', value: (n) => (n.urls && n.urls.warnings && n.urls.warnings.length ? n.urls.warnings.map((w) => w.message).join('; ') : null) },
+  { id: 'url_warnings', label: 'URL warnings', group: 'URL', value: (n) => (n.urls && n.urls.warnings && n.urls.warnings.length ? n.urls.warnings.map((w) => fmtText(w.message)).join('; ') : null) },
 
   { id: 'file_type', label: 'File type', group: 'File', value: (n) => n.network.file_type || null },
   { id: 'file_size', label: 'File size', group: 'File', value: (n) => (has(n.network.file_size) ? String(n.network.file_size) : null) },
@@ -183,7 +195,7 @@ function renderOne(norm, template) {
   if (template.format === 'inline') {
     return [...shown.map((c) => `${c.label}: ${c.value ?? '-'}`), ...(note ? [note] : [])].join(' | ');
   }
-  if (template.format === 'values') return row.map((c) => (c.value ?? '').replace(/\t/g, ' ')).join('\t');
+  if (template.format === 'values') return row.map((c) => spreadsheetSafe((c.value ?? '').replace(/[\t\r\n]+/g, ' '))).join('\t');
   return [...shown.map((c) => `${c.label}: ${c.value ?? '-'}`), ...(note ? [note] : [])].join('\n');
 }
 
