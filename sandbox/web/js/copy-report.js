@@ -340,14 +340,27 @@ function mountTemplateEditor(root) {
 
 // --- Report basket ----------------------------------------------------------
 const ReportBasket = (function () {
+  // Kept in this browser so a reload or a closed tab does not lose the case notes.
+  // Raw vendor payloads are left out of storage: they are large, and the report
+  // fields come from the normalised values.
+  const KEY = 'ioc-report-basket';
   let items = [];
+  try { items = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { items = []; }
+  if (!Array.isArray(items)) items = [];
   const listeners = new Set();
 
   function keyOf(n) { return `${n.type}:${n.ioc}`; }
-  function notify() { listeners.forEach((cb) => { try { cb(items.slice()); } catch (e) { /* ignore */ } }); }
+  function persist() {
+    try { localStorage.setItem(KEY, JSON.stringify(items.map((n) => ({ ...n, raw: {} })))); } catch (e) { /* storage full or unavailable */ }
+  }
+  function notify() { persist(); listeners.forEach((cb) => { try { cb(items.slice()); } catch (e) { /* ignore */ } }); }
+  function has(norm) { return items.some((i) => keyOf(i) === keyOf(norm)); }
 
+  // A newer lookup of the same IoC replaces the stored one.
   function add(norm) {
-    if (!items.some((i) => keyOf(i) === keyOf(norm))) { items.push(norm); notify(); }
+    const i = items.findIndex((x) => keyOf(x) === keyOf(norm));
+    if (i >= 0) items[i] = norm; else items.push(norm);
+    notify();
   }
   function remove(norm) {
     items = items.filter((i) => keyOf(i) !== keyOf(norm));
@@ -371,7 +384,7 @@ const ReportBasket = (function () {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  return { add, remove, clear, list, subscribe, toMarkdown, toCSV, toJSON, downloadFile };
+  return { add, remove, clear, list, has, keyOf, subscribe, toMarkdown, toCSV, toJSON, downloadFile };
 })();
 
 window.copyReport = {

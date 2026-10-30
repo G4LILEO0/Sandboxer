@@ -163,6 +163,70 @@ async def virustotal_lookup(
     return _passthrough(status, body, "VirusTotal")
 
 
+# Pivots a card offers, per IoC type. Fetched only when the analyst asks (each one is
+# a VirusTotal request), and limited to names VirusTotal documents for that object;
+# premium-only ones come back as VirusTotal's own 403 on the card.
+VT_RELATIONSHIPS: dict[str, set[str]] = {
+    "ip": {"resolutions", "communicating_files", "downloaded_files", "referrer_files", "urls"},
+    "domain": {
+        "resolutions",
+        "subdomains",
+        "siblings",
+        "communicating_files",
+        "downloaded_files",
+        "referrer_files",
+        "urls",
+    },
+    "hash": {
+        "contacted_domains",
+        "contacted_ips",
+        "contacted_urls",
+        "dropped_files",
+        "execution_parents",
+        "itw_urls",
+    },
+    "url": {"last_serving_ip_address", "redirects_to", "redirecting_urls", "network_location"},
+}
+
+
+@router.get("/vt-relations/{ioc_type}/{relationship}/{value:path}")
+async def virustotal_relationship(
+    ioc_type: IocType,
+    relationship: str,
+    value: str,
+    principal: CurrentPrincipal,
+    settings: AppSettings,
+    http: Http,
+    limit: int = Query(10, ge=1, le=40),
+) -> JSONResponse:
+    """Related objects of an IoC (passive DNS, contacted hosts, dropped files ...)."""
+    if settings.vt_api_key is None:
+        raise _error(503, "vendor_not_configured", "SANDBOX_VT_API_KEY is not set")
+    if relationship not in VT_RELATIONSHIPS[ioc_type]:
+        allowed = ", ".join(sorted(VT_RELATIONSHIPS[ioc_type]))
+        raise _error(422, "invalid_relationship", f"For {ioc_type}: one of {allowed}")
+    if ioc_type == "url":
+        object_path = f"urls/{vt_url_id(value)}"
+    else:
+        object_path = f"{_VT_PATHS[ioc_type]}/{quote(_validate(ioc_type, value), safe='')}"
+    log.info(
+        "intel lookup",
+        extra={
+            "vendor": "virustotal",
+            "type": ioc_type,
+            "relationship": relationship,
+            "by": principal.subject,
+        },
+    )
+    status, body = await _vendor_get(
+        http,
+        f"{VT_BASE}/{object_path}/{relationship}",
+        headers={"x-apikey": settings.vt_api_key.get_secret_value()},
+        params={"limit": limit},
+    )
+    return _passthrough(status, body, "VirusTotal")
+
+
 @router.get("/abuseipdb/{ip}")
 async def abuseipdb_lookup(
     ip: str, principal: CurrentPrincipal, settings: AppSettings, http: Http

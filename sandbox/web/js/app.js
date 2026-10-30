@@ -62,12 +62,21 @@ function renderChips(detected) {
   });
 }
 
+const VENDOR_NAMES = { vt: 'VirusTotal', abuseipdb: 'AbuseIPDB' };
+
+// Queue state while waiting; otherwise today's usage once it passes 80% of the free
+// tier's daily quota (counted in this browser only).
 function updateRateStatus(vendor, info) {
-  if (info.queued > 0 || info.waitMs > 0) {
-    rateStatusEl.textContent = `${vendor}: ${info.queued} queued, retry in ${Math.ceil(info.waitMs / 1000)}s`;
-  } else {
-    rateStatusEl.textContent = '';
+  const name = VENDOR_NAMES[vendor] || vendor;
+  if (info.waitMs > 0) {
+    rateStatusEl.textContent = `${name}${info.limited ? ' rate limit' : ''}: ${info.queued} queued, retry in ${Math.ceil(info.waitMs / 1000)}s`;
+    return;
   }
+  const warnings = Object.keys(VENDOR_NAMES).map((v) => {
+    const u = window.RateLimiter.usage(v);
+    return u.limitPerDay !== Infinity && u.used >= 0.8 * u.limitPerDay ? `${VENDOR_NAMES[v]}: ${u.used} of ${u.limitPerDay} lookups used today` : null;
+  }).filter(Boolean);
+  rateStatusEl.textContent = warnings.join(' · ');
 }
 window.RateLimiter.subscribe(updateRateStatus);
 
@@ -223,6 +232,17 @@ function detonateTarget(norm) {
   return (btn) => window.sandbox.detonateFromCard(target, btn);
 }
 
+// "Look these up" on a pivot list: add the values the box does not have yet and run
+// the batch again (results already looked up come from the cache).
+function lookUpMore(values) {
+  const have = new Set(detectAll(inputEl.value).map((d) => `${d.type}:${d.value}`));
+  const fresh = values.filter((v) => { const d = window.detector.detectIoC(String(v)); return !have.has(`${d.type}:${d.value}`); });
+  if (!fresh.length) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  inputEl.value = `${inputEl.value.replace(/\s+$/, '')}\n${fresh.join('\n')}`.replace(/^\n/, '');
+  analyzeBtn.click();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 async function analyzeBatch(detected) {
   resultsEl.innerHTML = '';
   currentSlots = [];
@@ -250,6 +270,7 @@ async function analyzeBatch(detected) {
           duplicateCount: slot.group.count,
           onRefresh: () => { runAndRender(true); },
           onDetonate: detonateTarget(norm),
+          onLookUp: lookUpMore,
         });
         slot.node.replaceWith(card);
         slot.node = card;
@@ -315,6 +336,8 @@ inputEl.addEventListener('input', () => {
 // --- Report basket panel wiring ---------------------------------------------
 function renderBasketList(items) {
   basketCountEl.textContent = String(items.length);
+  const inBasket = new Set(items.map((n) => window.copyReport.ReportBasket.keyOf(n)));
+  resultsEl.querySelectorAll('.add-report[data-key]').forEach((btn) => window.render.setAddedState(btn, inBasket.has(btn.dataset.key)));
   basketListEl.innerHTML = '';
   items.forEach((n) => {
     const row = document.createElement('div');

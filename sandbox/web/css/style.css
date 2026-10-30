@@ -242,7 +242,20 @@ details > summary:hover { color: var(--ink); }
 
 .url-section { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--sunken); border-radius: var(--r-sm); }
 .url-section .field-row { grid-template-columns: 170px minmax(0, 1fr) auto; }
-.redirect-chain { word-break: break-all; }
+.redirect-chain { word-break: break-all; margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 2px; }
+.redirect-chain li { color: var(--muted); }
+.redirect-chain li .monospace { color: var(--ink); }
+
+/* Pivots: VirusTotal related objects and sandbox history (js/pivots.js) */
+.pivots { display: flex; flex-direction: column; gap: 6px; }
+.pivot-bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.pivot-bar .copy-btn[aria-pressed="true"] { color: var(--ink); border-color: var(--line-strong); background: var(--sunken); }
+.pivot-results { display: flex; flex-direction: column; gap: 8px; }
+.pivot-box { padding: 8px 10px; background: var(--sunken); border-radius: var(--r-sm); display: flex; flex-direction: column; gap: 4px; }
+.pivot-list { margin: 0; padding-left: 18px; max-height: 240px; overflow: auto; word-break: break-all; }
+.pivot-list li.flagged .monospace { color: var(--mal); font-weight: 500; }
+.details-box > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.details-box[open] > summary { margin-bottom: 6px; }
 .warnings { display: flex; flex-wrap: wrap; gap: 6px; }
 .warn-chip { padding: 1px 8px; border-radius: var(--r-sm); font-size: 12px; }
 .warn-chip.info { background: var(--info-soft); color: var(--info); }

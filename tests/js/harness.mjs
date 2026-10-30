@@ -19,12 +19,18 @@ function memoryStorage() {
 }
 
 export function load(...scripts) {
+  return loadWith({}, ...scripts);
+}
+
+// As load(), with localStorage already holding `storage` (a page reload).
+export function loadWith(storage, ...scripts) {
   const context = {
     console, URL, URLSearchParams, TextEncoder, TextDecoder, atob, btoa, setTimeout, clearTimeout,
     escape, unescape, encodeURIComponent, decodeURIComponent,
     localStorage: memoryStorage(),
     document: { getElementById: () => null },
   };
+  for (const [k, v] of Object.entries(storage)) context.localStorage.setItem(k, v);
   context.window = context;
   vm.createContext(context);
   for (const name of scripts) {

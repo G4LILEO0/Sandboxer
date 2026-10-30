@@ -58,6 +58,7 @@ const RateLimiter = (function () {
     vt: { perMinute: Infinity, perDay: 500 },
     abuseipdb: { perMinute: Infinity, perDay: 1000 },
   };
+  const RETRY_DELAYS_MS = [15000, 30000, 60000];
   const queues = {};
   const recentCalls = {};
   const processing = {};
@@ -94,11 +95,25 @@ const RateLimiter = (function () {
       recentCalls[vendor].push(Date.now());
       Cache.incrDailyCount(vendor);
       notify(vendor, { queued: queues[vendor].length, waitMs: 0 });
+      let result;
       try {
-        item.resolve(await item.fn());
+        result = await item.fn();
       } catch (e) {
-        item.resolve({ ok: false, error: e.message });
+        result = { ok: false, error: e.message };
       }
+      // A 429 is the vendor's per-minute limit (VirusTotal's free tier allows 4):
+      // wait and retry, showing the countdown, instead of failing the card.
+      item.retries = item.retries || 0;
+      if (result && result.status === 429 && item.retries < RETRY_DELAYS_MS.length) {
+        const waitMs = RETRY_DELAYS_MS[item.retries++];
+        queues[vendor].unshift(item);
+        for (let left = waitMs; left > 0; left -= 1000) {
+          notify(vendor, { queued: queues[vendor].length, waitMs: left, limited: true });
+          await sleep(Math.min(1000, left));
+        }
+        continue;
+      }
+      item.resolve(result);
     }
     processing[vendor] = false;
   }
