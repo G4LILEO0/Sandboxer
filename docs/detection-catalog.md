@@ -2,7 +2,7 @@
 
 _Master list of every built-in detection on the `detection-rules` branch. Regenerated 2026-10-25 from `sandbox/rules/defaults.py`; keep it in step._
 
-Totals: **74 built-in behaviour rules, 10 web YARA rules.** Suricata comes from ET Open / local rule files (not listed); feed matches score `indicator` hits. Round legend: **baseline** = before the detection-spec work; **R1 / R2 / R3 / R4** = added in that round; **LR1** = live-sample round 1 ([live-round-1.md](live-round-1.md)). The *Changes* column marks rules modified in rounds 3, 4 and LR1. Spec IDs: `DE-*` from detection-spec.md / -loop1.md, `L2-NEW-*` from detection-spec-loop2.md, `LR1-*` from live-round-1.md.
+Totals: **75 built-in behaviour rules, 10 web YARA rules.** Suricata comes from ET Open / local rule files (not listed); feed matches score `indicator` hits. Round legend: **baseline** = before the detection-spec work; **R1 / R2 / R3 / R4 / R5** = added in that round; **LR1** = live-sample round 1 ([live-round-1.md](live-round-1.md)). The *Changes* column marks rules modified in rounds 3, 4 and LR1. Spec IDs: `DE-*` from detection-spec.md / -loop1.md, `L2-NEW-*` from detection-spec-loop2.md, `LR1-*` from live-round-1.md.
 
 ## Behaviour rules
 
@@ -30,6 +30,7 @@ Scored by the rule's own weight in `DEFAULT_WEIGHTS` when set, else `severity:<l
 | `seed_phrase_harvest` | — | Web3 | A page outside any known wallet's domains asks for a wallet recovery (seed) phrase. | (facts from build_facts) | high/60 | T1566.002,T1056.003 | baseline |  | test_seed_phrase_harvest_and_real_wallet |
 | `payment_card_form` | — | Phishing | A page outside known brands and allowlisted sites asks for card details. On its own this is any checkout page; it adds weight to other findings. | (facts from build_facts) | low/10 | — | baseline |  | test_plain_checkout_is_only_a_low_signal |
 | `internal_network_probe` | — | Network | The page tried to reach internal or cloud-metadata addresses (blocked). | (facts from build_facts) | medium/25 | T1046 | baseline |  | test_fixture_capture_is_malicious |
+| `local_port_scan` | — | Network | The page tried several ports on localhost or the LAN (WebSocket, fetch/image or WebRTC TURN/STUN), often remote-access ports such as RDP, VNC, SSH or TeamViewer. Anti-fraud profilers (ThreatMetrix), desktop-app helper ports and allowlisted sites are left out. | network.local_probe | medium/25 | T1046,T1592.004 | R5 |  | test_local_port_scan_fires_on_remote_access_probe, test_local_port_scan_quiet_on_fraud_vendor_dev_and_apps, test_local_port_scan_over_webrtc_turn |
 | `hidden_iframe` | — | Phishing | The page embeds an invisible iframe. | (facts from build_facts) | low/10 | — | baseline |  | test_hidden_iframe, test_hidden_iframe_ignores_blank_same_site_and_allowlisted |
 | `password_over_http` | — | Phishing | A password form is served or submitted over plain http. | (facts from build_facts) | low/10 | — | baseline |  | test_fixture_capture_is_malicious |
 | `telegram_bot_exfil` | DE-PHI-001 | Exfil | The page called the Telegram Bot API (api.telegram.org/bot<token>/sendMessage or similar) from the browser: phishing kits use a Telegram bot as their drop. | exfil.telegram (HAR) | critical/80 | T1567,T1102.002,T1056.003 | R1 |  | test_telegram_bot_exfil_fires_and_widget_is_quiet |

@@ -345,6 +345,43 @@ BEHAVIOUR_RULES = [
         {"fact": "network.blocked_internal", "op": "gt", "value": 0},
         ["network.blocked"],
     ),
+    # --- browser-based local port scanning ------------------------------------------
+    _rule(
+        "local_port_scan",
+        "medium",
+        ["fingerprinting", "local-port-scan"],
+        ["T1046", "T1592.004"],
+        "The page tried several ports on localhost or the LAN (WebSocket, fetch/image or "
+        "WebRTC TURN/STUN), often remote-access ports such as RDP, VNC, SSH or "
+        "TeamViewer: browser-based local port scanning, used to fingerprint visitors or "
+        "spot remote-access tools. Known anti-fraud scripts (ThreatMetrix), a desktop "
+        "app's own helper ports and allowlisted sites are left out.",
+        {
+            "all": [
+                {
+                    "any": [
+                        {
+                            "fact": "network.local_probe.remote_access_count",
+                            "op": "gte",
+                            "value": 2,
+                        },
+                        {"fact": "network.local_probe.port_count", "op": "gte", "value": 5},
+                        {"fact": "network.local_probe.host_count", "op": "gte", "value": 10},
+                    ]
+                },
+                {"not": {"fact": "network.local_probe.fraud_vendor", "op": "exists"}},
+                {"not": {"fact": "network.local_probe.local_app", "op": "exists"}},
+                {"not": {"fact": "final.allowlisted", "op": "eq", "value": True}},
+            ]
+        },
+        [
+            "network.local_probe.remote_access",
+            "network.local_probe.ports",
+            "network.local_probe.hosts",
+            "network.local_probe.channels",
+            "network.local_probe.scripts",
+        ],
+    ),
     _rule(
         "hidden_iframe",
         "low",
