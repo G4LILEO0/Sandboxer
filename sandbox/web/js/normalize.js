@@ -147,7 +147,10 @@ function mergeVendorData(norm, vendorName, res) {
     if (d.usageType) norm.network.usage_type = d.usageType;
     norm.score_summary.abuseipdb_total_reports = d.totalReports || 0;
     norm.score_summary.abuseipdb_distinct_reporters = d.numDistinctUsers || 0;
-    if (d.lastReportedAt) norm.last_seen = norm.last_seen || d.lastReportedAt;
+    if (d.lastReportedAt) {
+      norm.last_seen = norm.last_seen || d.lastReportedAt;
+      norm.network.abuse_last_reported = d.lastReportedAt;
+    }
     norm.vendor_links.abuseipdb = `https://www.abuseipdb.com/check/${encodeURIComponent(norm.ioc)}`;
 
     if (Array.isArray(d.reports) && d.reports.length) {

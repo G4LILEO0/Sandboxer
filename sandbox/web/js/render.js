@@ -64,6 +64,71 @@ function capList(values, n) {
   return [...values.slice(0, n), `and ${values.length - n} more`];
 }
 
+function fmtEpochOrIso(v) {
+  if (!v) return null;
+  const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
+  return isNaN(d) ? String(v) : d.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+}
+
+// The rest of what the vendors returned (spec 4.1 / 4.2), folded away under
+// "More details" so the card stays scannable.
+function renderDetails(norm) {
+  const n = norm.network || {};
+  const s = norm.score_summary || {};
+  const u = norm.urls || {};
+  const votes = s.vt_community_votes;
+  const ranks = n.popularity_ranks && Object.entries(n.popularity_ranks).map(([k, v]) => `${k} #${v.rank}`);
+  const sig = n.signature_info || {};
+  const packers = n.packers && Object.entries(n.packers).map(([k, v]) => `${v} (${k})`);
+  const sandboxes = n.sandbox_verdicts && Object.entries(n.sandbox_verdicts).map(([k, v]) => `${k}: ${v.category}${v.malware_names ? ` (${v.malware_names.join(', ')})` : ''}`);
+  const rows = [
+    fieldRow('VT reputation', s.vt_reputation),
+    fieldRow('Community votes', votes ? `${votes.malicious || 0} malicious, ${votes.harmless || 0} harmless` : null),
+    fieldRow('VT suspicious', s.vt_suspicious ? `${s.vt_suspicious} engines` : null),
+    fieldRow('Flagged by', capList(n.flagging_engines, 12)),
+    fieldRow('Threat names', n.threat_names),
+    fieldRow('Popularity', ranks),
+    fieldRow('Network', n.network_range, { copyable: true }),
+    fieldRow('Continent', n.continent),
+    fieldRow('Registry', n.regional_internet_registry),
+    fieldRow('Registrar', n.registrar),
+    fieldRow('AbuseIPDB reports', s.abuseipdb_total_reports !== undefined && norm.vendor_links.abuseipdb ? `${s.abuseipdb_total_reports} from ${s.abuseipdb_distinct_reporters || 0} reporters` : null),
+    fieldRow('Last reported', n.abuse_last_reported ? fmtEpochOrIso(n.abuse_last_reported) : null),
+    fieldRow('Owner domain', n.domain),
+    fieldRow('Allowlisted', norm.vendor_links.abuseipdb ? (n.is_whitelisted ? 'yes (AbuseIPDB)' : null) : null),
+    fieldRow('Tor', n.tor_mentioned_in_reports ? 'mentioned in AbuseIPDB reports' : null),
+    fieldRow('VT final URL', u.vt_final_url && u.vt_final_url !== norm.ioc ? displayValue(u.vt_final_url) : null),
+    fieldRow('VT page title', u.vt_title),
+    fieldRow('Magic', n.magic),
+    fieldRow('Signed by', sig.signers || null),
+    fieldRow('Signature', sig.verified || null),
+    fieldRow('Product', [sig.product, sig.description, sig.copyright].filter(Boolean).join(' · ') || null),
+    fieldRow('Packers', packers),
+    fieldRow('Sandboxes', sandboxes),
+  ].filter(Boolean);
+  const whois = n.whois_raw;
+  if (!rows.length && !whois) return null;
+  const box = document.createElement('details'); box.className = 'details-box';
+  const summary = document.createElement('summary'); summary.textContent = 'More details';
+  const grid = document.createElement('div'); grid.className = 'fields';
+  rows.forEach((r) => grid.appendChild(r));
+  box.append(summary, grid);
+  if (whois) {
+    const pre = document.createElement('pre'); pre.textContent = whois;
+    const w = document.createElement('details'); w.className = 'details-box';
+    const ws = document.createElement('summary'); ws.textContent = 'WHOIS';
+    w.append(ws, pre);
+    box.appendChild(w);
+  }
+  return box;
+}
+
+// Kept in step with the basket, so removing an IoC there re-enables its card's button.
+function setAddedState(btn, added) {
+  btn.textContent = added ? 'In report ✓' : 'Add to report';
+  btn.disabled = added;
+}
+
 function renderLoadingCard(ioc, type) {
   const c = document.createElement('div');
   c.className = 'card loading';
@@ -272,6 +337,9 @@ function renderCard(norm, opts = {}) {
   ].forEach((row) => { if (row) fields.appendChild(row); });
   body.appendChild(fields);
 
+  const more = renderDetails(norm);
+  if (more) body.appendChild(more);
+
   if (norm.network.report_categories && Object.keys(norm.network.report_categories).length) {
     const cats = document.createElement('div'); cats.className = 'small';
     cats.textContent = 'AbuseIPDB categories: ' + Object.entries(norm.network.report_categories).map(([k, v]) => `${k} (${v})`).join(', ');
@@ -302,6 +370,11 @@ function renderCard(norm, opts = {}) {
   }
   body.appendChild(links);
 
+  if (opts.onLookUp && window.pivots) {
+    const pivots = window.pivots.mountPivots(norm, opts.onLookUp);
+    if (pivots) body.appendChild(pivots);
+  }
+
   const actions = document.createElement('div'); actions.className = 'footer-actions';
 
   const copySummaryBtn = document.createElement('button'); copySummaryBtn.className = 'copy-btn'; copySummaryBtn.textContent = 'Copy';
@@ -315,11 +388,9 @@ function renderCard(norm, opts = {}) {
   actions.appendChild(copyRowBtn);
 
   const addBtn = document.createElement('button'); addBtn.className = 'copy-btn add-report'; addBtn.textContent = 'Add to report';
-  addBtn.onclick = () => {
-    window.copyReport.ReportBasket.add(norm);
-    addBtn.textContent = 'Added ✓';
-    addBtn.disabled = true;
-  };
+  addBtn.dataset.key = window.copyReport.ReportBasket.keyOf(norm);
+  addBtn.onclick = () => window.copyReport.ReportBasket.add(norm);
+  setAddedState(addBtn, window.copyReport.ReportBasket.has(norm));
   actions.appendChild(addBtn);
 
   if (opts.onDetonate) {
@@ -341,4 +412,4 @@ function renderCard(norm, opts = {}) {
   return container;
 }
 
-window.render = { renderCard, renderLoadingCard, renderErrorCard, escapeHtml, displayValue, displayText, makeBadge };
+window.render = { setAddedState, renderCard, renderLoadingCard, renderErrorCard, escapeHtml, displayValue, displayText, makeBadge };

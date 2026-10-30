@@ -293,3 +293,30 @@ def test_script_redirect_hint_ignores_lookalike_words():
         "<p>geolocation = enabled; if (a == location) {}</p>"
     )
     assert inspect_page("<script>location.replace('/x')</script>")["script_redirect"] is True
+
+
+async def test_vt_relationship_pivot(client):
+    calls = _use(client, lambda r: httpx.Response(200, json={"data": [], "meta": {"count": 0}}))
+    response = await client.get("/v1/intel/vt-relations/domain/resolutions/example.com?limit=5")
+    assert response.status_code == 200
+    assert str(calls[0].url) == (
+        "https://www.virustotal.com/api/v3/domains/example.com/resolutions?limit=5"
+    )
+    url = "https://public.example/a?b=1"
+    await client.get(f"/v1/intel/vt-relations/url/redirects_to/{quote(url, safe='')}")
+    assert calls[1].url.path == f"/api/v3/urls/{vt_url_id(url)}/redirects_to"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/intel/vt-relations/domain/comments/example.com",  # not offered
+        "/v1/intel/vt-relations/ip/resolutions/10.0.0.1",  # private address
+        "/v1/intel/vt-relations/hash/resolutions/" + "a" * 64,  # not a file relationship
+    ],
+)
+async def test_vt_relationship_pivot_refuses(client, path):
+    calls = _use(client, lambda r: httpx.Response(200, json={}))
+    response = await client.get(path)
+    assert response.status_code == 422
+    assert calls == []
