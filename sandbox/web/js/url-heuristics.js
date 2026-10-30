@@ -69,18 +69,61 @@ function checkOpenRedirectParams(parsed) {
   return warnings;
 }
 
+// Digits and symbols lookalikes use for letters: micros0ft, paypa1, g00gle, @pple.
+const LEET = { 0: 'o', 1: 'l', 3: 'e', 4: 'a', 5: 's', 7: 't', 8: 'b', '@': 'a', $: 's' };
+
+// Ordinary words one edit from a short brand name (finance/binance, apply/apple,
+// phase/chase), which used to be reported as typosquats.
+const NOT_LOOKALIKES = new Set(['finance', 'apply', 'apples', 'chose', 'phase', 'chaser', 'chasse', 'googly']);
+
+// Registrable names a brand really uses, so outlook.office365.com or
+// www.googleapis.com is not reported as a brand on a foreign domain.
+const BRAND_FAMILIES = {
+  microsoft: ['microsoft', 'office365', 'office', 'outlook', 'live', 'microsoftonline', 'sharepoint', 'azure', 'windows', 'msn', 'bing', 'skype', 'xbox'],
+  office365: ['microsoft', 'office365', 'office', 'outlook', 'live', 'microsoftonline'],
+  outlook: ['microsoft', 'office365', 'office', 'outlook', 'live', 'microsoftonline'],
+  google: ['google', 'googleapis', 'gstatic', 'youtube', 'gmail', 'googlemail', 'withgoogle', 'goo'],
+  apple: ['apple', 'icloud', 'mzstatic'],
+  amazon: ['amazon', 'amazonaws', 'aws', 'a2z', 'media-amazon', 'ssl-images-amazon'],
+  facebook: ['facebook', 'fb', 'fbcdn', 'meta', 'instagram', 'whatsapp'],
+  instagram: ['instagram', 'cdninstagram', 'facebook', 'fbcdn', 'meta'],
+  linkedin: ['linkedin', 'licdn'],
+  paypal: ['paypal', 'paypalobjects', 'paypal-community'],
+  dropbox: ['dropbox', 'dropboxusercontent', 'dropboxstatic'],
+};
+
+function ownerName(hostname) {
+  const reg = window.redirectCheck ? window.redirectCheck.registrableDomain(hostname) : hostname;
+  return String(reg).split('.')[0];
+}
+
 function checkLookalikeBrand(hostname) {
   const warnings = [];
-  const labels = hostname.toLowerCase().split('.');
-  for (const label of labels) {
-    // strip common separators used in lookalikes (micros0ft-login -> microsoft login words split on '-')
-    const parts = label.split(/[-0-9]+/).filter((p) => p.length >= 4);
-    for (const part of parts.concat([label.replace(/[^a-z]/g, '')])) {
+  const host = hostname.toLowerCase();
+  if (window.redirectCheck && window.redirectCheck.isIpLiteral(host)) return warnings;
+  const owner = ownerName(host); // "paypal" for www.paypal.com, "example" for paypal.example.com
+  const flagged = new Set();
+  for (const label of host.split('.')) {
+    const words = label.split(/[-_]+/).filter(Boolean);
+    for (const raw of new Set([...words, words.join('')])) {
+      const part = raw.replace(/[0-9@$]/g, (c) => LEET[c] || '').replace(/[^a-z]/g, '');
+      if (part.length < 4 || NOT_LOOKALIKES.has(part)) continue;
       for (const brand of COMMONLY_SPOOFED_BRANDS) {
-        if (part === brand) continue; // exact match to the real brand word is not itself suspicious
+        if (flagged.has(brand) || (BRAND_FAMILIES[brand] || [brand]).includes(owner)) continue;
+        if (part === brand && raw === part) {
+          // The brand's own word on someone else's domain: paypal-login.example,
+          // paypal.example.net, microsoft.secure-docs.example (combosquatting).
+          flagged.add(brand);
+          warnings.push({ level: 'warn', code: 'brand_in_foreign_domain', message: `Host "${host}" uses the brand name "${brand}" but is not on ${brand}'s own domain — possible combosquat/impersonation` });
+          continue;
+        }
         const dist = levenshtein(part, brand);
-        if (dist > 0 && dist <= 2 && Math.abs(part.length - brand.length) <= 2) {
-          warnings.push({ level: 'warn', code: 'lookalike_brand', message: `Subdomain/host label "${label}" resembles brand "${brand}" (edit distance ${dist}) — possible lookalike/typosquat` });
+        // One edit for short brand names, two for long ones; a digit-for-letter swap
+        // (paypa1, micros0ft) counts even when it normalises to the exact brand.
+        const allowed = brand.length >= 7 ? 2 : 1;
+        if ((part === brand && raw !== part) || (dist > 0 && dist <= allowed)) {
+          flagged.add(brand);
+          warnings.push({ level: 'warn', code: 'lookalike_brand', message: `Host label "${label}" resembles brand "${brand}" (edit distance ${levenshtein(raw.replace(/[^a-z0-9@$]/g, ''), brand)}) — possible lookalike/typosquat` });
         }
       }
     }
@@ -96,10 +139,11 @@ function analyzeUrl(rawUrl) {
   const full = rawUrl;
   const fullLower = full.toLowerCase();
 
-  for (const scheme of SUSPICIOUS_SCHEMES) {
-    if (fullLower.startsWith(scheme)) {
-      warnings.push({ level: 'malicious', code: 'suspicious_scheme', message: `URL uses a suspicious scheme (${scheme})` });
-    }
+  // First match only: "data:text/html" also starts with "data:", which used to add a
+  // second identical warning.
+  const scheme = SUSPICIOUS_SCHEMES.find((s) => fullLower.startsWith(s));
+  if (scheme) {
+    warnings.push({ level: 'malicious', code: 'suspicious_scheme', message: `URL uses a suspicious scheme (${scheme})` });
   }
 
   for (const token of SUSPICIOUS_TOKENS) {
