@@ -5,6 +5,7 @@ with newer rules without detonating again (ANA-13, FED-13)."""
 import base64
 import binascii
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,6 +25,7 @@ from sandbox.analysis.domains import (
     registrable,
     site,
 )
+from sandbox.runner.page_scripts import is_harness_code
 
 EXECUTABLE_EXTENSIONS = {
     "exe",
@@ -2110,19 +2112,48 @@ def _libraries(data: CaptureData) -> list[dict[str, str]]:
     return out[:30]
 
 
+def _entropy(s: str) -> float:
+    """Shannon entropy of the first 4 KB, as the page hook computes it."""
+    s = s[:4096]
+    if not s:
+        return 0.0
+    counts: dict[str, int] = {}
+    for ch in s:
+        counts[ch] = counts.get(ch, 0) + 1
+    return round(-sum(n / len(s) * math.log2(n / len(s)) for n in counts.values()), 2)
+
+
+def _code_exec(execs: dict[str, Any]) -> tuple[int, int, float]:
+    """eval/Function aggregates without the sandbox's own code. Captures made before the
+    runner dropped it still hold COLLECT_SCRIPT and Playwright's init wrappers; their
+    samples (256+ chars) are enough to take them out again."""
+    count = execs.get("code_count", 0)
+    max_len, max_entropy = execs.get("code_max_len", 0), execs.get("code_max_entropy", 0.0)
+    samples = execs.get("code_samples") or []
+    page = [s for s in samples if not is_harness_code(s)]
+    if len(page) == len(samples):
+        return count, max_len, max_entropy
+    return (
+        max(0, count - (len(samples) - len(page))),
+        max((len(s) for s in page), default=0),
+        max((_entropy(s) for s in page), default=0.0),
+    )
+
+
 def _jsapi_facts(data: CaptureData) -> dict[str, Any]:
     j = data.result.get("jsapi") or {}
     execs = j.get("exec") or {}
     apis = j.get("apis") or {}
     blobs = j.get("blobs") or []
+    code_count, code_max_len, code_max_entropy = _code_exec(execs)
     return {
         "dynamic_exec_count": execs.get("count", 0),
         "dynamic_exec_max_len": execs.get("max_len", 0),
         "dynamic_exec_max_entropy": execs.get("max_entropy", 0.0),
         # eval/Function/string-timer only (L2-01); 0 on captures that predate the split.
-        "code_exec_count": execs.get("code_count", 0),
-        "code_exec_max_len": execs.get("code_max_len", 0),
-        "code_exec_max_entropy": execs.get("code_max_entropy", 0.0),
+        "code_exec_count": code_count,
+        "code_exec_max_len": code_max_len,
+        "code_exec_max_entropy": code_max_entropy,
         "blob_constructs": len(blobs),
         "blob_details": blobs[:10],
         "history_floods": apis.get("history.pushState", 0) + apis.get("history.replaceState", 0),
