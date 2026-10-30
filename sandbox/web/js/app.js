@@ -100,6 +100,17 @@ async function runUrlSpecificAnalysis(norm, targetUrl) {
   if (redirectRes.ok) {
     norm.urls.redirect_chain = redirectRes.hops;
     redirectWarnings = redirectRes.warnings;
+    // The pasted URL is often clean and the page it lands on is not, so the static
+    // checks run on the landing URL too.
+    const landing = [...redirectRes.hops].reverse().find((h) => h.url && !h.error && !h.blocked && !h.note);
+    if (landing && landing.url !== unwrapped.unwrapped) {
+      norm.urls.landing = landing.url;
+      if (landing.title) norm.urls.landing_title = landing.title;
+      const seen = new Set(heuristicWarnings.map((w) => w.message));
+      for (const w of window.urlHeuristics.analyzeUrl(landing.url)) {
+        if (!seen.has(w.message)) redirectWarnings.push({ ...w, message: `Landing page: ${w.message}` });
+      }
+    }
   } else {
     norm.urls.redirect_chain_error = redirectRes.error;
   }

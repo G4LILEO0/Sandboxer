@@ -19,6 +19,7 @@ function normalizeResult(detected) {
   return {
     ioc: detected.value,
     type: detected.type,
+    port: detected.port || null,
     input_defanged: detected.raw,
     verdict: 'unknown',
     score_summary: {},
@@ -170,6 +171,9 @@ function mergeVendorData(norm, vendorName, res) {
 // Derived "VPN / Hosting / Proxy" signal (Section 4.3). Never asserted as
 // fact — always rendered as a heuristic with the evidence that produced it.
 function computeInfrastructureFlag(norm) {
+  // Hosting/VPN/proxy is a property of an address. File tags such as "via-tor" (the
+  // sample was seen downloaded over Tor) used to label a hash "Possible Proxy".
+  if (norm.type !== 'ip') { norm.infrastructure_flag = null; return norm; }
   const evidence = [];
   const tagsLower = (norm.tags || []).map((t) => String(t).toLowerCase());
   const infraTagHit = ['hosting', 'vpn', 'proxy', 'tor'].filter((kw) => tagsLower.some((t) => t.includes(kw)));
@@ -209,7 +213,8 @@ function computeVerdict(norm) {
   const vtAnswered = !!(norm.raw.vt && norm.raw.vt.ok);
 
   if (vtMal > 3 || abuseScore > 75 || hasMaliciousWarning) norm.verdict = 'malicious';
-  else if (vtMal > 0 || vtSusp > 0 || abuseScore > 10 || hasWarnWarning) norm.verdict = 'suspicious';
+  // One engine out of ~90 saying "suspicious" (8.8.8.8 has one) is noise on its own.
+  else if (vtMal > 0 || vtSusp > 1 || abuseScore > 10 || hasWarnWarning) norm.verdict = 'suspicious';
   else if (!vtAnswered) norm.verdict = 'unknown';
   else norm.verdict = 'clean';
 

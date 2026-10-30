@@ -8,7 +8,9 @@
 // callers get a "queued, retry in Ns" style status via subscribe().
 
 const Cache = (function () {
-  const PREFIX = 'iocagg:';
+  // Bump when a cached result's shape changes (e.g. new redirect-walk fields), so a
+  // deploy does not keep serving hour-old results in the old shape.
+  const PREFIX = 'iocagg:v2:';
   const DAILY_PREFIX = 'iocagg:daily:';
 
   function key(k) { return PREFIX + k; }
