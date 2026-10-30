@@ -25,8 +25,7 @@ const overridesByRaw = new Map();
 let currentSlots = [];
 
 function parseInput(raw) {
-  if (!raw) return [];
-  return raw.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+  return window.detector.splitIoCs(raw);
 }
 
 function detectAll(raw) {
@@ -165,7 +164,11 @@ async function analyzeOne(det, { force = false } = {}) {
   window.normalize.computeInfrastructureFlag(norm);
   window.normalize.computeVerdict(norm);
 
-  window.Cache.set(cacheKey, { vt: vtRes, abuseipdb: abuseRes, urls: norm.urls }, 3600);
+  // Only complete answers are cached: a quota error, an outage or a VirusTotal scan
+  // still in progress would otherwise stick to this IoC for an hour.
+  if (vtRes && vtRes.ok && (!abuseRes || abuseRes.ok)) {
+    window.Cache.set(cacheKey, { vt: vtRes, abuseipdb: abuseRes, urls: norm.urls }, 3600);
+  }
 
   return { norm, cached: false };
 }
