@@ -1828,6 +1828,64 @@ def test_runtime_dynamic_execution_ignores_innerhtml_markup():
     assert "runtime_dynamic_execution" not in _hits(_cap("https://x.example/", jsapi=_MARKUP_EXEC))
 
 
+# --- the sandbox's own evaluate() calls are not page code (live round 1) --------------
+
+_PW_WRAPPER = (
+    "(() => {\n      globalThis.__pwInitScripts = globalThis.__pwInitScripts || {};\n"
+    '      const hasInitScript = globalThis.__pwInitScripts["3cde9adf29a22048e823b4a13cbd417f"];'
+    "\n" + "      Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});\n" * 6
+)
+_PW_WS_DISPATCH = (
+    'globalThis.__pwWebSocketDispatch({"id":"' + "5" * 64 + '","type":"sendToPage",'
+    '"data":{"data":"430[null,{\\"serverVersion\\":3}]' + "x" * 400 + '"}})'
+)
+_PACKED = "".join(chr(33 + (i * 7919) % 90) for i in range(3000))  # high-entropy string
+
+
+def _harness_exec(*page_samples):
+    from sandbox.runner.page_scripts import COLLECT_SCRIPT
+
+    samples = [_PW_WRAPPER, COLLECT_SCRIPT.strip(), _PW_WS_DISPATCH, *page_samples]
+    return {
+        "exec": {
+            "count": 18,
+            "max_len": 3000 if page_samples else 2074,
+            "max_entropy": 6.4 if page_samples else 5.15,
+            "code_count": 16 + len(page_samples),
+            "code_max_len": 3000 if page_samples else 2074,
+            "code_max_entropy": 6.4 if page_samples else 5.15,
+            "code_samples": samples,
+        }
+    }
+
+
+def test_runtime_dynamic_execution_ignores_runner_and_playwright_evals():
+    """Live round 1: example.com scored 25 because frame.evaluate(COLLECT_SCRIPT) and
+    Playwright's init-script wrappers go through the page's hooked eval."""
+    url = "https://example.com/"
+    assert "runtime_dynamic_execution" not in _hits(_cap(url, jsapi=_harness_exec()))
+    js = build_facts(_cap(url, jsapi=_harness_exec()))["js"]
+    assert (js["code_exec_count"], js["code_exec_max_len"]) == (13, 0)
+    # A page that really evals a large packed string next to the harness noise still hits.
+    packed = _cap(url, jsapi=_harness_exec(_PACKED, _PACKED[::-1]))
+    assert "runtime_dynamic_execution" in _hits(packed)
+
+
+def test_runner_drops_its_own_evaluate_from_exec_aggregates(tmp_path):
+    from types import SimpleNamespace
+
+    from sandbox.runner.capture import Capture
+    from sandbox.runner.page_scripts import COLLECT_SCRIPT
+
+    (tmp_path / "scripts").mkdir()
+    stub = SimpleNamespace(jsapi={}, dynamic_scripts=0, out=tmp_path)
+    for code in (COLLECT_SCRIPT.strip(), _PW_WRAPPER, _PW_WS_DISPATCH):
+        Capture._on_jsapi(stub, "js_exec", {"api": "eval", "len": len(code), "code": code})
+    assert stub.jsapi == {} and not list((tmp_path / "scripts").iterdir())
+    Capture._on_jsapi(stub, "js_exec", {"api": "eval", "len": 3000, "code": _PACKED})
+    assert stub.jsapi["exec"]["code_count"] == 1 and stub.dynamic_scripts == 1
+
+
 def test_html_smuggling_binary_blob_fires_and_csv_export_is_quiet():
     jsapi = {"blobs": [{"ctor": "Blob", "size": 50000, "mime": "application/octet-stream"}]}
     data = _cap(
@@ -2351,3 +2409,149 @@ def test_password_page_posting_to_form_collector_fires_and_contact_form_is_quiet
     contact_form = {"action": "", "fields": [{"type": "email"}, {"type": "textarea"}]}
     contact = _cap(url, [_page(url, "Contact us", forms=[contact_form])], har=har)
     assert "credential_post_to_form_collector" not in _hits(contact)
+
+
+# --- fake verification with Win+X / Run paste steps, no clipboard yet (LR1-02) -------
+
+# Sanitised from a live EtherHiding kit on a compromised WordPress site: the overlay is
+# appended after ~220 KB of page and its steps stay hidden until the checkbox click.
+_WINX_OVERLAY = (
+    '<div class="main-content" style="display:none"><p>site.example Verifying...</p>'
+    "<p>Human Verification</p><p>Authorize your browser now</p>"
+    "<b>PRESS AND HOLD WINDOWS KEY, THEN PRESS X</b><ol><li>In the menu that opens, select "
+    "Terminal or press I</li><li>In the terminal verification, press Ctrl + V</li>"
+    "<li>Press Enter</li></ol><span>Ray ID: 0000000000000000</span></div>"
+)
+_FILLER = "<p>" + "Consultoria especializada para maximizar resultados. " * 400 + "</p>"
+
+
+def _winx_cap(url, html, text="Consultoria Contacto"):
+    page = _page(url, "STRATEX - Consultoria", text=text)
+    return _cap(url, [page], dom_html=[{"url": url, "html": html}])
+
+
+def test_fake_captcha_paste_steps_fire_when_hidden_after_a_long_page():
+    url = "https://site.example/"
+    data = _winx_cap(url, f"<html><body>{_FILLER}{_WINX_OVERLAY}</body></html>")
+    assert "fake_captcha_paste_instructions" in _hits(data)
+    assert build_facts(data)["clipboard"]["writes"] == 0  # no click, no clipboard write
+
+
+def test_real_challenge_and_helpdesk_paste_steps_are_not_fake_captcha():
+    url = "https://site.example/"
+    challenge = (
+        "<html><body><h1>Verify you are human by completing the action below.</h1>"
+        "<p>site.example needs to review the security of your connection.</p>"
+        "<p>Ray ID: 0000000000000000</p></body></html>"
+    )
+    helpdesk = (
+        "<html><body><h1>Install the VPN client</h1><p>Press Win + X, open Terminal, then "
+        "paste the command below with Ctrl + V.</p></body></html>"
+    )
+    # Both phrasings on one long page, but nowhere near each other.
+    far_apart = (
+        "<html><body><p>Enter the verification code we emailed you.</p>"
+        f"{_FILLER}{_FILLER}<p>Press Win + X, open Terminal and paste with Ctrl + V.</p>"
+        "</body></html>"
+    )
+    for html in (challenge, helpdesk, far_apart):
+        assert "fake_captcha_paste_instructions" not in _hits(_winx_cap(url, html))
+
+
+# --- free-hosting tenant named after a brand, asking for credentials (LR1-03) --------
+
+# A site-builder form has no password type: the kit labels a text field "Passwort".
+_BUILDER_LOGIN = {
+    "action": "",
+    "fields": [{"type": "email", "name": "field_1"}, {"type": "text", "name": "field_0"}],
+}
+_BUILDER_TEXT = "E-Mail-Adresse Passwort Land Login Melden Sie sich bei Ihrem Konto an"
+
+
+def test_brand_named_free_hosting_login_fires():
+    url = "http://microsoftaccount-kit.flazio.online/"
+    page = _page(url, "home", text=_BUILDER_TEXT, forms=[_BUILDER_LOGIN])
+    assert "brand_named_free_hosting_login" in _hits(_cap(url, [page]))
+    wallet = "https://ledger-live-kit.pages.dev/"
+    page = _page(wallet, "Sign in", forms=[PASSWORD_FORM])
+    assert "brand_named_free_hosting_login" in _hits(_cap(wallet, [page]))
+
+
+def test_brand_named_tenant_without_prompt_or_brand_is_quiet():
+    blog = "https://microsoftoutlook-tips.flazio.online/"
+    news = {"action": "", "fields": [{"type": "email"}]}
+    page = _page(blog, "Outlook tips", text="Subscribe to our newsletter", forms=[news])
+    assert "brand_named_free_hosting_login" not in _hits(_cap(blog, [page]))
+    # "chase bank" must start a label token: purchasebank is not Chase.
+    shop = "https://purchasebank-demo.vercel.app/"
+    page = _page(shop, "Sign in", forms=[PASSWORD_FORM])
+    assert "brand_named_free_hosting_login" not in _hits(_cap(shop, [page]))
+    vouched = "https://ledger-live-kit.pages.dev/"
+    page = _page(vouched, "Sign in", forms=[PASSWORD_FORM])
+    data = _cap(vouched, [page], allowlisted={"ledger-live-kit.pages.dev"})
+    assert "brand_named_free_hosting_login" not in _hits(data)
+
+
+# --- hosting provider's phishing / malware block page (LR1-05) -----------------------
+
+
+def _cf_page(url, title, text, action_path):
+    form = {"action": url.rstrip("/") + action_path, "fields": [{"type": "hidden"}]}
+    return _page(url, title, text=text, forms=[form])
+
+
+def test_cloudflare_abuse_interstitial_fires():
+    url = "https://kit.example-host.workers.dev/"
+    for kind in ("Phishing", "Malware"):
+        page = _cf_page(
+            url,
+            f"Suspected {kind} | Cloudflare",
+            f"Warning Suspected {kind} This website has been reported. Ignore & Proceed",
+            "/cdn-cgi/phish-bypass",
+        )
+        assert "hosting_abuse_interstitial" in _hits(_cap(url, [page]))
+
+
+def test_cloudflare_challenge_and_article_are_not_abuse_interstitial():
+    url = "https://shop.example/"
+    challenge = _cf_page(
+        url, "Just a moment...", "Verify you are human", "/cdn-cgi/challenge-platform/h/g"
+    )
+    assert "hosting_abuse_interstitial" not in _hits(_cap(url, [challenge]))
+    article = _page(
+        "https://news.example/cf", "What a Suspected Phishing warning from Cloudflare means"
+    )
+    assert "hosting_abuse_interstitial" not in _hits(_cap("https://news.example/cf", [article]))
+
+
+# --- webmail kit borrowing the victim's mail-domain favicon (LR1-04) -----------------
+
+
+def _favicon(domain):
+    return _req(f"https://www.google.com/s2/favicons?domain={domain}")
+
+
+def test_dynamic_brand_favicon_login_fires():
+    url = "https://webmail-kit.example-host.vercel.app/"
+    page = _page(
+        url,
+        "Webmail Sign-in",
+        text="I am not a robot click on the checkbox to verify if you're human.",
+        forms=[PASSWORD_FORM],
+    )
+    har = [_favicon("mail-provider.example"), _req("https://api.ipify.org/?format=json")]
+    data = _cap(url, [page], har=har)
+    assert "dynamic_brand_favicon_login" in _hits(data)
+    assert build_facts(data)["brand"]["favicon_lookups"] == ["mail-provider.example"]
+
+
+def test_favicon_grid_and_plain_login_are_not_dynamic_brand():
+    url = "https://links.example-host.vercel.app/"
+    page = _page(url, "Sign in", forms=[PASSWORD_FORM])
+    grid = [_favicon(f"site{i}.example") for i in range(6)]  # a bookmarks dashboard
+    assert "dynamic_brand_favicon_login" not in _hits(_cap(url, [page], har=grid))
+    # An established domain with no other trait, showing a partner's icon.
+    corp = "https://portal.example-corp.com/"
+    page = _page(corp, "Sign in", forms=[PASSWORD_FORM])
+    har = [_favicon("partner.example")]
+    assert "dynamic_brand_favicon_login" not in _hits(_cap(corp, [page], har=har))

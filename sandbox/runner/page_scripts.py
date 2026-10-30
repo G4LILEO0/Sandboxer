@@ -9,6 +9,8 @@ test credentials do not end up in the timeline.
 iframes and a text excerpt from each frame.
 """
 
+import re
+
 BINDING = "__sandboxReport"
 
 INIT_SCRIPT = r"""
@@ -321,3 +323,18 @@ COLLECT_SCRIPT = r"""
   };
 }
 """
+
+# Playwright guards every init script with this wrapper, and relays routed WebSocket
+# frames with __pwWebSocketDispatch; like frame.evaluate, both are compiled through the
+# page's eval, which the exec hook wraps.
+_PW_HARNESS = re.compile(
+    r"\s*(\(\(\)\s*=>\s*\{\s*globalThis\.__pwInitScripts\s*="
+    r"|globalThis\.__pwWebSocketDispatch\(\{\"id\":\"[0-9a-f]{64}\")"
+)
+
+
+def is_harness_code(code: str) -> bool:
+    """Code the sandbox itself sent through the page's eval: COLLECT_SCRIPT, Playwright's
+    init-script wrappers and its WebSocket route dispatch. It is not page code, so the
+    exec hook's aggregates must leave it out."""
+    return code.strip() == COLLECT_SCRIPT.strip() or bool(_PW_HARNESS.match(code))
