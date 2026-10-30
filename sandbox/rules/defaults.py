@@ -219,6 +219,18 @@ BEHAVIOUR_RULES = [
         {"fact": "brand.hosting_label", "op": "exists", "value": True},
         ["brand.hosting_label", "final.url"],
     ),
+    # --- hosting provider's phishing / malware block page (LR1-05) --------------------
+    _rule(
+        "hosting_abuse_interstitial",
+        "high",
+        ["phishing", "malware-download", "takedown"],
+        ["T1583.006"],
+        "The page ended on Cloudflare's 'Suspected Phishing' or 'Suspected Malware' block "
+        "for this hostname: the provider has already confirmed abuse, so the payload is "
+        "not visible but the URL is not clean. Re-run only if the payload is needed.",
+        {"fact": "final.abuse_interstitial", "op": "exists", "value": True},
+        ["final.abuse_interstitial", "final.url"],
+    ),
     # --- webmail kit borrowing the victim's mail-domain favicon (LR1-04) --------------
     _rule(
         "dynamic_brand_favicon_login",
@@ -1443,6 +1455,7 @@ DEFAULT_WEIGHTS = {
     "fake_captcha_paste_instructions": 55,
     "brand_named_free_hosting_login": 50,
     "dynamic_brand_favicon_login": 50,
+    "hosting_abuse_interstitial": 40,
 }
 
 # (name, keywords, domains). Keywords match whole words, case-insensitively. A domain
