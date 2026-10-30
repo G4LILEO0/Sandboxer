@@ -59,6 +59,7 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `scripts.max_obfuscation_score`, `scripts.obfuscated` | Obfuscation signals per script |
 | `downloads.count`, `.executable`, `.archive`, `.disguised`, `.unprompted`, `.unprompted_risky` | Downloads; `disguised` covers `x.pdf.exe` and a PE file named `.pdf`; `unprompted_risky` counts executables, archives or disguised files downloaded without a click |
 | `clipboard.command_like` | Clipboard writes that contain any shell command |
+| `clipboard.writes`, `.max_write_len`, `.write_samples` | Page-initiated clipboard writes (analyst Ctrl+C excluded): count, longest text, and up to 5 samples (300 chars, with `user_activation`) |
 | `clipboard.clickfix_like` | Clipboard writes with ClickFix traits: a download cradle, hidden or encoded PowerShell, mshta of a URL, `curl … \| sh`, `finger user@host` or `for /f … in ('…') do %x` fetch-and-run, `start /min` or `%COMSPEC%`, `^` caret obfuscation, or a fake-CAPTCHA comment or space/dash-padded decoy. `^` and in-word `""` are stripped before matching |
 | `lure.run_dialog_instructions` | Pages telling the visitor to open Run or a terminal and paste |
 | `lure.payment_pretext`, `lure.payment_pretexts` | Reasons to pay, in English and Arabic: redelivery or customs fees, held parcels, traffic fines, tolls (`رسوم التوصيل`, `شحنتك`, `مخالفة مرورية`, …) |

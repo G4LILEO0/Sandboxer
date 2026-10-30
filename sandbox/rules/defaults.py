@@ -37,6 +37,18 @@ _CLICKFIX_LIKE = {
         },
     ]
 }
+# A page write the command patterns did not recognise, on a page that tells the visitor
+# to paste into Run or a terminal: an obfuscated ClickFix payload. A short write (a
+# %temp% path a help article copies) or an allowlisted site is left to the low rule.
+_PASTE_LURE_WRITE = {
+    "all": [
+        {"fact": "clipboard.writes", "op": "gt", "value": 0},
+        {"fact": "clipboard.command_like", "op": "eq", "value": 0},
+        {"fact": "lure.run_dialog_instructions", "op": "gt", "value": 0},
+        {"fact": "clipboard.max_write_len", "op": "gte", "value": 40},
+        {"not": {"fact": "final.allowlisted", "op": "eq", "value": True}},
+    ]
+}
 
 BEHAVIOUR_RULES = [
     _rule(
@@ -114,6 +126,53 @@ BEHAVIOUR_RULES = [
             ]
         },
         ["clipboard.commands"],
+    ),
+    # --- clipboard writes the command patterns miss -----------------------------------
+    _rule(
+        "clipboard_write_with_paste_lure",
+        "high",
+        ["clickfix", "suspicious-clipboard"],
+        ["T1204.004"],
+        "The page wrote 40+ characters to the clipboard that match no known command "
+        "pattern, and tells the visitor to paste into Run or a terminal: an obfuscated or "
+        "unusual ClickFix payload.",
+        _PASTE_LURE_WRITE,
+        ["clipboard.write_samples", "lure.run_dialog_pages", "final.url"],
+    ),
+    _rule(
+        "clipboard_no_gesture_write",
+        "medium",
+        ["suspicious-clipboard"],
+        ["T1204.004", "T1115"],
+        "The page wrote non-command text to the clipboard with no user gesture behind it. "
+        "Copy buttons, share links and coupon codes copy on a click; a write nobody asked "
+        "for is how a lure pre-loads what it will tell the visitor to paste.",
+        {
+            "all": [
+                {"fact": "clipboard.no_gesture_writes", "op": "gt", "value": 0},
+                {"fact": "clipboard.command_like", "op": "eq", "value": 0},
+            ]
+        },
+        ["clipboard.write_samples", "final.url"],
+    ),
+    _rule(
+        "clipboard_page_write",
+        "low",
+        ["clipboard"],
+        ["T1115"],
+        "The page wrote to the clipboard (informational). Copy buttons, share links and "
+        "coupon codes do this on a click; it is listed so that any write, command or not, "
+        "is visible in the report. Does not fire alongside another clipboard rule.",
+        {
+            "all": [
+                {"fact": "clipboard.writes", "op": "gt", "value": 0},
+                {"fact": "clipboard.command_like", "op": "eq", "value": 0},
+                {"fact": "clipboard.path_disguised", "op": "eq", "value": 0},
+                {"fact": "clipboard.no_gesture_writes", "op": "eq", "value": 0},
+                {"not": _PASTE_LURE_WRITE},
+            ]
+        },
+        ["clipboard.write_samples", "final.url"],
     ),
     _rule(
         "newly_registered_domain",
@@ -1439,6 +1498,9 @@ DEFAULT_WEIGHTS = {
     "indicator": 60,
     "suricata:alert": 20,
     "clickfix_clipboard_command": 80,
+    "clipboard_write_with_paste_lure": 50,
+    "clipboard_no_gesture_write": 25,
+    "clipboard_page_write": 5,
     "form_posts_cross_domain": 50,
     "seed_phrase_harvest": 60,
     "telegram_bot_exfil": 80,
