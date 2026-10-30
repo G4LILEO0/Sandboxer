@@ -89,7 +89,12 @@ function mergeVendorData(norm, vendorName, res) {
   norm.raw[vendorName] = res;
 
   if (!res || !res.ok) {
-    if (res && res.error) norm._errors.push(`${vendorName}: ${res.error}`);
+    if (res && res.status === 404 && vendorName === 'vt' && !/in progress/i.test(res.error || '')) {
+      norm.vt_not_found = true;
+      norm._errors.push('VirusTotal has no record of this IoC (not seen before is not the same as clean)');
+    } else if (res && res.error) {
+      norm._errors.push(`${vendorName}: ${res.error}`);
+    }
     return norm;
   }
 
@@ -198,9 +203,14 @@ function computeVerdict(norm) {
   const hasMaliciousWarning = urlWarnings.some((w) => w.level === 'malicious');
   const hasWarnWarning = urlWarnings.some((w) => w.level === 'warn');
 
+  // "Clean" needs VirusTotal to have answered with a report. A failed call (no key,
+  // quota, outage) or "not found" used to fall through to clean, because the raw
+  // error object counted as data.
+  const vtAnswered = !!(norm.raw.vt && norm.raw.vt.ok);
+
   if (vtMal > 3 || abuseScore > 75 || hasMaliciousWarning) norm.verdict = 'malicious';
   else if (vtMal > 0 || vtSusp > 0 || abuseScore > 10 || hasWarnWarning) norm.verdict = 'suspicious';
-  else if (norm._errors && norm._errors.length && !norm.raw.vt && !norm.raw.abuseipdb) norm.verdict = 'unknown';
+  else if (!vtAnswered) norm.verdict = 'unknown';
   else norm.verdict = 'clean';
 
   return norm;
