@@ -24,6 +24,7 @@ from sandbox.api.deps import AppSettings, DnsResolver, Guard
 from sandbox.core.netguard import BlockedDestination
 from sandbox.core.safehttp import UnresolvedHost, checked_address, pinned_request
 from sandbox.core.urls import InvalidURL, normalise_url
+from sandbox.core.useragent import BROWSER_PAGE_HEADERS
 
 router = APIRouter(prefix="/v1/intel", tags=["intel"])
 log = logging.getLogger(__name__)
@@ -376,10 +377,8 @@ async def redirect_chain(
                 "GET",
                 target.url,
                 address,
-                headers={
-                    "User-Agent": "url-sandbox-redirect-walker/0.1",
-                    "Accept-Encoding": "identity",
-                },
+                # A browser's headers: cloakers send a non-browser client to a decoy.
+                headers={**BROWSER_PAGE_HEADERS, "Accept-Encoding": "identity"},
             )
             response = await http.send(request, follow_redirects=False, stream=True)
             try:
