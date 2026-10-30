@@ -17,7 +17,7 @@ const basketExportJsonBtn = document.getElementById('basket-export-json');
 const basketClearBtn = document.getElementById('basket-clear');
 const copyAllSummariesBtn = document.getElementById('copy-all-summaries-btn');
 
-const TYPE_OPTIONS = ['ip', 'domain', 'hash', 'url', 'unknown'];
+const TYPE_OPTIONS = ['ip', 'domain', 'hash', 'url', 'email', 'unknown'];
 const overridesByRaw = new Map();
 
 // Slots from the most recent analyzeBatch() run — read live by the "copy all
@@ -172,7 +172,10 @@ async function analyzeOne(det, { force = false } = {}) {
     lookupTarget = await runUrlSpecificAnalysis(norm, det.value);
   }
 
-  const vtPromise = window.RateLimiter.schedule('vt', () => window.vtClient.vtLookup(det.type, lookupTarget));
+  // An email address is looked up by its domain; the card keeps the address.
+  const vtType = det.type === 'email' ? 'domain' : det.type;
+  if (det.type === 'email') lookupTarget = det.email_domain || det.value.split('@').pop();
+  const vtPromise = window.RateLimiter.schedule('vt', () => window.vtClient.vtLookup(vtType, lookupTarget));
   const abusePromise = det.type === 'ip'
     ? window.RateLimiter.schedule('abuseipdb', () => window.abuseClient.abuseIpLookup(lookupTarget))
     : Promise.resolve(null);

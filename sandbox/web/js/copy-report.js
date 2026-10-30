@@ -109,7 +109,11 @@ const FIELDS = [
   { id: 'final_url', label: 'Final URL', group: 'URL', value: (n) => (n.urls && n.urls.vt_final_url ? fmt(n.urls.vt_final_url) : null) },
   { id: 'page_title', label: 'Page title', group: 'URL', value: (n) => (n.urls && n.urls.vt_title) || null },
   { id: 'redirects', label: 'Redirect chain', group: 'URL', value: (n) => (n.urls && n.urls.redirect_chain && n.urls.redirect_chain.length ? n.urls.redirect_chain.map((h) => fmt(h.url || h.location)).join(' -> ') : null) },
-  { id: 'url_warnings', label: 'URL warnings', group: 'URL', value: (n) => (n.urls && n.urls.warnings && n.urls.warnings.length ? n.urls.warnings.map((w) => fmtText(w.message)).join('; ') : null) },
+  { id: 'url_warnings', label: 'Warnings', group: 'URL', value: (n) => {
+    const all = [...(n.warnings || []), ...((n.urls && n.urls.warnings) || [])];
+    return all.length ? all.map((w) => fmtText(w.message)).join('; ') : null;
+  } },
+  { id: 'domain_age', label: 'Domain age', group: 'Domain', value: (n) => (typeof n.domain_age_days === 'number' ? `${n.domain_age_days} days` : null) },
 
   { id: 'file_type', label: 'File type', group: 'File', value: (n) => n.network.file_type || null },
   { id: 'file_size', label: 'File size', group: 'File', value: (n) => (has(n.network.file_size) ? String(n.network.file_size) : null) },

@@ -61,3 +61,11 @@ test('defangText defangs hosts inside prose only', () => {
   );
   assert.equal(detector.defangText('IP-literal host (10.1.2.3)'), 'IP-literal host (10[.]1[.]2[.]3)');
 });
+
+test('email addresses, defanged or not, are looked up by their domain', () => {
+  const d = detector.detectIoC('Billing[at]Evil-Pay[.]example');
+  assert.deepEqual([d.type, d.value, d.email_domain], ['email', 'billing@evil-pay.example', 'evil-pay.example']);
+  assert.equal(detector.detectIoC('mailto:a@b.example').type, 'email');
+  // A URL with credentials is still a URL.
+  assert.equal(detector.detectIoC('https://user@evil.example/').type, 'url');
+});

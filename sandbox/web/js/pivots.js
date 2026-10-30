@@ -121,14 +121,18 @@ function renderSightings(box, res) {
 // into the lookup box.
 function mountPivots(norm, onLookUp) {
   if (norm.network && norm.network.is_private) return null;
-  const rels = RELATIONS[norm.type];
+  // An email address pivots on its domain.
+  const vtType = norm.type === 'email' ? 'domain' : norm.type;
+  const rels = RELATIONS[vtType];
   if (!rels) return null;
   const wrap = el('div', { className: 'pivots' });
   const sightings = el('div', { className: 'sightings' });
   wrap.append(sightings);
   sandboxSightings(norm).then((res) => renderSightings(sightings, res));
 
-  const vtValue = norm.type === 'url' ? ((norm.urls && norm.urls.unwrapped) || norm.ioc) : norm.ioc;
+  let vtValue = norm.ioc;
+  if (norm.type === 'url') vtValue = (norm.urls && norm.urls.unwrapped) || norm.ioc;
+  else if (norm.type === 'email') vtValue = norm.ioc.split('@').pop();
   const out = el('div', { className: 'pivot-results' });
   const bar = el('div', { className: 'pivot-bar small' }, el('span', { className: 'muted', textContent: 'Pivot (VirusTotal): ' }));
   for (const [rel, label] of rels) {
@@ -139,7 +143,7 @@ function mountPivots(norm, onLookUp) {
       btn.setAttribute('aria-pressed', 'true');
       box.replaceChildren(el('div', { className: 'small muted', textContent: `${label}: loading…` }));
       out.append(box);
-      renderRelationList(box, norm.type, label, await fetchRelation(norm.type, vtValue, rel), onLookUp);
+      renderRelationList(box, vtType, label, await fetchRelation(vtType, vtValue, rel), onLookUp);
     });
     bar.append(btn);
   }
