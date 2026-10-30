@@ -206,6 +206,58 @@ BEHAVIOUR_RULES = [
         {"fact": "brand.free_hosting_lure", "op": "eq", "value": True},
         ["brand"],
     ),
+    # --- free-hosting tenant named after a brand, asking for credentials (LR1-03) -----
+    _rule(
+        "brand_named_free_hosting_login",
+        "high",
+        ["phishing", "brand-impersonation", "free-hosting"],
+        ["T1583.006", "T1656", "T1566.002"],
+        "A page on a free hosting or site-builder platform whose tenant name carries a brand "
+        "(microsoftaccount-kit.<builder>, ledger-live-kit.pages.dev) asks for a password, "
+        "sign-in name, card, code or recovery phrase. The page itself need not name the "
+        "brand; builder forms often have no real password field.",
+        {"fact": "brand.hosting_label", "op": "exists", "value": True},
+        ["brand.hosting_label", "final.url"],
+    ),
+    # --- hosting provider's phishing / malware block page (LR1-05) --------------------
+    _rule(
+        "hosting_abuse_interstitial",
+        "high",
+        ["phishing", "malware-download", "takedown"],
+        ["T1583.006"],
+        "The page ended on Cloudflare's 'Suspected Phishing' or 'Suspected Malware' block "
+        "for this hostname: the provider has already confirmed abuse, so the payload is "
+        "not visible but the URL is not clean. Re-run only if the payload is needed.",
+        {"fact": "final.abuse_interstitial", "op": "exists", "value": True},
+        ["final.abuse_interstitial", "final.url"],
+    ),
+    # --- webmail kit borrowing the victim's mail-domain favicon (LR1-04) --------------
+    _rule(
+        "dynamic_brand_favicon_login",
+        "high",
+        ["phishing", "credential-harvest"],
+        ["T1566.002", "T1656"],
+        "A password page fetches another site's favicon through a favicon service (Google "
+        "s2/faviconV2, DuckDuckGo, Clearbit), the trick webmail kits use to wear the "
+        "victim's own mail-provider icon, and it is on free hosting, a domain under 30 "
+        "days old, calls an IP-lookup service or shows verification wording.",
+        {
+            "all": [
+                {"fact": "forms.password_forms", "op": "gt", "value": 0},
+                {"fact": "brand.favicon_lookup_count", "op": "gt", "value": 0},
+                {"fact": "brand.favicon_lookup_count", "op": "lte", "value": 3},
+                {
+                    "any": [
+                        {"fact": "final.free_hosting", "op": "exists", "value": True},
+                        {"fact": "domains.final_age_days", "op": "lt", "value": 30},
+                        {"fact": "network.ip_lookups", "op": "exists", "value": True},
+                        {"fact": "lure.verification_wording", "op": "eq", "value": True},
+                    ]
+                },
+            ]
+        },
+        ["brand.favicon_lookups", "network.ip_lookups", "final.url"],
+    ),
     _rule(
         "government_lookalike_domain",
         "high",
@@ -537,6 +589,24 @@ BEHAVIOUR_RULES = [
             ]
         },
         ["lure.fake_captcha_evidence", "clipboard.commands", "final.url"],
+    ),
+    # --- fake verification with Run / terminal paste steps, before any copy (LR1-02) --
+    _rule(
+        "fake_captcha_paste_instructions",
+        "high",
+        ["clickfix"],
+        ["T1204.004", "T1059.001"],
+        "A fake verification page tells the visitor to open Run or a terminal (Win+R, "
+        "Win+X) and paste. Kits write the command only after the checkbox click, so an "
+        "automated run sees the steps but no clipboard write; hidden steps count. A real "
+        "challenge page never asks for either.",
+        {
+            "all": [
+                {"fact": "lure.fake_captcha", "op": "eq", "value": True},
+                {"fact": "lure.run_dialog_instructions", "op": "gt", "value": 0},
+            ]
+        },
+        ["lure.fake_captcha_evidence", "lure.run_dialog_pages", "final.url"],
     ),
     _rule(
         "filefix_command_disguised_as_path",
@@ -1382,6 +1452,10 @@ DEFAULT_WEIGHTS = {
     "cloaking_scripted_bounce": 30,
     "trusted_redirector_to_lure": 20,
     "captcha_gated_credential_page": 25,
+    "fake_captcha_paste_instructions": 55,
+    "brand_named_free_hosting_login": 50,
+    "dynamic_brand_favicon_login": 50,
+    "hosting_abuse_interstitial": 40,
 }
 
 # (name, keywords, domains). Keywords match whole words, case-insensitively. A domain

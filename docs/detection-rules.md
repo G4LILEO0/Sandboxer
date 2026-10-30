@@ -64,6 +64,9 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `lure.payment_pretext`, `lure.payment_pretexts` | Reasons to pay, in English and Arabic: redelivery or customs fees, held parcels, traffic fines, tolls (`رسوم التوصيل`, `شحنتك`, `مخالفة مرورية`, …) |
 | `forms.payment_card_forms`, `.otp_forms`, `.seed_phrase_forms`, `.sensitive_prompt_pages` | Pages asking for card details (number plus CVV or expiry), a one-time code, or a wallet recovery phrase, excluding brand-owned and allowlisted sites |
 | `final.free_hosting` | The free hosting or site-builder platform the final page is on (`pages.dev`, `typedream.app`, `web.app`, …), or null |
+| `final.abuse_interstitial` | The session ended on Cloudflare's 'Suspected Phishing/Malware' block for the hostname (`{provider, kind}`), or null |
+| `brand.hosting_label` | A free-hosting tenant named after a brand (`microsoftaccount-kit.<builder>`) whose page asks for credentials: `{brand, host, platform, keyword, prompt}`, or null |
+| `brand.favicon_lookups`, `.favicon_lookup_count` | Sites whose favicon the page fetched through a favicon service (Google s2/faviconV2, DuckDuckGo, Clearbit) but never visited |
 | `domains.government_lookalike`, `.government_lookalikes` | Hosts dressed as government sites outside a government suffix (`absher-gov-sa.com`) |
 | `brand.prompt`, `brand.free_hosting_lure` | What the impersonating page asks for (`password`, `payment`, `seed`, `otp` or `username`), and whether it is a brand login or wallet page on free hosting |
 | `domains.lookalike`, `domains.lookalikes` | Hosts imitating a brand domain (homoglyph, typo, combo) |
@@ -88,7 +91,7 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `web3.wallet_requests`, `.wallet_drainer` | Signing/sending requests seen by the fake wallet provider (only when `SANDBOX_FAKE_WALLET` is on) |
 | `websocket.count`, `.connections` | WebSocket connections and parsed Socket.IO event names |
 | `clipboard.path_disguised`, `.no_gesture_writes`, `.overwritten_command` | FileFix path-disguised commands; writes with no user gesture; a command later blanked/overwritten |
-| `lure.fake_captcha`, `.fake_captcha_evidence`, `.genuine_challenge` | Fake CAPTCHA/verification UI, and whether a genuine Turnstile/reCAPTCHA resource was loaded |
+| `lure.fake_captcha`, `.fake_captcha_evidence`, `.genuine_challenge` | Fake CAPTCHA/verification UI, and whether a genuine Turnstile/reCAPTCHA resource was loaded; with `lure.run_dialog_instructions` this also reads hidden overlay text from the raw DOM snapshots |
 | `lure.fake_update_pages` | Non-vendor pages showing a browser/software update lure |
 | `final.ipfs` | The final page is served from an IPFS gateway (`{gateway, cid}` or null) |
 | `evasion.devtools_blocked`, `.devtools_blocked_keys`, `.context_menu_blocked` | DevTools shortcuts / context menu the page cancelled (observed via the key probe) |
@@ -100,7 +103,7 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `capture.gated` | A CAPTCHA/Turnstile challenge was seen this session (prefer `unknown` over `benign`; re-run interactively) |
 | `scripts.libraries` | JS library inventory parsed from CDN script URLs (`{name, version, url}`) |
 | `cookies.end_of_session` | Cookie names in the jar at teardown (values are hashed, never stored) |
-| `js.dynamic_exec_count`, `.dynamic_exec_max_len`, `.dynamic_exec_max_entropy` | Runtime eval/Function/setTimeout(string) calls: count, longest argument, highest entropy |
+| `js.dynamic_exec_count`, `.dynamic_exec_max_len`, `.dynamic_exec_max_entropy` | Runtime eval/Function/setTimeout(string) calls: count, longest argument, highest entropy; `js.code_exec_*` are eval/Function/string-timer only and exclude the sandbox's own evaluate() and Playwright wrappers |
 | `js.blob_constructs`, `.blob_details` | Blob/File constructions over 1 KB (HTML smuggling) |
 | `js.history_floods`, `.fullscreen`, `.pointer_lock`, `.keyboard_lock`, `.notification_prompt`, `.service_worker`, `.sw_scripts` | Runtime API calls used by browser lockers and push-bait pages |
 | `lure.tech_support_phone`, `.tech_support_phones`, `.allow_notifications_bait` | A support phone number near scare wording; "click Allow to continue/verify" coercion |

@@ -5,10 +5,12 @@ with newer rules without detonating again (ANA-13, FED-13)."""
 import base64
 import binascii
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
+from html import unescape
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -24,6 +26,7 @@ from sandbox.analysis.domains import (
     registrable,
     site,
 )
+from sandbox.runner.page_scripts import is_harness_code
 
 EXECUTABLE_EXTENSIONS = {
     "exe",
@@ -214,7 +217,8 @@ _PADDED_DECOY = re.compile(r"^[^\n]*\S([ \t]{12,}|[-_=]{10,})[^\n]*[A-Za-z][^\n]
 # Heavy caret escaping inside a word (f^^i^^n^^g^^e^^r): no copyable docs command does this.
 _CARET_OBFUSCATION = re.compile(r"(\w\^+){3,}\w")
 _RUN_DIALOG = re.compile(
-    r"(win(dows)?(\s*(key|logo))?\s*\+\s*r\b|⊞|press\s+(the\s+)?windows\s+(key|button)|"
+    r"(win(dows)?(\s*(key|logo))?\s*\+\s*r\b|⊞|press\s+(and\s+hold\s+)?(the\s+)?windows\s+"
+    r"(key|button)|"
     r"open\s+(the\s+)?(run\s+dialog|terminal|powershell|windows\s+terminal)|"
     r"powershell\s*\(\s*admin\s*\)|win\s*\+\s*x|cmd\s*\+\s*space|command\s*\+\s*space|"
     r"ctrl\s*\+\s*l\b|explorer('s)?\s+address\s+bar|file\s+explorer)",
@@ -294,6 +298,26 @@ def _frames(result: dict[str, Any]) -> list[dict[str, Any]]:
 def _all_frames(data: CaptureData) -> list[dict[str, Any]]:
     """Live frames at the end of the session plus every page seen earlier."""
     return _frames(data.result) + data.dom_pages
+
+
+_MARKUP_NOISE = re.compile(r"(?is)<(script|style|noscript)\b[^>]*>.*?</\1\s*>|<[^>]+>")
+
+
+def _lure_frames(data: CaptureData) -> list[dict[str, Any]]:
+    """_all_frames plus the whole text of each raw DOM snapshot, hidden elements included
+    (LR1-02). Fake-verification kits append their overlay after a long page and reveal
+    the Win+R / Win+X steps only after the checkbox click, so the capped, visible-only
+    page text never reaches them. Used for the run-dialog and fake-CAPTCHA facts only.
+    The text is cut into overlapping 4000-character windows, so the wording those facts
+    pair up must sit close together, as it does on one overlay."""
+    extra = []
+    for doc in data.dom_html:
+        text = _MARKUP_NOISE.sub(" ", (doc.get("html") or "")[:2_000_000])
+        text = " ".join(unescape(text).split())
+        url = doc.get("url", "")
+        for start in range(0, max(len(text) - 2000, 1), 2000):
+            extra.append({"url": url, "title": "", "text": text[start : start + 4000]})
+    return _all_frames(data) + extra
 
 
 def contacted_hosts(data: CaptureData) -> list[str]:
@@ -695,7 +719,7 @@ def _lure(data: CaptureData) -> dict[str, Any]:
     pages = sorted(
         {
             f.get("url", "")
-            for f in frames
+            for f in _lure_frames(data)
             if _RUN_DIALOG.search(f.get("text", "")) and _PASTE.search(f.get("text", ""))
         }
     )
@@ -1095,6 +1119,65 @@ def _brand(data: CaptureData, cross_forms: list[dict[str, Any]]) -> dict[str, An
                     "legit_domains": list(brand.domains),
                 }
     return best
+
+
+_LABEL_TOKEN = re.compile(r"[a-z0-9]+")
+
+
+def _hosting_brand_label(data: CaptureData) -> dict[str, Any] | None:
+    """A free-hosting tenant named after a brand (microsoftaccount-kit.<builder>,
+    ledger-live-kit.pages.dev) whose page asks for credentials (LR1-03). The page
+    itself may never name the brand. A label token must start with the keyword's first
+    word, so purchasebank.example.app is not Chase; keywords under 5 letters are skipped."""
+    for frame in _all_frames(data):
+        host = _host(frame.get("url"))
+        platform = free_hosting(host) if host else None
+        if not platform or site(host) in data.allowlisted:
+            continue
+        prompt = _credential_prompt(frame)
+        if not prompt:
+            continue
+        tokens = _LABEL_TOKEN.findall(host[: -len(platform)])
+        joined = "".join(tokens)
+        for brand in data.brands:
+            for keyword in brand.keywords:
+                words = _LABEL_TOKEN.findall(keyword.lower())
+                if keyword.startswith("acronym:") or len("".join(words)) < 5:
+                    continue
+                if "".join(words) in joined and any(t.startswith(words[0]) for t in tokens):
+                    return {
+                        "brand": brand.name,
+                        "host": host,
+                        "platform": platform,
+                        "keyword": keyword,
+                        "prompt": prompt,
+                    }
+    return None
+
+
+# Favicon services a webmail kit uses to show the icon of the victim's own mail domain,
+# so one page passes for every provider (LR1-04).
+_FAVICON_SERVICE = re.compile(
+    r"^https?://(?:www\.google\.com/s2/favicons\?(?:[^#]*&)?domain(?:_url)?="
+    r"|t\d\.gstatic\.com/faviconV2\?(?:[^#]*&)?url=|icons\.duckduckgo\.com/ip3/"
+    r"|logo\.clearbit\.com/|icon\.horse/icon/)([^&?#]+)",
+    re.I,
+)
+
+
+def _favicon_lookups(data: CaptureData, reqs: list[dict[str, Any]]) -> list[str]:
+    """Hosts whose favicon the page fetched through a favicon service, other than the
+    sites the session itself visited."""
+    visited = {site(h) for f in _all_frames(data) if (h := _host(f.get("url")))}
+    out = set()
+    for r in reqs:
+        if not (m := _FAVICON_SERVICE.match(r["url"])):
+            continue
+        target = unquote(m.group(1)).strip().lower()
+        host = _host(target) if "://" in target else target.split("/")[0].removesuffix(".ico")
+        if host and "." in host and site(host) not in visited:
+            out.add(host)
+    return sorted(out)
 
 
 # --- HAR access (pure over the stored HAR) --------------------------------------------
@@ -1877,10 +1960,31 @@ def _final_ipfs(final_url: str | None) -> dict[str, str] | None:
     return {"url": final_url} if final_url and _IPFS_URL.search(final_url) else None
 
 
+# Cloudflare's block page for a hostname it has confirmed as phishing or malware. The
+# bypass form on the site's own /cdn-cgi/ path is the marker; the wording alone is what
+# an article about these warnings would contain (LR1-05).
+_ABUSE_WARNING = re.compile(r"(?i)\bsuspected\s+(phishing|malware)\b")
+
+
+def _abuse_interstitial(data: CaptureData, final_host: str) -> dict[str, str] | None:
+    for frame in _frames(data.result):
+        if _host(frame.get("url")) != final_host:
+            continue
+        bypass = any(
+            urlsplit(f.get("action") or "").path == "/cdn-cgi/phish-bypass"
+            and _host(f.get("action")) == final_host
+            for f in frame.get("forms", [])
+        )
+        warning = _ABUSE_WARNING.search(f"{frame.get('title', '')} {frame.get('text', '')}")
+        if bypass and warning:
+            return {"provider": "cloudflare", "kind": warning.group(1).lower()}
+    return None
+
+
 def _fake_captcha(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
     evidence: set[str] = set()
     wording = fake = False
-    for frame in _all_frames(data):
+    for frame in _lure_frames(data):
         text = f"{frame.get('title', '')} {frame.get('text', '')}"
         found = {m.group(0).strip().lower() for m in _VERIFY_WORDING.finditer(text)}
         if not found:
@@ -2110,19 +2214,48 @@ def _libraries(data: CaptureData) -> list[dict[str, str]]:
     return out[:30]
 
 
+def _entropy(s: str) -> float:
+    """Shannon entropy of the first 4 KB, as the page hook computes it."""
+    s = s[:4096]
+    if not s:
+        return 0.0
+    counts: dict[str, int] = {}
+    for ch in s:
+        counts[ch] = counts.get(ch, 0) + 1
+    return round(-sum(n / len(s) * math.log2(n / len(s)) for n in counts.values()), 2)
+
+
+def _code_exec(execs: dict[str, Any]) -> tuple[int, int, float]:
+    """eval/Function aggregates without the sandbox's own code. Captures made before the
+    runner dropped it still hold COLLECT_SCRIPT and Playwright's init wrappers; their
+    samples (256+ chars) are enough to take them out again."""
+    count = execs.get("code_count", 0)
+    max_len, max_entropy = execs.get("code_max_len", 0), execs.get("code_max_entropy", 0.0)
+    samples = execs.get("code_samples") or []
+    page = [s for s in samples if not is_harness_code(s)]
+    if len(page) == len(samples):
+        return count, max_len, max_entropy
+    return (
+        max(0, count - (len(samples) - len(page))),
+        max((len(s) for s in page), default=0),
+        max((_entropy(s) for s in page), default=0.0),
+    )
+
+
 def _jsapi_facts(data: CaptureData) -> dict[str, Any]:
     j = data.result.get("jsapi") or {}
     execs = j.get("exec") or {}
     apis = j.get("apis") or {}
     blobs = j.get("blobs") or []
+    code_count, code_max_len, code_max_entropy = _code_exec(execs)
     return {
         "dynamic_exec_count": execs.get("count", 0),
         "dynamic_exec_max_len": execs.get("max_len", 0),
         "dynamic_exec_max_entropy": execs.get("max_entropy", 0.0),
         # eval/Function/string-timer only (L2-01); 0 on captures that predate the split.
-        "code_exec_count": execs.get("code_count", 0),
-        "code_exec_max_len": execs.get("code_max_len", 0),
-        "code_exec_max_entropy": execs.get("code_max_entropy", 0.0),
+        "code_exec_count": code_count,
+        "code_exec_max_len": code_max_len,
+        "code_exec_max_entropy": code_max_entropy,
         "blob_constructs": len(blobs),
         "blob_details": blobs[:10],
         "history_floods": apis.get("history.pushState", 0) + apis.get("history.replaceState", 0),
@@ -2391,6 +2524,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "free_hosting": free_hosting(final_host) if final_host else None,
             "ipfs": _final_ipfs(final_url),
             "title": r.get("title") or "",
+            "abuse_interstitial": _abuse_interstitial(data, final_host) if final_host else None,
         },
         "capture": {
             "end_reason": r.get("end_reason"),
@@ -2447,7 +2581,12 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "ages": ages,
         },
         "redirects": _redirects(data),
-        "brand": _brand(data, forms["cross_domain_credential_forms"]),
+        "brand": {
+            **_brand(data, forms["cross_domain_credential_forms"]),
+            "hosting_label": _hosting_brand_label(data),
+            "favicon_lookups": (favicons := _favicon_lookups(data, reqs))[:10],
+            "favicon_lookup_count": len(favicons),
+        },
         "network": {
             "requests": len(data.har_entries),
             "hosts": len(hosts),
