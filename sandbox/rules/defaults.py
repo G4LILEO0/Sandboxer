@@ -538,6 +538,24 @@ BEHAVIOUR_RULES = [
         },
         ["lure.fake_captcha_evidence", "clipboard.commands", "final.url"],
     ),
+    # --- fake verification with Run / terminal paste steps, before any copy (LR1-02) --
+    _rule(
+        "fake_captcha_paste_instructions",
+        "high",
+        ["clickfix"],
+        ["T1204.004", "T1059.001"],
+        "A fake verification page tells the visitor to open Run or a terminal (Win+R, "
+        "Win+X) and paste. Kits write the command only after the checkbox click, so an "
+        "automated run sees the steps but no clipboard write; hidden steps count. A real "
+        "challenge page never asks for either.",
+        {
+            "all": [
+                {"fact": "lure.fake_captcha", "op": "eq", "value": True},
+                {"fact": "lure.run_dialog_instructions", "op": "gt", "value": 0},
+            ]
+        },
+        ["lure.fake_captcha_evidence", "lure.run_dialog_pages", "final.url"],
+    ),
     _rule(
         "filefix_command_disguised_as_path",
         "critical",
@@ -1382,6 +1400,7 @@ DEFAULT_WEIGHTS = {
     "cloaking_scripted_bounce": 30,
     "trusted_redirector_to_lure": 20,
     "captcha_gated_credential_page": 25,
+    "fake_captcha_paste_instructions": 55,
 }
 
 # (name, keywords, domains). Keywords match whole words, case-insensitively. A domain

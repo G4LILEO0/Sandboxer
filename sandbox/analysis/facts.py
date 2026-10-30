@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
+from html import unescape
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -216,7 +217,8 @@ _PADDED_DECOY = re.compile(r"^[^\n]*\S([ \t]{12,}|[-_=]{10,})[^\n]*[A-Za-z][^\n]
 # Heavy caret escaping inside a word (f^^i^^n^^g^^e^^r): no copyable docs command does this.
 _CARET_OBFUSCATION = re.compile(r"(\w\^+){3,}\w")
 _RUN_DIALOG = re.compile(
-    r"(win(dows)?(\s*(key|logo))?\s*\+\s*r\b|⊞|press\s+(the\s+)?windows\s+(key|button)|"
+    r"(win(dows)?(\s*(key|logo))?\s*\+\s*r\b|⊞|press\s+(and\s+hold\s+)?(the\s+)?windows\s+"
+    r"(key|button)|"
     r"open\s+(the\s+)?(run\s+dialog|terminal|powershell|windows\s+terminal)|"
     r"powershell\s*\(\s*admin\s*\)|win\s*\+\s*x|cmd\s*\+\s*space|command\s*\+\s*space|"
     r"ctrl\s*\+\s*l\b|explorer('s)?\s+address\s+bar|file\s+explorer)",
@@ -296,6 +298,26 @@ def _frames(result: dict[str, Any]) -> list[dict[str, Any]]:
 def _all_frames(data: CaptureData) -> list[dict[str, Any]]:
     """Live frames at the end of the session plus every page seen earlier."""
     return _frames(data.result) + data.dom_pages
+
+
+_MARKUP_NOISE = re.compile(r"(?is)<(script|style|noscript)\b[^>]*>.*?</\1\s*>|<[^>]+>")
+
+
+def _lure_frames(data: CaptureData) -> list[dict[str, Any]]:
+    """_all_frames plus the whole text of each raw DOM snapshot, hidden elements included
+    (LR1-02). Fake-verification kits append their overlay after a long page and reveal
+    the Win+R / Win+X steps only after the checkbox click, so the capped, visible-only
+    page text never reaches them. Used for the run-dialog and fake-CAPTCHA facts only.
+    The text is cut into overlapping 4000-character windows, so the wording those facts
+    pair up must sit close together, as it does on one overlay."""
+    extra = []
+    for doc in data.dom_html:
+        text = _MARKUP_NOISE.sub(" ", (doc.get("html") or "")[:2_000_000])
+        text = " ".join(unescape(text).split())
+        url = doc.get("url", "")
+        for start in range(0, max(len(text) - 2000, 1), 2000):
+            extra.append({"url": url, "title": "", "text": text[start : start + 4000]})
+    return _all_frames(data) + extra
 
 
 def contacted_hosts(data: CaptureData) -> list[str]:
@@ -697,7 +719,7 @@ def _lure(data: CaptureData) -> dict[str, Any]:
     pages = sorted(
         {
             f.get("url", "")
-            for f in frames
+            for f in _lure_frames(data)
             if _RUN_DIALOG.search(f.get("text", "")) and _PASTE.search(f.get("text", ""))
         }
     )
@@ -1882,7 +1904,7 @@ def _final_ipfs(final_url: str | None) -> dict[str, str] | None:
 def _fake_captcha(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
     evidence: set[str] = set()
     wording = fake = False
-    for frame in _all_frames(data):
+    for frame in _lure_frames(data):
         text = f"{frame.get('title', '')} {frame.get('text', '')}"
         found = {m.group(0).strip().lower() for m in _VERIFY_WORDING.finditer(text)}
         if not found:

@@ -2409,3 +2409,50 @@ def test_password_page_posting_to_form_collector_fires_and_contact_form_is_quiet
     contact_form = {"action": "", "fields": [{"type": "email"}, {"type": "textarea"}]}
     contact = _cap(url, [_page(url, "Contact us", forms=[contact_form])], har=har)
     assert "credential_post_to_form_collector" not in _hits(contact)
+
+
+# --- fake verification with Win+X / Run paste steps, no clipboard yet (LR1-02) -------
+
+# Sanitised from a live EtherHiding kit on a compromised WordPress site: the overlay is
+# appended after ~220 KB of page and its steps stay hidden until the checkbox click.
+_WINX_OVERLAY = (
+    '<div class="main-content" style="display:none"><p>site.example Verifying...</p>'
+    "<p>Human Verification</p><p>Authorize your browser now</p>"
+    "<b>PRESS AND HOLD WINDOWS KEY, THEN PRESS X</b><ol><li>In the menu that opens, select "
+    "Terminal or press I</li><li>In the terminal verification, press Ctrl + V</li>"
+    "<li>Press Enter</li></ol><span>Ray ID: 0000000000000000</span></div>"
+)
+_FILLER = "<p>" + "Consultoria especializada para maximizar resultados. " * 400 + "</p>"
+
+
+def _winx_cap(url, html, text="Consultoria Contacto"):
+    page = _page(url, "STRATEX - Consultoria", text=text)
+    return _cap(url, [page], dom_html=[{"url": url, "html": html}])
+
+
+def test_fake_captcha_paste_steps_fire_when_hidden_after_a_long_page():
+    url = "https://site.example/"
+    data = _winx_cap(url, f"<html><body>{_FILLER}{_WINX_OVERLAY}</body></html>")
+    assert "fake_captcha_paste_instructions" in _hits(data)
+    assert build_facts(data)["clipboard"]["writes"] == 0  # no click, no clipboard write
+
+
+def test_real_challenge_and_helpdesk_paste_steps_are_not_fake_captcha():
+    url = "https://site.example/"
+    challenge = (
+        "<html><body><h1>Verify you are human by completing the action below.</h1>"
+        "<p>site.example needs to review the security of your connection.</p>"
+        "<p>Ray ID: 0000000000000000</p></body></html>"
+    )
+    helpdesk = (
+        "<html><body><h1>Install the VPN client</h1><p>Press Win + X, open Terminal, then "
+        "paste the command below with Ctrl + V.</p></body></html>"
+    )
+    # Both phrasings on one long page, but nowhere near each other.
+    far_apart = (
+        "<html><body><p>Enter the verification code we emailed you.</p>"
+        f"{_FILLER}{_FILLER}<p>Press Win + X, open Terminal and paste with Ctrl + V.</p>"
+        "</body></html>"
+    )
+    for html in (challenge, helpdesk, far_apart):
+        assert "fake_captcha_paste_instructions" not in _hits(_winx_cap(url, html))
