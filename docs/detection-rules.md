@@ -59,11 +59,15 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `scripts.max_obfuscation_score`, `scripts.obfuscated` | Obfuscation signals per script |
 | `downloads.count`, `.executable`, `.archive`, `.disguised`, `.unprompted`, `.unprompted_risky` | Downloads; `disguised` covers `x.pdf.exe` and a PE file named `.pdf`; `unprompted_risky` counts executables, archives or disguised files downloaded without a click |
 | `clipboard.command_like` | Clipboard writes that contain any shell command |
+| `clipboard.writes`, `.max_write_len`, `.write_samples` | Page-initiated clipboard writes (analyst Ctrl+C excluded): count, longest text, and up to 5 samples (300 chars, with `user_activation`) |
 | `clipboard.clickfix_like` | Clipboard writes with ClickFix traits: a download cradle, hidden or encoded PowerShell, mshta of a URL, `curl … \| sh`, `finger user@host` or `for /f … in ('…') do %x` fetch-and-run, `start /min` or `%COMSPEC%`, `^` caret obfuscation, or a fake-CAPTCHA comment or space/dash-padded decoy. `^` and in-word `""` are stripped before matching |
 | `lure.run_dialog_instructions` | Pages telling the visitor to open Run or a terminal and paste |
 | `lure.payment_pretext`, `lure.payment_pretexts` | Reasons to pay, in English and Arabic: redelivery or customs fees, held parcels, traffic fines, tolls (`رسوم التوصيل`, `شحنتك`, `مخالفة مرورية`, …) |
 | `forms.payment_card_forms`, `.otp_forms`, `.seed_phrase_forms`, `.sensitive_prompt_pages` | Pages asking for card details (number plus CVV or expiry), a one-time code, or a wallet recovery phrase, excluding brand-owned and allowlisted sites |
 | `final.free_hosting` | The free hosting or site-builder platform the final page is on (`pages.dev`, `typedream.app`, `web.app`, …), or null |
+| `final.abuse_interstitial` | The session ended on Cloudflare's 'Suspected Phishing/Malware' block for the hostname (`{provider, kind}`), or null |
+| `brand.hosting_label` | A free-hosting tenant named after a brand (`microsoftaccount-kit.<builder>`) whose page asks for credentials: `{brand, host, platform, keyword, prompt}`, or null |
+| `brand.favicon_lookups`, `.favicon_lookup_count` | Sites whose favicon the page fetched through a favicon service (Google s2/faviconV2, DuckDuckGo, Clearbit) but never visited |
 | `domains.government_lookalike`, `.government_lookalikes` | Hosts dressed as government sites outside a government suffix (`absher-gov-sa.com`) |
 | `brand.prompt`, `brand.free_hosting_lure` | What the impersonating page asks for (`password`, `payment`, `seed`, `otp` or `username`), and whether it is a brand login or wallet page on free hosting |
 | `domains.lookalike`, `domains.lookalikes` | Hosts imitating a brand domain (homoglyph, typo, combo) |
@@ -72,6 +76,7 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `redirects.count`, `.cross_domain`, `.https_downgrade`, `.chain` | The page's own redirect chain; navigations made by the analyst are excluded |
 | `brand.name`, `.confidence`, `.credential_prompt`, `.evidence`, `.url` | The strongest brand-impersonation candidate (see below) |
 | `network.blocked_internal` | Blocked requests to internal or metadata addresses |
+| `network.local_probe.port_count`, `.ports`, `.host_count`, `.hosts`, `.remote_access_count`, `.remote_access`, `.channels`, `.scripts`, `.fraud_vendor`, `.local_app` | Local port scanning: blocked HTTP/WebSocket attempts and WebRTC TURN/STUN servers aimed at loopback (`127.0.0.0/8`, `::1`, `localhost`, `0.0.0.0`) or private addresses, by port and host. `remote_access` names the remote-access ports tried (`3389/rdp`, `5900/vnc`, `5938/teamviewer`, `7070/anydesk`, …); `scripts` are the initiating scripts; `fraud_vendor` is set when one of them is a known anti-fraud profiler (ThreatMetrix, including its first-party `/fp/tags.js` paths), or, when no initiator is known (blocked WebSockets never have one), when such a profiler was loaded on the page and the probes match its own scan exactly (loopback WebSockets on its known ports only), so loading the tag alone cannot silence the rule; `local_app` when every port is a desktop app's helper range (Discord RPC 6463-6472). Link-local/metadata targets are left to `blocked_internal` |
 | `network.ip_lookups` | Client-side IP/ASN/geo lookup services the page called (geofencing / sandbox checks) |
 | `frames.hidden_iframes` | Invisible third-party iframes that are not allowlisted |
 | `frames.smuggled_credential_pages` | `blob:`/`about:` documents created by the page that hold a credential form (HTML smuggling) |
@@ -88,7 +93,7 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `web3.wallet_requests`, `.wallet_drainer` | Signing/sending requests seen by the fake wallet provider (only when `SANDBOX_FAKE_WALLET` is on) |
 | `websocket.count`, `.connections` | WebSocket connections and parsed Socket.IO event names |
 | `clipboard.path_disguised`, `.no_gesture_writes`, `.overwritten_command` | FileFix path-disguised commands; writes with no user gesture; a command later blanked/overwritten |
-| `lure.fake_captcha`, `.fake_captcha_evidence`, `.genuine_challenge` | Fake CAPTCHA/verification UI, and whether a genuine Turnstile/reCAPTCHA resource was loaded |
+| `lure.fake_captcha`, `.fake_captcha_evidence`, `.genuine_challenge` | Fake CAPTCHA/verification UI, and whether a genuine Turnstile/reCAPTCHA resource was loaded; with `lure.run_dialog_instructions` this also reads hidden overlay text from the raw DOM snapshots |
 | `lure.fake_update_pages` | Non-vendor pages showing a browser/software update lure |
 | `final.ipfs` | The final page is served from an IPFS gateway (`{gateway, cid}` or null) |
 | `evasion.devtools_blocked`, `.devtools_blocked_keys`, `.context_menu_blocked` | DevTools shortcuts / context menu the page cancelled (observed via the key probe) |
@@ -100,7 +105,7 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `capture.gated` | A CAPTCHA/Turnstile challenge was seen this session (prefer `unknown` over `benign`; re-run interactively) |
 | `scripts.libraries` | JS library inventory parsed from CDN script URLs (`{name, version, url}`) |
 | `cookies.end_of_session` | Cookie names in the jar at teardown (values are hashed, never stored) |
-| `js.dynamic_exec_count`, `.dynamic_exec_max_len`, `.dynamic_exec_max_entropy` | Runtime eval/Function/setTimeout(string) calls: count, longest argument, highest entropy |
+| `js.dynamic_exec_count`, `.dynamic_exec_max_len`, `.dynamic_exec_max_entropy` | Runtime eval/Function/setTimeout(string) calls: count, longest argument, highest entropy; `js.code_exec_*` are eval/Function/string-timer only and exclude the sandbox's own evaluate() and Playwright wrappers |
 | `js.blob_constructs`, `.blob_details` | Blob/File constructions over 1 KB (HTML smuggling) |
 | `js.history_floods`, `.fullscreen`, `.pointer_lock`, `.keyboard_lock`, `.notification_prompt`, `.service_worker`, `.sw_scripts` | Runtime API calls used by browser lockers and push-bait pages |
 | `lure.tech_support_phone`, `.tech_support_phones`, `.allow_notifications_bait` | A support phone number near scare wording; "click Allow to continue/verify" coercion |
