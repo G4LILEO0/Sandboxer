@@ -1828,6 +1828,64 @@ def test_runtime_dynamic_execution_ignores_innerhtml_markup():
     assert "runtime_dynamic_execution" not in _hits(_cap("https://x.example/", jsapi=_MARKUP_EXEC))
 
 
+# --- the sandbox's own evaluate() calls are not page code (live round 1) --------------
+
+_PW_WRAPPER = (
+    "(() => {\n      globalThis.__pwInitScripts = globalThis.__pwInitScripts || {};\n"
+    '      const hasInitScript = globalThis.__pwInitScripts["3cde9adf29a22048e823b4a13cbd417f"];'
+    "\n" + "      Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});\n" * 6
+)
+_PW_WS_DISPATCH = (
+    'globalThis.__pwWebSocketDispatch({"id":"' + "5" * 64 + '","type":"sendToPage",'
+    '"data":{"data":"430[null,{\\"serverVersion\\":3}]' + "x" * 400 + '"}})'
+)
+_PACKED = "".join(chr(33 + (i * 7919) % 90) for i in range(3000))  # high-entropy string
+
+
+def _harness_exec(*page_samples):
+    from sandbox.runner.page_scripts import COLLECT_SCRIPT
+
+    samples = [_PW_WRAPPER, COLLECT_SCRIPT.strip(), _PW_WS_DISPATCH, *page_samples]
+    return {
+        "exec": {
+            "count": 18,
+            "max_len": 3000 if page_samples else 2074,
+            "max_entropy": 6.4 if page_samples else 5.15,
+            "code_count": 16 + len(page_samples),
+            "code_max_len": 3000 if page_samples else 2074,
+            "code_max_entropy": 6.4 if page_samples else 5.15,
+            "code_samples": samples,
+        }
+    }
+
+
+def test_runtime_dynamic_execution_ignores_runner_and_playwright_evals():
+    """Live round 1: example.com scored 25 because frame.evaluate(COLLECT_SCRIPT) and
+    Playwright's init-script wrappers go through the page's hooked eval."""
+    url = "https://example.com/"
+    assert "runtime_dynamic_execution" not in _hits(_cap(url, jsapi=_harness_exec()))
+    js = build_facts(_cap(url, jsapi=_harness_exec()))["js"]
+    assert (js["code_exec_count"], js["code_exec_max_len"]) == (13, 0)
+    # A page that really evals a large packed string next to the harness noise still hits.
+    packed = _cap(url, jsapi=_harness_exec(_PACKED, _PACKED[::-1]))
+    assert "runtime_dynamic_execution" in _hits(packed)
+
+
+def test_runner_drops_its_own_evaluate_from_exec_aggregates(tmp_path):
+    from types import SimpleNamespace
+
+    from sandbox.runner.capture import Capture
+    from sandbox.runner.page_scripts import COLLECT_SCRIPT
+
+    (tmp_path / "scripts").mkdir()
+    stub = SimpleNamespace(jsapi={}, dynamic_scripts=0, out=tmp_path)
+    for code in (COLLECT_SCRIPT.strip(), _PW_WRAPPER, _PW_WS_DISPATCH):
+        Capture._on_jsapi(stub, "js_exec", {"api": "eval", "len": len(code), "code": code})
+    assert stub.jsapi == {} and not list((tmp_path / "scripts").iterdir())
+    Capture._on_jsapi(stub, "js_exec", {"api": "eval", "len": 3000, "code": _PACKED})
+    assert stub.jsapi["exec"]["code_count"] == 1 and stub.dynamic_scripts == 1
+
+
 def test_html_smuggling_binary_blob_fires_and_csv_export_is_quiet():
     jsapi = {"blobs": [{"ctor": "Blob", "size": 50000, "mime": "application/octet-stream"}]}
     data = _cap(
