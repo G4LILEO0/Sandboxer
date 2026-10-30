@@ -1960,6 +1960,27 @@ def _final_ipfs(final_url: str | None) -> dict[str, str] | None:
     return {"url": final_url} if final_url and _IPFS_URL.search(final_url) else None
 
 
+# Cloudflare's block page for a hostname it has confirmed as phishing or malware. The
+# bypass form on the site's own /cdn-cgi/ path is the marker; the wording alone is what
+# an article about these warnings would contain (LR1-05).
+_ABUSE_WARNING = re.compile(r"(?i)\bsuspected\s+(phishing|malware)\b")
+
+
+def _abuse_interstitial(data: CaptureData, final_host: str) -> dict[str, str] | None:
+    for frame in _frames(data.result):
+        if _host(frame.get("url")) != final_host:
+            continue
+        bypass = any(
+            urlsplit(f.get("action") or "").path == "/cdn-cgi/phish-bypass"
+            and _host(f.get("action")) == final_host
+            for f in frame.get("forms", [])
+        )
+        warning = _ABUSE_WARNING.search(f"{frame.get('title', '')} {frame.get('text', '')}")
+        if bypass and warning:
+            return {"provider": "cloudflare", "kind": warning.group(1).lower()}
+    return None
+
+
 def _fake_captcha(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
     evidence: set[str] = set()
     wording = fake = False
@@ -2503,6 +2524,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "free_hosting": free_hosting(final_host) if final_host else None,
             "ipfs": _final_ipfs(final_url),
             "title": r.get("title") or "",
+            "abuse_interstitial": _abuse_interstitial(data, final_host) if final_host else None,
         },
         "capture": {
             "end_reason": r.get("end_reason"),

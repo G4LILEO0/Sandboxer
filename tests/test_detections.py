@@ -2492,6 +2492,38 @@ def test_brand_named_tenant_without_prompt_or_brand_is_quiet():
     assert "brand_named_free_hosting_login" not in _hits(data)
 
 
+# --- hosting provider's phishing / malware block page (LR1-05) -----------------------
+
+
+def _cf_page(url, title, text, action_path):
+    form = {"action": url.rstrip("/") + action_path, "fields": [{"type": "hidden"}]}
+    return _page(url, title, text=text, forms=[form])
+
+
+def test_cloudflare_abuse_interstitial_fires():
+    url = "https://kit.example-host.workers.dev/"
+    for kind in ("Phishing", "Malware"):
+        page = _cf_page(
+            url,
+            f"Suspected {kind} | Cloudflare",
+            f"Warning Suspected {kind} This website has been reported. Ignore & Proceed",
+            "/cdn-cgi/phish-bypass",
+        )
+        assert "hosting_abuse_interstitial" in _hits(_cap(url, [page]))
+
+
+def test_cloudflare_challenge_and_article_are_not_abuse_interstitial():
+    url = "https://shop.example/"
+    challenge = _cf_page(
+        url, "Just a moment...", "Verify you are human", "/cdn-cgi/challenge-platform/h/g"
+    )
+    assert "hosting_abuse_interstitial" not in _hits(_cap(url, [challenge]))
+    article = _page(
+        "https://news.example/cf", "What a Suspected Phishing warning from Cloudflare means"
+    )
+    assert "hosting_abuse_interstitial" not in _hits(_cap("https://news.example/cf", [article]))
+
+
 # --- webmail kit borrowing the victim's mail-domain favicon (LR1-04) -----------------
 
 
