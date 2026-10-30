@@ -2750,3 +2750,69 @@ def test_local_port_scan_over_webrtc_turn():
     lan = [{"urls": [f"turn:10.0.0.{i}" for i in range(1, 11)]}]
     assert build_facts(_cap(url, webrtc=lan))["network"]["local_probe"]["ports"] == [3478]
     assert "local_port_scan" in _hits(_cap(url, webrtc=lan))
+
+
+# --- clipboard writes the command patterns miss ---------------------------------------
+
+# Inert stand-in for an obfuscated payload: alias lookup plus base64 that the command
+# patterns do not know; it decodes to "sandboxer-test".
+_ODD_PAYLOAD = (
+    "&(gal ?e?)([Text.Encoding]::UTF8.GetString("
+    "[Convert]::FromBase64String('c2FuZGJveGVyLXRlc3Q=')))"
+)
+_RUN_STEPS = "Verify you are human: press Win + R, paste with Ctrl + V and press Enter."
+_CLIPBOARD_RULES = {
+    "clickfix_clipboard_command",
+    "clipboard_command_write",
+    "fake_captcha_clipboard_command",
+    "filefix_command_disguised_as_path",
+    "clipboard_command_tampering",
+    "clipboard_write_with_paste_lure",
+    "clipboard_no_gesture_write",
+    "clipboard_page_write",
+}
+
+
+def _clip_hits(url, text, writes, allowlisted=()):
+    page = _page(url, "Verification", text=text)
+    data = _cap(url, [page], clipboard=writes, allowlisted=allowlisted)
+    return _hits(data) & _CLIPBOARD_RULES
+
+
+def test_unrecognised_payload_with_run_steps_is_the_paste_lure():
+    url = "https://verify.example-host.com/"
+    assert (
+        build_facts(_cap(url, clipboard=[_cwrite(_ODD_PAYLOAD)]))["clipboard"]["command_like"] == 0
+    )
+    assert _clip_hits(url, _RUN_STEPS, [_cwrite(_ODD_PAYLOAD)]) == {
+        "clipboard_write_with_paste_lure"
+    }
+
+
+def test_write_without_gesture_is_the_no_gesture_rule():
+    url = "https://verify.example-host.com/"
+    hits = _clip_hits(url, "Loading...", [_cwrite("ref-7Q2X-session-token", gesture=False)])
+    assert hits == {"clipboard_no_gesture_write"}
+
+
+def test_copy_buttons_only_get_the_low_rule():
+    docs = "https://docs.example.org/install"
+    shop = "https://shop.example/deals"
+    cases = [
+        (docs, "Install the package. Copy", "pip install sandboxer-docs"),
+        (shop, "Use code SAVE20NOW at checkout. Copy code", "SAVE20NOW"),
+        (shop, "Share this product", "https://shop.example/p/123?ref=share"),
+        # A help article that copies a short path for the Run dialog.
+        (docs, "Press Win + R, paste %temp% with Ctrl + V and press Enter.", "%temp%"),
+    ]
+    for url, text, copied in cases:
+        assert _clip_hits(url, text, [_cwrite(copied)]) == {"clipboard_page_write"}, copied
+    # An allowlisted site's long copy next to Run steps is not the high rule either.
+    hits = _clip_hits(docs, _RUN_STEPS, [_cwrite(_ODD_PAYLOAD)], allowlisted={"example.org"})
+    assert hits == {"clipboard_page_write"}
+
+
+def test_analyst_ctrl_c_is_not_a_page_write():
+    url = "https://docs.example.org/install"
+    analyst = {"api": None, "text": "copied by the analyst", "trusted": True}
+    assert _clip_hits(url, "Install", [analyst]) == set()
