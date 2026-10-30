@@ -258,6 +258,33 @@ async def test_quarantine_download_needs_confirmation(env):
     assert "sandbox" in shown.headers["content-security-policy"]
 
 
+async def test_rule_hit_evidence(env):
+    client, ctx, worker, _ = env
+    created = await _submit(client, restricted_to=["alice@example.org"])
+    await _drain(worker)
+    aid = created["id"]
+    report = (await client.get(f"/v1/analyses/{aid}/report", headers=ALICE)).json()
+    hit = next(h for h in report["rule_hits"] if h["rule"] == "clickfix_clipboard_command")
+
+    url = f"/v1/analyses/{aid}/rule-hits/{hit['id']}/evidence"
+    ev = (await client.get(url, headers=ALICE)).json()
+    assert ev["rule"] == "clickfix_clipboard_command" and ev["rule_found"]
+    assert ev["condition"] and any(c["passed"] for c in ev["condition"])
+    assert any("powershell" in s["content"] for s in ev["samples"])
+
+    # Same visibility as the report: a hidden analysis and a foreign hit look missing.
+    assert (await client.get(url, headers=CAROL)).status_code == 404
+    other = await _submit(client, url="https://public.example/other")
+    assert (
+        await client.get(
+            f"/v1/analyses/{other['id']}/rule-hits/{hit['id']}/evidence", headers=ALICE
+        )
+    ).status_code == 404
+    assert (
+        await client.get(f"/v1/analyses/{aid}/rule-hits/rh_nope/evidence", headers=ALICE)
+    ).status_code == 404
+
+
 async def test_reanalysis_tags_override_notes(env):
     client, ctx, worker, _ = env
     created = await _submit(client)
