@@ -22,6 +22,15 @@ function validateDestination(decoded) {
   return u.toString();
 }
 
+// The generic catch-all guesses from parameter names alone, so it needs more than
+// "parses as a URL": safeParseUrl() would turn any token, such as the share id in
+// google.com.kw/share.google?q=cg0sNh9Sa48oSYxhf, into https://cg0snh9sa48osyxhf/.
+// Only an explicit http(s) URL counts.
+function validateExplicitDestination(decoded) {
+  if (!decoded || !/^https?:\/\//i.test(decoded.trim())) return null;
+  return validateDestination(decoded);
+}
+
 function tryDecodeURIComponent(s) {
   try { return decodeURIComponent(s); } catch (e) { return null; }
 }
@@ -159,9 +168,9 @@ const WRAPPER_TABLE = [
       const p = getParam(url, 'url', 'u', 'q', 'redirect', 'target', 'dest', 'link');
       if (!p) return null;
       const decoded = tryDecodeURIComponent(p);
-      if (validateDestination(decoded)) return decoded;
+      if (validateExplicitDestination(decoded)) return decoded;
       const b64 = tryBase64Decode(p);
-      if (validateDestination(b64)) return b64;
+      if (validateExplicitDestination(b64)) return b64;
       return null;
     },
   },

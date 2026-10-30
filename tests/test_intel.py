@@ -112,6 +112,39 @@ async def test_vt_url_submits_and_polls_when_unknown(client):
     assert response.json()["data"]["type"] == "url"
 
 
+async def test_vt_url_submit_rejection_keeps_vendor_message(client):
+    url = "https://cg0snh9sa48osyxhf/?876164590083787650943"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "code": "InvalidArgumentError",
+                        "message": "Unable to canonicalize url",
+                    }
+                },
+            )
+        return httpx.Response(404, json={"error": {"code": "NotFoundError"}})
+
+    _use(client, handler)
+    response = await client.get(f"/v1/intel/vt/url/{quote(url, safe='')}")
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "VirusTotal submit HTTP 400",
+        "detail": "Unable to canonicalize url",
+    }
+
+
+async def test_vt_url_lookup_keeps_every_question_mark(client):
+    url = "https://google.com.kw/share.google?q=cg0sNh9Sa48oSYxhf?876164590083787650943"
+    calls = _use(client, lambda r: httpx.Response(200, json={"data": {"type": "url"}}))
+    response = await client.get(f"/v1/intel/vt/url/{quote(url, safe='')}")
+    assert response.status_code == 200
+    assert calls[0].url.path == f"/api/v3/urls/{vt_url_id(url)}"
+
+
 async def test_abuseipdb_lookup(client):
     calls = _use(client, lambda r: httpx.Response(200, json={"data": {"abuseConfidenceScore": 5}}))
     response = await client.get("/v1/intel/abuseipdb/93.184.216.34")
