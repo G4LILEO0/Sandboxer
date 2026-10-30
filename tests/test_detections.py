@@ -1886,6 +1886,66 @@ def test_runner_drops_its_own_evaluate_from_exec_aggregates(tmp_path):
     assert stub.jsapi["exec"]["code_count"] == 1 and stub.dynamic_scripts == 1
 
 
+# --- tag-manager eval is not packed code (live round 2) ------------------------------
+
+_TRACKING_PARAMS = (
+    "client_id fbclid twclid msclkid unapproved moderation-hash wps_preview wvideo "
+    "hss_channel scrlybrkr li_fat_id redirect lang_geo ck_subscriber_id _hsenc _hsmi "
+    "__hssc __hstc __hsfp hsa_acc hsa_cam hsa_grp hsa_ad hsCtaTracking wchannelid "
+    "_thumbnail_id preview_nonce preview_id w3tc_note edd_action download_key price_id "
+    "download_id mc_cid mc_eid"
+).split()
+# Shape of a GTM-compiled custom-JS variable that strips tracking parameters.
+_GTM_VARIABLE = (
+    '(function(){var the_hostname=google_tag_manager["rm"]["9334995"](9);'
+    'var the_path=google_tag_manager["rm"]["9334995"](10);'
+    'var the_query=google_tag_manager["rm"]["9334995"](11);'
+    "var params_to_remove=[" + ",".join(f'"{p}"' for p in _TRACKING_PARAMS) + "];"
+    "var query_params=new URLSearchParams(the_query);params_to_remove.forEach("
+    'function(value,key){query_params["delete"](value)});var patterns_to_redact=['
+    'new RegExp(/\\S+(@|%40)\\S+\\.\\S+/,"gi")];query_params.forEach(function(value,key)'
+    "{var len=patterns_to_redact.length;for(i=0;i<len;i++)if(value.match("
+    "patterns_to_redact[i]))query_params.set(key,value.replace(patterns_to_redact[i],"
+    '"REDACTED"))});var cleaned_path=the_path;var lastChar=cleaned_path.substr(-1);'
+    'if(lastChar!="/")cleaned_path=cleaned_path+"/";if(query_params.toString().length)'
+    'cleaned_path=cleaned_path+"?"+query_params.toString();return cleaned_path})();'
+)
+
+
+def _gtm_exec(*samples):
+    return {
+        "exec": {
+            "count": 401,
+            "max_len": max(len(s) for s in samples),
+            "max_entropy": 5.4,
+            "code_count": 401,
+            "code_max_len": max(len(s) for s in samples),
+            "code_max_entropy": 5.4,
+            "code_samples": [_PW_WRAPPER, *samples],
+        }
+    }
+
+
+def test_runtime_dynamic_execution_ignores_tag_manager_variables():
+    """Live round 2: wordpress.org scored 35 on GTM's own eval of tag code."""
+    from sandbox.analysis.facts import _entropy
+
+    assert len(_GTM_VARIABLE) > 1024 and _entropy(_GTM_VARIABLE) > 4.5  # would have hit
+    url = "https://wordpress.example/news/"
+    assert "runtime_dynamic_execution" not in _hits(_cap(url, jsapi=_gtm_exec(_GTM_VARIABLE)))
+
+
+def test_tag_manager_marker_does_not_hide_packed_code():
+    import base64
+
+    blob = base64.b64encode(_PACKED.encode()).decode()
+    wrapped = _GTM_VARIABLE[:-4] + f';eval(atob("{blob}"))}})();'
+    url = "https://kit.example/"
+    assert "runtime_dynamic_execution" in _hits(_cap(url, jsapi=_gtm_exec(_GTM_VARIABLE, wrapped)))
+    plain = _cap(url, jsapi=_gtm_exec(_GTM_VARIABLE, _PACKED, _PACKED[::-1]))
+    assert "runtime_dynamic_execution" in _hits(plain)
+
+
 def test_html_smuggling_binary_blob_fires_and_csv_export_is_quiet():
     jsapi = {"blobs": [{"ctor": "Blob", "size": 50000, "mime": "application/octet-stream"}]}
     data = _cap(

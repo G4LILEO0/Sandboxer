@@ -2225,14 +2225,31 @@ def _entropy(s: str) -> float:
     return round(-sum(n / len(s) * math.log2(n / len(s)) for n in counts.values()), 2)
 
 
+# Google Tag Manager compiles custom-JS variables and custom-HTML tags through eval; the
+# compiled code calls google_tag_manager["rm"]["<container>"](n). Only readable tag code
+# is let off: a sample that also carries a long encoded run, \x escapes or obfuscator.io
+# names still counts, so the marker cannot be used as a wrapper for packed code (LR2-01).
+_TAG_MANAGER_EVAL = re.compile(r"""google_tag_manager\[\s*["']rm["']\s*\]\s*\[\s*["']\d+["']""")
+_PACKED_RUN = re.compile(r"[A-Za-z0-9+/=]{200,}|(?:\\x[0-9a-f]{2}){40,}", re.I)
+
+
+def _tag_manager_code(code: str) -> bool:
+    return bool(
+        _TAG_MANAGER_EVAL.search(code)
+        and not _PACKED_RUN.search(code)
+        and not _OBFUSCATOR_IO.search(code)
+    )
+
+
 def _code_exec(execs: dict[str, Any]) -> tuple[int, int, float]:
-    """eval/Function aggregates without the sandbox's own code. Captures made before the
-    runner dropped it still hold COLLECT_SCRIPT and Playwright's init wrappers; their
-    samples (256+ chars) are enough to take them out again."""
+    """eval/Function aggregates without the sandbox's own code or readable tag-manager
+    code. Captures made before the runner dropped its own code still hold COLLECT_SCRIPT
+    and Playwright's init wrappers; their samples (256+ chars) are enough to take them
+    out again."""
     count = execs.get("code_count", 0)
     max_len, max_entropy = execs.get("code_max_len", 0), execs.get("code_max_entropy", 0.0)
     samples = execs.get("code_samples") or []
-    page = [s for s in samples if not is_harness_code(s)]
+    page = [s for s in samples if not is_harness_code(s) and not _tag_manager_code(s)]
     if len(page) == len(samples):
         return count, max_len, max_entropy
     return (
