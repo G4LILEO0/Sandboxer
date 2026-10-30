@@ -110,6 +110,8 @@ function checkLookalikeBrand(hostname) {
       if (part.length < 4 || NOT_LOOKALIKES.has(part)) continue;
       for (const brand of COMMONLY_SPOOFED_BRANDS) {
         if (flagged.has(brand) || (BRAND_FAMILIES[brand] || [brand]).includes(owner)) continue;
+        // Brand top-level domains (share.google, www.amazon) belong to the brand.
+        if (host.endsWith(`.${brand}`)) continue;
         if (part === brand && raw === part) {
           // The brand's own word on someone else's domain: paypal-login.example,
           // paypal.example.net, microsoft.secure-docs.example (combosquatting).

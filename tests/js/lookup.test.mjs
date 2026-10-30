@@ -43,6 +43,10 @@ test('lookalike check: no false alarms on real words and brand domains', () => {
     'https://www.googleapis.com/x',
     'https://www.google.com.kw/',
     'https://phase.example/',
+    // Reported: "share" is two edits from "chase" and raised a Chase lookalike alert.
+    'https://share.google/cg0sNh9Sa48oSYxhf',
+    'https://google.com.kw/share.google?q=cg0sNh9Sa48oSYxhf?876164590083787650943',
+    'https://share.example.com/',
   ]) assert.deepEqual(codes(url).filter((c) => c.includes('brand')), [], url);
 });
 
