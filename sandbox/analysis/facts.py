@@ -1155,6 +1155,31 @@ def _hosting_brand_label(data: CaptureData) -> dict[str, Any] | None:
     return None
 
 
+# Favicon services a webmail kit uses to show the icon of the victim's own mail domain,
+# so one page passes for every provider (LR1-04).
+_FAVICON_SERVICE = re.compile(
+    r"^https?://(?:www\.google\.com/s2/favicons\?(?:[^#]*&)?domain(?:_url)?="
+    r"|t\d\.gstatic\.com/faviconV2\?(?:[^#]*&)?url=|icons\.duckduckgo\.com/ip3/"
+    r"|logo\.clearbit\.com/|icon\.horse/icon/)([^&?#]+)",
+    re.I,
+)
+
+
+def _favicon_lookups(data: CaptureData, reqs: list[dict[str, Any]]) -> list[str]:
+    """Hosts whose favicon the page fetched through a favicon service, other than the
+    sites the session itself visited."""
+    visited = {site(h) for f in _all_frames(data) if (h := _host(f.get("url")))}
+    out = set()
+    for r in reqs:
+        if not (m := _FAVICON_SERVICE.match(r["url"])):
+            continue
+        target = unquote(m.group(1)).strip().lower()
+        host = _host(target) if "://" in target else target.split("/")[0].removesuffix(".ico")
+        if host and "." in host and site(host) not in visited:
+            out.add(host)
+    return sorted(out)
+
+
 # --- HAR access (pure over the stored HAR) --------------------------------------------
 
 _JSONRPC_METHODS = {"eth_call", "eth_getstorageat", "eth_gettransactionbyhash", "eth_getcode"}
@@ -2537,6 +2562,8 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
         "brand": {
             **_brand(data, forms["cross_domain_credential_forms"]),
             "hosting_label": _hosting_brand_label(data),
+            "favicon_lookups": (favicons := _favicon_lookups(data, reqs))[:10],
+            "favicon_lookup_count": len(favicons),
         },
         "network": {
             "requests": len(data.har_entries),
