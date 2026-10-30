@@ -193,13 +193,66 @@ async function analyzeOne(det, { force = false } = {}) {
   return { norm, cached: false };
 }
 
-function updateSummary(tally, dupCount) {
+const VERDICT_ORDER = ['malicious', 'suspicious', 'unknown', 'clean', 'private'];
+let batchInfo = { total: 0, dupCount: 0, ignored: [] };
+let verdictFilter = null; // null shows every card
+
+function tallySlots() {
+  const tally = { done: 0 };
+  for (const slot of currentSlots) {
+    if (!slot.verdict) continue;
+    tally.done += 1;
+    tally[slot.verdict] = (tally[slot.verdict] || 0) + 1;
+  }
+  return tally;
+}
+
+function updateSummary() {
   if (!copyTemplateEl.hidden) templateEditor.refresh(); // preview follows new results
+  const tally = tallySlots();
+  const { total, dupCount, ignored } = batchInfo;
   const dupNote = dupCount > 0 ? `, ${dupCount} duplicate${dupCount === 1 ? '' : 's'} merged` : '';
-  const parts = [['malicious', 'malicious'], ['suspicious', 'suspicious'], ['clean', 'clean'], ['unknown', 'unknown'], ['private', 'private']]
-    .filter(([k]) => tally[k] > 0).map(([k, label]) => `${tally[k]} ${label}`);
-  const progress = tally.done < tally.total ? `Checked ${tally.done} of ${tally.total}` : `${tally.total} checked`;
-  countsEl.textContent = `${progress}${parts.length ? `: ${parts.join(', ')}` : ''}${dupNote}`;
+  const ignoredNote = ignored.length ? `, ${ignored.length} word${ignored.length === 1 ? '' : 's'} that ${ignored.length === 1 ? 'is' : 'are'} not IoCs ignored` : '';
+  const parts = VERDICT_ORDER.filter((k) => tally[k] > 0).map((k) => `${tally[k]} ${k}`);
+  const progress = tally.done < total ? `Checked ${tally.done} of ${total}` : `${total} checked`;
+  countsEl.textContent = `${progress}${parts.length ? `: ${parts.join(', ')}` : ''}${dupNote}${ignoredNote}`;
+  countsEl.title = ignored.length ? `Ignored: ${ignored.slice(0, 30).join(' ')}${ignored.length > 30 ? ' …' : ''}` : '';
+  renderVerdictFilter(tally);
+  applyView();
+}
+
+// "Show only" buttons, one per verdict present in the batch.
+function renderVerdictFilter(tally) {
+  const present = VERDICT_ORDER.filter((k) => tally[k] > 0);
+  if (verdictFilter && !present.includes(verdictFilter)) verdictFilter = null;
+  verdictFilterEl.replaceChildren();
+  if (present.length < 2 && !verdictFilter) return;
+  for (const v of [null, ...present]) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'copy-btn quiet';
+    b.textContent = v ? `${v[0].toUpperCase()}${v.slice(1)} ${tally[v]}` : 'All';
+    b.setAttribute('aria-pressed', String(verdictFilter === v));
+    b.onclick = () => { verdictFilter = v; updateSummary(); };
+    verdictFilterEl.appendChild(b);
+  }
+}
+
+// Applies the verdict filter and the chosen order to the cards on screen.
+function applyView() {
+  for (const slot of currentSlots) slot.node.hidden = !!verdictFilter && slot.verdict !== verdictFilter;
+  const ordered = sortEl.value === 'severity'
+    ? [...currentSlots].sort((a, b) => rank(a) - rank(b) || a.index - b.index)
+    : currentSlots;
+  ordered.forEach((slot) => resultsEl.appendChild(slot.node));
+}
+
+function rank(slot) {
+  const i = VERDICT_ORDER.indexOf(slot.verdict);
+  return i < 0 ? VERDICT_ORDER.length : i; // still loading: last
+}
+
+function visibleNorms() {
+  return currentSlots.filter((s) => s.norm && !s.node.hidden).map((s) => s.norm);
 }
 
 // Group pasted lines that resolve to the same effective type+value (after
@@ -246,20 +299,23 @@ function lookUpMore(values) {
 async function analyzeBatch(detected) {
   resultsEl.innerHTML = '';
   currentSlots = [];
-  if (!detected.length) { countsEl.textContent = 'Nothing to analyze'; return; }
+  if (!detected.length) { countsEl.textContent = 'Nothing to analyze'; verdictFilterEl.replaceChildren(); return; }
 
-  const groups = dedupeDetected(detected);
-  const dupCount = detected.length - groups.length;
+  // Pasting an email or a log line brings words along. When the paste has real IoCs,
+  // the words that are not IoCs are left out (listed on hover) instead of each
+  // getting an "unknown" card. A manual type override still brings one back.
+  const known = detected.filter((d) => d.type !== 'unknown');
+  const ignored = known.length ? detected.filter((d) => d.type === 'unknown').map((d) => d.raw) : [];
+  const groups = dedupeDetected(known.length ? known : detected);
+  batchInfo = { total: groups.length, dupCount: (known.length ? known : detected).length - groups.length, ignored };
 
-  const tally = { total: groups.length, done: 0, malicious: 0, suspicious: 0, clean: 0, unknown: 0 };
-  updateSummary(tally, dupCount);
-
-  const slots = groups.map((group) => {
+  const slots = groups.map((group, index) => {
     const loading = window.render.renderLoadingCard(group.det.value, group.det.type);
     resultsEl.appendChild(loading);
-    return { group, node: loading, norm: null };
+    return { group, index, node: loading, norm: null, verdict: null };
   });
   currentSlots = slots;
+  updateSummary();
 
   await Promise.all(slots.map(async (slot) => {
     async function runAndRender(force) {
@@ -275,19 +331,17 @@ async function analyzeBatch(detected) {
         slot.node.replaceWith(card);
         slot.node = card;
         slot.norm = norm;
-        return norm.verdict;
+        slot.verdict = norm.verdict;
       } catch (e) {
         const card = window.render.renderErrorCard(slot.group.det.value, slot.group.det.type, `Unexpected error: ${e.message}`);
         slot.node.replaceWith(card);
         slot.node = card;
-        return 'unknown';
+        slot.verdict = 'unknown';
       }
+      if (currentSlots === slots) updateSummary(); // a newer batch may have replaced this one
     }
 
-    const verdict = await runAndRender(false);
-    tally.done += 1;
-    tally[verdict] = (tally[verdict] || 0) + 1;
-    updateSummary(tally, dupCount);
+    await runAndRender(false);
   }));
 }
 
@@ -301,8 +355,21 @@ inputEl.addEventListener('keydown', (e) => {
 });
 
 copyAllSummariesBtn.addEventListener('click', () => {
-  const norms = currentSlots.map((s) => s.norm).filter(Boolean);
-  window.copyReport.copyAllSummaries(norms);
+  window.copyReport.copyAllSummaries(visibleNorms());
+});
+
+const verdictFilterEl = document.getElementById('verdict-filter');
+const sortEl = document.getElementById('sort-results');
+try { sortEl.value = localStorage.getItem('ioc-sort') || 'pasted'; } catch (e) { /* storage unavailable */ }
+sortEl.addEventListener('change', () => {
+  try { localStorage.setItem('ioc-sort', sortEl.value); } catch (e) { /* storage unavailable */ }
+  applyView();
+});
+
+// The shown IoCs as a plain list: what a blocklist, a SIEM watchlist or a ticket wants.
+document.getElementById('copy-iocs-btn').addEventListener('click', () => {
+  const values = visibleNorms().map((n) => window.render.displayValue(n.type === 'url' && n.urls && n.urls.unwrapped ? n.urls.unwrapped : n.ioc));
+  if (values.length) window.copyReport.copyToClipboard(values.join('\n'));
 });
 
 // --- Copy template: which fields every copy button copies, in what order ---------
