@@ -2490,3 +2490,36 @@ def test_brand_named_tenant_without_prompt_or_brand_is_quiet():
     page = _page(vouched, "Sign in", forms=[PASSWORD_FORM])
     data = _cap(vouched, [page], allowlisted={"ledger-live-kit.pages.dev"})
     assert "brand_named_free_hosting_login" not in _hits(data)
+
+
+# --- webmail kit borrowing the victim's mail-domain favicon (LR1-04) -----------------
+
+
+def _favicon(domain):
+    return _req(f"https://www.google.com/s2/favicons?domain={domain}")
+
+
+def test_dynamic_brand_favicon_login_fires():
+    url = "https://webmail-kit.example-host.vercel.app/"
+    page = _page(
+        url,
+        "Webmail Sign-in",
+        text="I am not a robot click on the checkbox to verify if you're human.",
+        forms=[PASSWORD_FORM],
+    )
+    har = [_favicon("mail-provider.example"), _req("https://api.ipify.org/?format=json")]
+    data = _cap(url, [page], har=har)
+    assert "dynamic_brand_favicon_login" in _hits(data)
+    assert build_facts(data)["brand"]["favicon_lookups"] == ["mail-provider.example"]
+
+
+def test_favicon_grid_and_plain_login_are_not_dynamic_brand():
+    url = "https://links.example-host.vercel.app/"
+    page = _page(url, "Sign in", forms=[PASSWORD_FORM])
+    grid = [_favicon(f"site{i}.example") for i in range(6)]  # a bookmarks dashboard
+    assert "dynamic_brand_favicon_login" not in _hits(_cap(url, [page], har=grid))
+    # An established domain with no other trait, showing a partner's icon.
+    corp = "https://portal.example-corp.com/"
+    page = _page(corp, "Sign in", forms=[PASSWORD_FORM])
+    har = [_favicon("partner.example")]
+    assert "dynamic_brand_favicon_login" not in _hits(_cap(corp, [page], har=har))

@@ -219,6 +219,33 @@ BEHAVIOUR_RULES = [
         {"fact": "brand.hosting_label", "op": "exists", "value": True},
         ["brand.hosting_label", "final.url"],
     ),
+    # --- webmail kit borrowing the victim's mail-domain favicon (LR1-04) --------------
+    _rule(
+        "dynamic_brand_favicon_login",
+        "high",
+        ["phishing", "credential-harvest"],
+        ["T1566.002", "T1656"],
+        "A password page fetches another site's favicon through a favicon service (Google "
+        "s2/faviconV2, DuckDuckGo, Clearbit), the trick webmail kits use to wear the "
+        "victim's own mail-provider icon, and it is on free hosting, a domain under 30 "
+        "days old, calls an IP-lookup service or shows verification wording.",
+        {
+            "all": [
+                {"fact": "forms.password_forms", "op": "gt", "value": 0},
+                {"fact": "brand.favicon_lookup_count", "op": "gt", "value": 0},
+                {"fact": "brand.favicon_lookup_count", "op": "lte", "value": 3},
+                {
+                    "any": [
+                        {"fact": "final.free_hosting", "op": "exists", "value": True},
+                        {"fact": "domains.final_age_days", "op": "lt", "value": 30},
+                        {"fact": "network.ip_lookups", "op": "exists", "value": True},
+                        {"fact": "lure.verification_wording", "op": "eq", "value": True},
+                    ]
+                },
+            ]
+        },
+        ["brand.favicon_lookups", "network.ip_lookups", "final.url"],
+    ),
     _rule(
         "government_lookalike_domain",
         "high",
@@ -1415,6 +1442,7 @@ DEFAULT_WEIGHTS = {
     "captcha_gated_credential_page": 25,
     "fake_captcha_paste_instructions": 55,
     "brand_named_free_hosting_login": 50,
+    "dynamic_brand_favicon_login": 50,
 }
 
 # (name, keywords, domains). Keywords match whole words, case-insensitively. A domain
