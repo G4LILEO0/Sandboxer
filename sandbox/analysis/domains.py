@@ -201,6 +201,8 @@ FREE_HOSTING = (
     # AI website builders / preview hosts (DE-PHI-013). v0 publishes to *.vercel.app
     # (listed above); bolt.new itself is the editor, its sites go to bolt.host.
     "lovable.app", "lovableproject.com", "v0.dev", "v0.app", "base44.app", "bolt.host",
+    # Free site-builder tenants seen hosting brand logins in live round 1 (LR1-03).
+    "flazio.online",
 )  # fmt: skip
 
 
