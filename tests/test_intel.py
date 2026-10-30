@@ -193,3 +193,103 @@ async def test_redirect_chain_detects_loop(client):
         await client.get("/v1/intel/redirect-chain", params={"url": "https://public.example/"})
     ).json()["hops"]
     assert hops[-1]["note"] == "redirect loop detected"
+
+
+async def test_redirect_chain_follows_meta_refresh_and_reports_title(client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/landing":
+            page = (
+                "<html><head><title>Loading&hellip;</title>"
+                "<META HTTP-EQUIV='Refresh' CONTENT='0; URL=https://public.example/final'>"
+            )
+            return httpx.Response(200, headers={"content-type": "text/html"}, text=page)
+        return httpx.Response(
+            200, headers={"content-type": "text/html; charset=utf-8"}, text="<title>Twitch</title>"
+        )
+
+    calls = _use(client, handler)
+    hops = (
+        await client.get(
+            "/v1/intel/redirect-chain", params={"url": "https://public.example/landing"}
+        )
+    ).json()["hops"]
+    assert [h["url"] for h in hops] == [
+        "https://public.example/landing",
+        "https://public.example/final",
+    ]
+    assert hops[0]["via"] == "meta-refresh"
+    assert hops[0]["location"] == "https://public.example/final"
+    assert hops[0]["title"] == "Loading…"
+    assert hops[1]["title"] == "Twitch"
+    assert hops[1]["location"] is None
+    assert calls[0].headers["accept-encoding"] == "identity"
+
+
+async def test_redirect_chain_follows_refresh_header(client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/":
+            return httpx.Response(200, headers={"refresh": "3;url=/next"}, text="")
+        return httpx.Response(200, headers={"content-type": "application/pdf"}, content=b"%PDF")
+
+    _use(client, handler)
+    hops = (
+        await client.get("/v1/intel/redirect-chain", params={"url": "https://public.example/"})
+    ).json()["hops"]
+    assert [h["url"] for h in hops] == ["https://public.example/", "https://public.example/next"]
+    assert hops[0]["via"] == "refresh-header"
+
+
+async def test_redirect_chain_flags_script_redirect_without_following(client):
+    page = "<script>window.location.href = atob('aHR0cHM6Ly9ldmlsLmV4YW1wbGUv');</script>"
+    calls = _use(
+        client, lambda r: httpx.Response(200, headers={"content-type": "text/html"}, text=page)
+    )
+    hops = (
+        await client.get("/v1/intel/redirect-chain", params={"url": "https://public.example/"})
+    ).json()["hops"]
+    assert len(hops) == 1 and len(calls) == 1
+    assert hops[0]["script_redirect"] is True
+    assert hops[0]["location"] is None
+
+
+async def test_redirect_chain_reads_only_the_start_of_a_page(client):
+    from sandbox.api.routes import intel
+
+    # The refresh tag sits past the cap, so it must not be seen.
+    body = (
+        "<html>"
+        + " " * (intel.BODY_PEEK_BYTES + 10)
+        + '<meta http-equiv="refresh" content="0;url=/x">'
+    )
+    _use(client, lambda r: httpx.Response(200, headers={"content-type": "text/html"}, text=body))
+    hops = (
+        await client.get("/v1/intel/redirect-chain", params={"url": "https://public.example/"})
+    ).json()["hops"]
+    assert len(hops) == 1
+    assert hops[0]["location"] is None
+
+
+@pytest.mark.parametrize(
+    ("value", "target"),
+    [
+        ("0; url=https://a.example/", "https://a.example/"),
+        ("0;URL='/next?a=1&amp;b=2'", "/next?a=1&b=2"),
+        ("https://a.example/", "https://a.example/"),
+        ("5", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_refresh_target(value, target):
+    from sandbox.api.routes.intel import refresh_target
+
+    assert refresh_target(value) == target
+
+
+def test_script_redirect_hint_ignores_lookalike_words():
+    from sandbox.api.routes.intel import inspect_page
+
+    assert "script_redirect" not in inspect_page(
+        "<p>geolocation = enabled; if (a == location) {}</p>"
+    )
+    assert inspect_page("<script>location.replace('/x')</script>")["script_redirect"] is True
