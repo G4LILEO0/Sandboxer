@@ -4,6 +4,7 @@ with newer rules without detonating again (ANA-13, FED-13)."""
 
 import base64
 import binascii
+import ipaddress
 import json
 import re
 from dataclasses import dataclass, field
@@ -1873,6 +1874,143 @@ def _ip_lookups(reqs: list[dict[str, Any]]) -> list[str]:
     return sorted({r["host"] for r in reqs if r["host"] in IP_LOOKUP_HOSTS})
 
 
+# Browser-based local port scanning: a page opens WebSockets, fetches or images, or
+# WebRTC TURN/STUN servers, against many ports on 127.0.0.1 or the LAN to see what is
+# listening (remote-access tools in particular). Anti-fraud scripts (ThreatMetrix, as
+# on eBay) do it to spot remote-controlled sessions; scam and recon pages do it too.
+# The SSRF guard blocks every attempt, which leaves it in result["blocked"]; TURN/STUN
+# servers never pass the request filter, so the page hook records them (result["webrtc"]).
+_REMOTE_ACCESS_PORTS = {
+    22: "ssh",
+    23: "telnet",
+    3389: "rdp",
+    4899: "radmin",
+    5650: "remote-utilities",
+    5800: "vnc",
+    5900: "vnc",
+    5901: "vnc",
+    5902: "vnc",
+    5903: "vnc",
+    5931: "ammyy",
+    5938: "teamviewer",
+    5939: "teamviewer",
+    6129: "dameware",
+    6568: "anydesk",
+    7070: "anydesk",
+}
+# Desktop apps whose own sites look for their local helper on a fixed port range.
+_LOCAL_APP_PORTS = {"discord-rpc": range(6463, 6473)}
+# Anti-fraud device profiling that scans local ports by design. ThreatMetrix is often
+# served from a first-party CNAME, so its /fp/ tag paths count as well as its own host.
+_FRAUD_VENDOR_SCRIPTS = {
+    "threatmetrix": re.compile(
+        r"(?i)^https?://[^/]*online-metrix\.net/|/fp/(?:tags|check|clear|ls_fp)\.js|"
+        r"[?&]org_id=[^&]+&(?:[^&]+&)*session_id="
+    ),
+}
+# The ports each profiler is known to probe (ThreatMetrix: loopback WebSockets).
+_FRAUD_VENDOR_PORTS = {
+    "threatmetrix": {3389, 5279, 5900, 5901, 5902, 5903, 5931, 5938, 5939, 5944, 5950,
+                     6039, 6040, 7070, 63333},
+}  # fmt: skip
+
+
+def _fraud_vendor(urls: list[str]) -> str | None:
+    return next(
+        (n for n, rx in _FRAUD_VENDOR_SCRIPTS.items() if any(rx.search(u) for u in urls)), None
+    )
+
+
+_DEFAULT_PORTS = {"http": 80, "ws": 80, "https": 443, "wss": 443, "stun": 3478, "turn": 3478,
+                  "stuns": 5349, "turns": 5349}  # fmt: skip
+_ICE_URL = re.compile(r"(?i)^(stuns?|turns?):(\[[^\]]+\]|[^:?/\s]+)(?::(\d{1,5}))?")
+
+
+def _local_kind(host: str, reason: str = "") -> str | None:
+    """Classify a probe target as loopback, private or neither (None). Link-local is
+    left out: 169.254.169.254 is cloud-metadata SSRF, not a port scan."""
+    host = host.strip("[]").lower().rstrip(".")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        if host == "localhost" or host.endswith(".localhost") or "loopback" in reason:
+            return "loopback"
+        return "private" if "private address" in reason else None
+    if ip.is_loopback or ip.is_unspecified:  # 0.0.0.0 reaches local services too
+        return "loopback"
+    return "private" if ip.is_private and not ip.is_link_local else None
+
+
+def _local_probe(data: CaptureData) -> dict[str, Any]:
+    initiators = {
+        str(r.get("url", "")): (r.get("initiator") or {}).get("script_url") for r in data.requests
+    }
+    probes: list[tuple[str, str, int, str | None]] = []  # (channel, host, port, script)
+    for b in data.result.get("blocked", []):
+        url = str(b.get("url", ""))
+        try:
+            parts = urlsplit(url)
+            port = parts.port or _DEFAULT_PORTS.get(parts.scheme.lower())
+        except ValueError:
+            continue
+        host = parts.hostname or ""
+        if parts.scheme not in ("http", "https", "ws", "wss"):
+            continue
+        if not port or not host or not _local_kind(host, str(b.get("reason", ""))):
+            continue
+        channel = "websocket" if b.get("websocket") or parts.scheme in ("ws", "wss") else "http"
+        probes.append((channel, host, port, initiators.get(url)))
+    for rtc in data.result.get("webrtc", []):
+        for url in rtc.get("urls", []) or []:
+            if not (m := _ICE_URL.match(str(url))):
+                continue
+            host = m.group(2).strip("[]").lower()
+            port = int(m.group(3)) if m.group(3) else _DEFAULT_PORTS[m.group(1).lower()]
+            if _local_kind(host):
+                # The page hook's stack-derived URL ends in :line:col.
+                script = re.sub(r":\d+:\d+$", "", str(rtc.get("script_url") or "")) or None
+                probes.append(("webrtc", host, port, script))
+    ports = sorted({p for _, _, p, _ in probes})
+    hosts = sorted({h for _, h, _, _ in probes})
+    scripts = sorted({s for *_, s in probes if s})
+    remote = [p for p in ports if p in _REMOTE_ACCESS_PORTS]
+    vendor = _fraud_vendor(scripts) if probes else None
+    if not vendor and probes and not scripts:
+        # Blocked WebSockets carry no initiator (Playwright's socket routing replaces the
+        # page's WebSocket, so the browser never creates one). A profiler loaded on the
+        # page explains them only when the probes look exactly like its own scan, so a
+        # page cannot silence the rule just by also loading the vendor's tag.
+        loaded = [
+            str(u)
+            for u in (
+                [r.get("url") for r in data.requests]
+                + [e.get("request", {}).get("url") for e in data.har_entries]
+                + [u for sc in data.result.get("scripts", []) for u in sc.get("urls", [])]
+            )
+            if u
+        ]
+        if (vendor := _fraud_vendor(loaded)) and not (
+            {c for c, *_ in probes} == {"websocket"}
+            and all(_local_kind(h) == "loopback" for h in hosts)
+            and set(ports) <= _FRAUD_VENDOR_PORTS[vendor]
+        ):
+            vendor = None
+    app = next((n for n, r in _LOCAL_APP_PORTS.items() if ports and set(ports) <= set(r)), None)
+    return {
+        "attempts": len(probes),
+        "port_count": len(ports),
+        "ports": ports[:50],
+        "host_count": len(hosts),
+        "hosts": hosts[:20],
+        "remote_access_count": len(remote),
+        "remote_access": [f"{p}/{_REMOTE_ACCESS_PORTS[p]}" for p in remote],
+        "channels": sorted({c for c, *_ in probes}),
+        "scripts": scripts[:10],
+        "fraud_vendor": vendor,
+        "local_app": app,
+    }
+
+
 def _final_ipfs(final_url: str | None) -> dict[str, str] | None:
     return {"url": final_url} if final_url and _IPFS_URL.search(final_url) else None
 
@@ -2454,6 +2592,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "blocked_internal": len(internal),
             "blocked": blocked[:20],
             "ip_lookups": _ip_lookups(reqs),
+            "local_probe": _local_probe(data),
             "request_log": _requests_summary(data),
             "trusted_redirectors": _trusted_redirectors(data),
         },

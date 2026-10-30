@@ -136,6 +136,7 @@ class Capture:
         self.clipboard: list[dict[str, Any]] = []
         self.websocket_frames: list[dict[str, Any]] = []
         self.wallet_requests: list[dict[str, Any]] = []
+        self.webrtc: list[dict[str, Any]] = []
         self.blocked_input: list[dict[str, Any]] = []
         self.cdp_requests: list[dict[str, Any]] = []
         self.pw_requests: list[dict[str, Any]] = []
@@ -551,6 +552,12 @@ class Capture:
                 self.wallet_requests.append(entry)
                 self.events.emit("wallet_request", "browser", **entry)
             return
+        if kind == "webrtc_ice":
+            if len(self.webrtc) < 200:
+                entry = {"page": pid, **data}
+                self.webrtc.append(entry)
+                self.events.emit("webrtc_ice", "network", **entry)
+            return
         if kind == "blocked_input":
             if len(self.blocked_input) < 200:
                 self.blocked_input.append({"page": pid, **data})
@@ -849,6 +856,7 @@ class Capture:
             "clipboard": self.clipboard,
             "websocket_frames": self.websocket_frames,
             "wallet_requests": self.wallet_requests,
+            "webrtc": self.webrtc,
             "blocked_input": self.blocked_input,
             "cookies": self.cookies,
             "jsapi": self.jsapi,

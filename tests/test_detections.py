@@ -2351,3 +2351,138 @@ def test_password_page_posting_to_form_collector_fires_and_contact_form_is_quiet
     contact_form = {"action": "", "fields": [{"type": "email"}, {"type": "textarea"}]}
     contact = _cap(url, [_page(url, "Contact us", forms=[contact_form])], har=har)
     assert "credential_post_to_form_collector" not in _hits(contact)
+
+
+# --- browser-based local port scanning -----------------------------------------------
+
+# The remote-access ports ThreatMetrix's profiler was seen probing over WebSockets.
+_TMX_PORTS = [3389, 5900, 5901, 5902, 5903, 5931, 5938, 5939, 5944, 5950, 6039, 6040, 7070]
+
+
+def _local_scan(ports, script, host="127.0.0.1", scheme="wss"):
+    blocked, requests = [], []
+    for port in ports:
+        url = f"{scheme}://{host}:{port}/"
+        reason = f"{host} is a loopback address"
+        blocked.append({"url": url, "reason": reason, "websocket": scheme.startswith("ws")})
+        requests.append({"url": url, "type": "WebSocket", "initiator": {"script_url": script}})
+    return blocked, requests
+
+
+def test_local_port_scan_fires_on_remote_access_probe():
+    url = "https://support-desk.example/"
+    blocked, requests = _local_scan(_TMX_PORTS, "https://support-desk.example/js/p.js")
+    data = _cap(url, blocked=blocked, requests=requests)
+    assert "local_port_scan" in _hits(data)
+    probe = build_facts(data)["network"]["local_probe"]
+    named = {"3389/rdp", "5900/vnc", "5938/teamviewer", "7070/anydesk"}
+    assert named <= set(probe["remote_access"])
+    assert probe["channels"] == ["websocket"]
+    assert probe["scripts"] == ["https://support-desk.example/js/p.js"]
+    # Two remote-access ports are enough (SSH + RDP over fetch/img to localhost by name).
+    pair = [
+        {"url": "http://localhost:22/", "reason": "127.0.0.1 is a loopback address"},
+        {"url": "http://localhost:3389/x.png", "reason": "127.0.0.1 is a loopback address"},
+    ]
+    assert "local_port_scan" in _hits(_cap(url, blocked=pair))
+    # Many ordinary ports, and a LAN sweep of one port across private hosts.
+    many, _ = _local_scan([3000, 4200, 5000, 8000, 8080, 8443, 9000], None, scheme="http")
+    assert "local_port_scan" in _hits(_cap(url, blocked=many))
+    sweep = [
+        {"url": f"http://192.168.1.{i}/", "reason": f"192.168.1.{i} is a private address"}
+        for i in range(1, 13)
+    ]
+    assert "local_port_scan" in _hits(_cap(url, blocked=sweep))
+    # IPv6 loopback and 0.0.0.0 (which reaches local services on Linux and macOS).
+    v6 = [{"url": f"ws://[::1]:{p}/", "reason": "::1 is a loopback address"} for p in (22, 5900)]
+    zero = [
+        {"url": f"http://0.0.0.0:{p}/", "reason": "0.0.0.0 is a reserved address"}
+        for p in (3389, 5938)
+    ]
+    assert "local_port_scan" in _hits(_cap(url, blocked=v6))
+    assert "local_port_scan" in _hits(_cap(url, blocked=zero))
+
+
+def test_local_port_scan_quiet_on_fraud_vendor_dev_and_apps():
+    url = "https://shop.example/checkout"
+    # ThreatMetrix from its own host, and from a first-party CNAME with its /fp/ tag path.
+    for script in (
+        "https://h.online-metrix.net/fp/tags.js?org_id=abc&session_id=123",
+        "https://src.shop.example/fp/check.js?org_id=abc&session_id=123",
+    ):
+        blocked, requests = _local_scan(_TMX_PORTS, script)
+        data = _cap(url, blocked=blocked, requests=requests)
+        assert "local_port_scan" not in _hits(data)
+        assert build_facts(data)["network"]["local_probe"]["fraud_vendor"] == "threatmetrix"
+    # Blocked WebSockets carry no initiator: the profiler loaded on the page explains them.
+    blocked, _ = _local_scan(_TMX_PORTS, None)
+    tags = [{"url": "https://h.online-metrix.net/fp/tags.js?org_id=abc&session_id=1"}]
+    assert "local_port_scan" not in _hits(_cap(url, blocked=blocked, requests=tags))
+    # Evasion: loading the tag does not excuse probes unlike the profiler's own scan
+    # (other ports, or fetch/image/WebRTC channels, or LAN hosts).
+    ssh, _ = _local_scan([22, 445, 3389, 5900], None)
+    assert "local_port_scan" in _hits(_cap(url, blocked=ssh, requests=tags))
+    over_http, _ = _local_scan(_TMX_PORTS, None, scheme="http")
+    assert "local_port_scan" in _hits(_cap(url, blocked=over_http, requests=tags))
+    rtc = [{"urls": ["turn:127.0.0.1:3389", "turn:127.0.0.1:5900"]}]
+    assert "local_port_scan" in _hits(_cap(url, webrtc=rtc, requests=tags))
+    lan, _ = _local_scan(_TMX_PORTS, None, host="192.168.0.10")
+    assert "local_port_scan" in _hits(_cap(url, blocked=lan, requests=tags))
+    # ...but not when the initiating script is known and is someone else's.
+    blocked, requests = _local_scan(_TMX_PORTS, "https://shop.example/scan.js")
+    assert "local_port_scan" in _hits(_cap(url, blocked=blocked, requests=requests + tags))
+    # The same scan by an unknown script on an allowlisted site.
+    blocked, requests = _local_scan(_TMX_PORTS, "https://shop.example/a.js")
+    assert "local_port_scan" not in _hits(
+        _cap(url, blocked=blocked, requests=requests, allowlisted={"shop.example"})
+    )
+    # A dev build left in production: webpack-dev-server and livereload on localhost.
+    loopback = "127.0.0.1 is a loopback address"
+    dev = [
+        {"url": "ws://localhost:8080/sockjs-node", "reason": loopback, "websocket": True},
+        {"url": "http://localhost:35729/livereload.js", "reason": loopback},
+    ]
+    assert "local_port_scan" not in _hits(_cap(url, blocked=dev))
+    # Discord's site looking for the desktop client's RPC server on 6463-6472.
+    discord, _ = _local_scan(range(6463, 6473), None, scheme="ws")
+    assert "local_port_scan" not in _hits(_cap("https://discord.example/invite/x", blocked=discord))
+    # One SSH port, cloud-metadata SSRF, and blocked non-http schemes are not a scan.
+    ssh = [{"url": "http://127.0.0.1:22/", "reason": "127.0.0.1 is a loopback address"}]
+    meta = [
+        {"url": f"http://169.254.169.254:{p}/", "reason": "a link-local address"}
+        for p in (80, 22, 3389, 5900, 8080, 8443)
+    ]
+    schemes = [
+        {"url": f"ms-rd://127.0.0.1:{p}", "reason": "scheme 'ms-rd' is not allowed"}
+        for p in _TMX_PORTS
+    ]
+    for blocked in (ssh, meta, schemes):
+        assert "local_port_scan" not in _hits(_cap(url, blocked=blocked))
+    # The generic internal-probe rule still records the blocked attempts.
+    assert "internal_network_probe" in _hits(_cap(url, blocked=ssh))
+
+
+def test_local_port_scan_over_webrtc_turn():
+    """TURN/STUN servers never reach the route filter; the page hook records them."""
+    url = "https://scan.example/"
+    rtc = [
+        {
+            "urls": [
+                "turn:127.0.0.1:3389?transport=tcp",
+                "turn:127.0.0.1:5900?transport=tcp",
+                "stun:stun.l.google.com:19302",
+            ],
+            "script_url": "https://scan.example/rtc.js",
+        }
+    ]
+    data = _cap(url, webrtc=rtc)
+    assert "local_port_scan" in _hits(data)
+    probe = build_facts(data)["network"]["local_probe"]
+    assert probe["ports"] == [3389, 5900] and probe["channels"] == ["webrtc"]
+    # Ordinary calls: public STUN/TURN servers only.
+    public = [{"urls": ["stun:stun.l.google.com:19302", "turns:turn.example.net:443"]}]
+    assert "local_port_scan" not in _hits(_cap(url, webrtc=public))
+    # LAN TURN servers on the default port count by host.
+    lan = [{"urls": [f"turn:10.0.0.{i}" for i in range(1, 11)]}]
+    assert build_facts(_cap(url, webrtc=lan))["network"]["local_probe"]["ports"] == [3478]
+    assert "local_port_scan" in _hits(_cap(url, webrtc=lan))
