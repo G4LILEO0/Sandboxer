@@ -104,6 +104,8 @@ const FIELDS = [
   { id: 'registrar', label: 'Registrar', group: 'Domain', value: (n) => n.network.registrar || null },
 
   { id: 'unwrapped_url', label: 'Unwrapped URL', group: 'URL', value: (n) => (n.urls && n.urls.unwrapped && n.urls.unwrapped !== n.urls.original ? fmt(n.urls.unwrapped) : null) },
+  { id: 'landing_url', label: 'Lands on', group: 'URL', value: (n) => (n.urls && n.urls.landing ? fmt(n.urls.landing) : null) },
+  { id: 'landing_title', label: 'Landing title', group: 'URL', value: (n) => (n.urls && n.urls.landing_title) || null },
   { id: 'final_url', label: 'Final URL', group: 'URL', value: (n) => (n.urls && n.urls.vt_final_url ? fmt(n.urls.vt_final_url) : null) },
   { id: 'page_title', label: 'Page title', group: 'URL', value: (n) => (n.urls && n.urls.vt_title) || null },
   { id: 'redirects', label: 'Redirect chain', group: 'URL', value: (n) => (n.urls && n.urls.redirect_chain && n.urls.redirect_chain.length ? n.urls.redirect_chain.map((h) => fmt(h.url || h.location)).join(' -> ') : null) },
@@ -124,7 +126,7 @@ const FORMATS = {
 };
 
 const BUILTIN_PRESETS = {
-  Summary: { fields: ['ioc', 'type', 'verdict', 'vt_detections', 'abuse_score', 'infra', 'country', 'asn', 'unwrapped_url', 'vt_link', 'abuse_link'], format: 'lines', includeEmpty: false },
+  Summary: { fields: ['ioc', 'type', 'verdict', 'vt_detections', 'abuse_score', 'infra', 'country', 'asn', 'unwrapped_url', 'landing_url', 'vt_link', 'abuse_link'], format: 'lines', includeEmpty: false },
   Triage: { fields: ['verdict', 'ioc', 'usage_type', 'asn', 'abuse_categories'], format: 'inline', includeEmpty: false },
   'IP reputation': { fields: ['ioc', 'verdict', 'abuse_score', 'abuse_reports', 'abuse_categories', 'usage_type', 'isp', 'asn', 'country', 'infra', 'abuse_link'], format: 'lines', includeEmpty: false },
   'Spreadsheet row': { fields: ['ioc', 'type', 'verdict', 'vt_detections', 'abuse_score', 'country', 'infra', 'vt_link'], format: 'values', includeEmpty: true },

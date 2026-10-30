@@ -15,6 +15,7 @@ const COMMONLY_SPOOFED_BRANDS = [
   'microsoft', 'office365', 'outlook', 'google', 'apple', 'amazon', 'paypal',
   'netflix', 'facebook', 'instagram', 'linkedin', 'dropbox', 'docusign',
   'chase', 'wellsfargo', 'bankofamerica', 'coinbase', 'binance',
+  'twitch', 'discord', 'roblox', 'telegram', 'whatsapp', 'steamcommunity',
 ];
 
 function levenshtein(a, b) {

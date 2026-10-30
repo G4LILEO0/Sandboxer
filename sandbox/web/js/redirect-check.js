@@ -84,6 +84,15 @@ function analyzeChain(hops) {
   if (last && last.script_redirect && !last.location) {
     warnings.push({ level: 'info', code: 'script_redirect', message: 'The last page looks like it redirects with JavaScript, which this walk does not run: detonate it in the sandbox to see the final destination' });
   }
+  // A page with both a meta refresh and redirect script is a cloaking pattern: the
+  // walker (no JavaScript) gets the decoy meta target, a real browser runs the script
+  // first and can land somewhere else entirely (seen: S3 page -> twitch.tv for the
+  // walker, twimch.com for the analyst).
+  hops.forEach((h, i) => {
+    if (h.script_redirect && h.via === 'meta-refresh') {
+      warnings.push({ level: 'warn', code: 'script_and_meta_redirect', message: `Hop ${i + 1} has a meta refresh and a redirect script: a real browser may go somewhere other than the walk shows. Detonate it to see where a browser lands` });
+    }
+  });
 
   const parsedHops = hops.map((h) => ({ raw: h, url: parseHostSafe(h.url || h.location || '') })).filter((h) => h.url);
 

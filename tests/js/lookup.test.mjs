@@ -84,6 +84,18 @@ test('redirect analysis: hop limit, meta refresh and script redirects are report
   const got = plain(redirectCheck.analyzeChain(meta)).map((w) => w.code);
   assert.ok(got.includes('refresh_redirect'));
   assert.ok(got.includes('script_redirect'));
+
+  // The reported chain: S3 page with a meta refresh to twitch.tv and a redirect script.
+  const cloaked = [
+    { url: 'https://bucket.s3.ap-south-1.amazonaws.com/x', status: 200, location: 'https://www.twitch.tv/', via: 'meta-refresh', script_redirect: true },
+    { url: 'https://www.twitch.tv/', status: 200, location: null, title: 'Twitch' },
+  ];
+  assert.ok(plain(redirectCheck.analyzeChain(cloaked)).some((w) => w.code === 'script_and_meta_redirect'));
+});
+
+test('twimch.com looks like Twitch', () => {
+  assert.ok(codes('https://twimch.com/').includes('lookalike_brand'));
+  assert.deepEqual(codes('https://www.twitch.tv/').filter((c) => c.includes('brand')), []);
 });
 
 test('CSV and spreadsheet copies neutralise formula cells', () => {
@@ -92,4 +104,10 @@ test('CSV and spreadsheet copies neutralise formula cells', () => {
   assert.match(csv.split('\n')[1], /^evil\.example,"'=HYPERLINK/);
   const tsv = copyReport.renderMany([norm], { fields: ['tags'], format: 'values', includeEmpty: true });
   assert.ok(tsv.startsWith("'="));
+});
+
+test('the hosting/proxy flag is for IPs only', () => {
+  const vt = { ok: true, data: { data: { id: 'h', attributes: { tags: ['via-tor'], last_analysis_stats: { malicious: 60 } } } } };
+  assert.equal(verdictFor('hash', vt).infrastructure_flag, null);
+  assert.equal(verdictFor('ip', vt).infrastructure_flag.label, 'Possible Proxy');
 });

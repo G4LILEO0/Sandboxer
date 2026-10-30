@@ -58,6 +58,12 @@ function fieldRow(label, value, opts = {}) {
   return row;
 }
 
+// Long vendor lists (EICAR has hundreds of file names) would bury the card.
+function capList(values, n) {
+  if (!Array.isArray(values) || values.length <= n) return values;
+  return [...values.slice(0, n), `and ${values.length - n} more`];
+}
+
 function renderLoadingCard(ioc, type) {
   const c = document.createElement('div');
   c.className = 'card loading';
@@ -144,6 +150,14 @@ function renderUrlSection(norm) {
     row.appendChild(v); row.appendChild(makeCopyIcon(u.unwrapped, 'unwrapped URL'));
     wrap.appendChild(row);
   }
+  if (u.landing) {
+    const row = document.createElement('div'); row.className = 'field-row';
+    const l = document.createElement('span'); l.className = 'field-label'; l.textContent = 'Lands on (redirect walk)';
+    const v = document.createElement('span'); v.className = 'field-value monospace';
+    v.textContent = displayValue(u.landing) + (u.landing_title ? `  “${u.landing_title}”` : '');
+    row.append(l, v, makeCopyIcon(u.landing, 'landing URL'));
+    wrap.appendChild(row);
+  }
   if (u.note) {
     const note = document.createElement('div'); note.className = 'small note'; note.textContent = u.note;
     wrap.appendChild(note);
@@ -189,7 +203,8 @@ function renderCard(norm, opts = {}) {
   const iocLine = document.createElement('div'); iocLine.className = 'monospace ioc-value';
   iocLine.textContent = displayValue(norm.ioc);
   iocLine.appendChild(makeCopyIcon(norm.ioc, 'IoC'));
-  const typeLine = document.createElement('div'); typeLine.className = 'small'; typeLine.textContent = norm.type;
+  const typeLine = document.createElement('div'); typeLine.className = 'small';
+  typeLine.textContent = norm.port ? `${norm.type}, port ${norm.port}` : norm.type;
   if (opts.duplicateCount && opts.duplicateCount > 1) {
     const dupBadge = document.createElement('span');
     dupBadge.className = 'badge duplicate';
@@ -252,7 +267,7 @@ function renderCard(norm, opts = {}) {
     fieldRow('Usage type', norm.network.usage_type),
     fieldRow('File type', norm.network.file_type),
     fieldRow('File size', norm.network.file_size),
-    fieldRow('Names seen', norm.network.names_seen),
+    fieldRow('Names seen', capList(norm.network.names_seen, 10)),
     fieldRow('Tags', norm.tags),
   ].forEach((row) => { if (row) fields.appendChild(row); });
   body.appendChild(fields);
