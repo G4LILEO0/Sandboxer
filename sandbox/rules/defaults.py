@@ -1581,29 +1581,38 @@ DEFAULT_BRANDS = [
 ]
 
 # FED-1 feeds. Check each feed's current terms and key requirements before enabling in
-# production; abuse.ch services may require a free Auth-Key.
+# production. abuse.ch exports need a free Auth-Key in the URL ({key}), taken from the
+# feed or from SANDBOX_ABUSECH_AUTH_KEY.
+# Default URLs abuse.ch retired (410 Gone); the seed moves feeds still on them to the
+# current default, leaving URLs an engineer changed alone.
+RETIRED_FEED_URLS = {
+    "urlhaus": "https://urlhaus.abuse.ch/downloads/csv_recent/",
+    "threatfox": "https://threatfox.abuse.ch/export/json/recent/",
+    "malwarebazaar": "https://bazaar.abuse.ch/export/csv/recent/",
+}
+_ABUSECH_KEY_NOTE = "Needs an abuse.ch Auth-Key (SANDBOX_ABUSECH_AUTH_KEY or Set key)."
 DEFAULT_FEEDS = [
     {
         "name": "urlhaus",
         "kind": "indicators",
         "parser": "urlhaus_csv",
-        "url": "https://urlhaus.abuse.ch/downloads/csv_recent/",
+        "url": "https://urlhaus-api.abuse.ch/v2/files/exports/{key}/recent.csv",
         "schedule_s": 3600,
         "default_confidence": 80,
         "ttl_days": 30,
         "enabled": True,
-        "licence_note": "abuse.ch URLhaus, CC0. May require an abuse.ch Auth-Key.",
+        "licence_note": f"abuse.ch URLhaus, CC0. {_ABUSECH_KEY_NOTE}",
     },
     {
         "name": "threatfox",
         "kind": "indicators",
         "parser": "threatfox_json",
-        "url": "https://threatfox.abuse.ch/export/json/recent/",
+        "url": "https://threatfox-api.abuse.ch/v2/files/exports/{key}/recent.json",
         "schedule_s": 3600,
         "default_confidence": 75,
         "ttl_days": 30,
         "enabled": True,
-        "licence_note": "abuse.ch ThreatFox, CC0. May require an abuse.ch Auth-Key.",
+        "licence_note": f"abuse.ch ThreatFox, CC0. {_ABUSECH_KEY_NOTE}",
     },
     {
         "name": "openphish",
@@ -1632,12 +1641,12 @@ DEFAULT_FEEDS = [
         "name": "malwarebazaar",
         "kind": "indicators",
         "parser": "malwarebazaar_csv",
-        "url": "https://bazaar.abuse.ch/export/csv/recent/",
+        "url": "https://mb-api.abuse.ch/v2/files/exports/{key}/recent.csv",
         "schedule_s": 3600,
         "default_confidence": 85,
         "ttl_days": 90,
         "enabled": True,
-        "licence_note": "abuse.ch MalwareBazaar, CC0. May require an abuse.ch Auth-Key.",
+        "licence_note": f"abuse.ch MalwareBazaar, CC0. {_ABUSECH_KEY_NOTE}",
     },
     {
         "name": "phishtank",

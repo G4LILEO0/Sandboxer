@@ -16,6 +16,7 @@ from pathlib import Path
 import httpx
 import pytest
 import pyzipper
+from pydantic import SecretStr
 from sqlalchemy import select, text, update
 
 from sandbox.api.deps import get_resolver
@@ -680,6 +681,65 @@ async def test_feeds_matching_and_drop_guard(env):
     await _drain(worker)
     report = (await client.get(f"/v1/analyses/{created['id']}/report", headers=ALICE)).json()
     assert report["indicator_hits"] == []
+
+
+async def test_abusech_feed_key_from_settings_and_redacted(env):
+    """abuse.ch exports take the Auth-Key in the URL path; the key comes from the feed or
+    SANDBOX_ABUSECH_AUTH_KEY and never shows up in a failed run's error."""
+    from sandbox.feeds.runner import run_feed
+
+    client, ctx, _, _ = env
+    key = "s3cretAbuseKey0123456789"
+    seen: list[str] = []
+    status_code = 200
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(
+            status_code,
+            text='"1","2026-10-30 00:00:00","https://evil.example/a","online","",'
+            '"malware_download","exe","https://urlhaus.abuse.ch/url/1/","r"\n',
+        )
+
+    ctx.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with ctx.sessionmaker() as db:
+        feed = await db.scalar(select(Feed).where(Feed.name == "urlhaus"))
+
+    ctx.settings.abusech_auth_key = None  # whatever the container environment has
+    missing = await run_feed(ctx, feed.id)  # no key anywhere: a clear error, no request
+    assert missing.status == "failed" and "SANDBOX_ABUSECH_AUTH_KEY" in missing.error
+    assert seen == []
+
+    ctx.settings.abusech_auth_key = SecretStr(key)
+    run = await run_feed(ctx, feed.id)
+    assert run.status == "success" and run.rows_added == 1
+    # The guard pins the request to the checked address, so only the path shows the key.
+    assert seen[-1].endswith(f"/v2/files/exports/{key}/recent.csv")
+
+    status_code = 401
+    failed = await run_feed(ctx, feed.id)
+    assert failed.status == "failed" and "401" in failed.error
+    assert key not in failed.error and "***" in failed.error
+    listed = (await client.get("/v1/feeds", headers=ALICE)).text
+    assert key not in listed
+
+
+async def test_seed_moves_feeds_off_retired_abusech_urls(env):
+    _, ctx, _, _ = env
+    async with ctx.sessionmaker() as db:
+        feeds = {f.name: f for f in await db.scalars(select(Feed))}
+        feeds["urlhaus"].url = "https://urlhaus.abuse.ch/downloads/csv_recent/"
+        feeds["threatfox"].url = "https://mirror.example/threatfox.json"  # an engineer's edit
+        await db.commit()
+
+        await ensure_defaults(db)
+        await db.commit()
+
+        await db.refresh(feeds["urlhaus"])
+        await db.refresh(feeds["threatfox"])
+        assert feeds["urlhaus"].url.startswith("https://urlhaus-api.abuse.ch/v2/files/exports/")
+        assert "SANDBOX_ABUSECH_AUTH_KEY" in feeds["urlhaus"].licence_note
+        assert feeds["threatfox"].url == "https://mirror.example/threatfox.json"
 
 
 async def test_metrics(env):
