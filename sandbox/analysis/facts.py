@@ -687,6 +687,17 @@ def _clipboard(data: CaptureData) -> dict[str, Any]:
         "no_gesture_writes": len(no_gesture),
         "no_gesture_commands": len(no_gesture_cmds),
         "overwritten_command": overwritten,
+        # Any page write, command or not: payloads the command patterns miss still show
+        # up as evidence, and their length separates them from coupon codes and links.
+        "max_write_len": max((len(c.get("text", "")) for c in writes), default=0),
+        "write_samples": [
+            {
+                "api": c.get("api"),
+                "text": c.get("text", "")[:300],
+                "user_activation": c.get("user_activation"),
+            }
+            for c in writes
+        ][:5],
         "commands": [
             {"api": c.get("api"), "text": c.get("text", "")[:1000], "frame_url": c.get("frame_url")}
             for c in commands
