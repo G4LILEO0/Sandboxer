@@ -320,6 +320,9 @@ function renderCard(norm, opts = {}) {
     body.appendChild(errEl);
   }
 
+  const general = renderWarnings(norm.warnings); // e.g. a newly registered domain
+  if (general) body.appendChild(general);
+
   const fields = document.createElement('div'); fields.className = 'fields';
   [
     fieldRow('First seen', norm.first_seen),

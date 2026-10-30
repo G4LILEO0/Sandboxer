@@ -108,6 +108,7 @@ function possibleTypes(input) {
   if (looksLikeIPv4(s) || looksLikeIPv6(s)) types.push('ip');
   if (/^[a-fA-F0-9]{32}$/.test(s) || /^[a-fA-F0-9]{40}$/.test(s) || /^[a-fA-F0-9]{64}$/.test(s)) types.push('hash');
   if (looksLikeDomain(s)) types.push('domain'); // offered even when a URL match exists, as an override option
+  if (/^(?:mailto:)?[^\s@/:]+@[^\s@/:]+$/i.test(s)) types.push('email');
   if (!types.length) types.push('unknown');
   return [...new Set(types)];
 }
@@ -152,6 +153,15 @@ function detectIoC(raw) {
   }
 
   if (looksLikeURL(value)) { out.type = 'url'; return out; }
+
+  // Sender and reply-to addresses from phishing mail: looked up by their domain.
+  const email = value.match(/^(?:mailto:)?([^\s@/:]+)@([^\s@/:]+)$/i);
+  if (email) {
+    const domain = toAsciiHost(email[2].replace(/\.$/, '')).toLowerCase();
+    if (looksLikeDomain(domain)) {
+      out.type = 'email'; out.value = `${email[1]}@${domain}`.toLowerCase(); out.email_domain = domain; return out;
+    }
+  }
 
   const host = toAsciiHost(value.replace(/\.$/, '')).toLowerCase();
   if (looksLikeDomain(host)) { out.type = 'domain'; out.value = host; return out; }

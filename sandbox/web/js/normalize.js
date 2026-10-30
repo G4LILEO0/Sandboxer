@@ -3,7 +3,7 @@
 // vendor's raw response — vendor payloads are preserved under `raw` for the
 // "view raw JSON" toggle.
 
-const VT_GUI_TYPE = { ip: 'ip-address', domain: 'domain', hash: 'file', url: 'url' };
+const VT_GUI_TYPE = { ip: 'ip-address', domain: 'domain', email: 'domain', hash: 'file', url: 'url' };
 
 // Official AbuseIPDB report category IDs (publicly documented).
 const ABUSEIPDB_CATEGORIES = {
@@ -34,6 +34,7 @@ function normalizeResult(detected) {
     urls: {},
     vendor_links: {},
     raw: {},
+    warnings: [],
     _errors: [],
   };
 }
@@ -58,6 +59,18 @@ function mergeVtDomain(norm, a) {
   if (a.last_update_date) norm.last_seen = norm.last_seen || isoFromEpoch(a.last_update_date);
   if (a.whois) norm.network.whois_raw = a.whois;
   if (a.registrar) norm.network.registrar = a.registrar;
+  if (a.creation_date) {
+    norm.domain_age_days = Math.floor((Date.now() / 1000 - a.creation_date) / 86400);
+  }
+}
+
+// Most phishing and C2 domains are used within days of registration.
+const NEW_DOMAIN_DAYS = 30;
+
+function domainAgeWarning(norm) {
+  const days = norm.domain_age_days;
+  if (typeof days !== 'number' || days < 0 || days >= NEW_DOMAIN_DAYS) return null;
+  return { level: 'warn', code: 'new_domain', message: `Domain registered ${days === 0 ? 'today' : `${days} day${days === 1 ? '' : 's'} ago`} (newly registered domains are a common phishing and C2 sign)` };
 }
 
 function mergeVtFile(norm, a) {
@@ -123,7 +136,11 @@ function mergeVendorData(norm, vendorName, res) {
     if (a.tags) norm.tags = [...new Set([...norm.tags, ...a.tags])];
 
     if (norm.type === 'ip') mergeVtIp(norm, a);
-    else if (norm.type === 'domain') mergeVtDomain(norm, a);
+    else if (norm.type === 'domain' || norm.type === 'email') {
+      mergeVtDomain(norm, a);
+      const age = domainAgeWarning(norm);
+      if (age) norm.warnings = [...(norm.warnings || []), age];
+    }
     else if (norm.type === 'hash') mergeVtFile(norm, a);
     else if (norm.type === 'url') mergeVtUrl(norm, a);
 
@@ -206,7 +223,7 @@ function computeVerdict(norm) {
   const vtMal = norm.score_summary.vt_malicious || 0;
   const vtSusp = norm.score_summary.vt_suspicious || 0;
   const abuseScore = norm.score_summary.abuseipdb_score || 0;
-  const urlWarnings = (norm.urls && norm.urls.warnings) || [];
+  const urlWarnings = [...((norm.urls && norm.urls.warnings) || []), ...(norm.warnings || [])];
   const hasMaliciousWarning = urlWarnings.some((w) => w.level === 'malicious');
   const hasWarnWarning = urlWarnings.some((w) => w.level === 'warn');
 

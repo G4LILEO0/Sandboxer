@@ -111,3 +111,15 @@ test('the hosting/proxy flag is for IPs only', () => {
   assert.equal(verdictFor('hash', vt).infrastructure_flag, null);
   assert.equal(verdictFor('ip', vt).infrastructure_flag.label, 'Possible Proxy');
 });
+
+test('a newly registered domain is a warning and makes the verdict suspicious', () => {
+  const now = Math.floor(Date.now() / 1000);
+  const vt = (created) => ({ ok: true, data: { data: { id: 'd', attributes: { creation_date: created, last_analysis_stats: { malicious: 0, harmless: 70 } } } } });
+  const fresh = verdictFor('domain', vt(now - 3 * 86400));
+  assert.equal(fresh.domain_age_days, 3);
+  assert.equal(fresh.verdict, 'suspicious');
+  assert.deepEqual(plain(fresh.warnings).map((w) => w.code), ['new_domain']);
+  const old = verdictFor('email', vt(now - 4000 * 86400));
+  assert.equal(old.verdict, 'clean');
+  assert.deepEqual(plain(old.warnings), []);
+});
