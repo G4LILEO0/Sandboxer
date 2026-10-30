@@ -206,6 +206,19 @@ BEHAVIOUR_RULES = [
         {"fact": "brand.free_hosting_lure", "op": "eq", "value": True},
         ["brand"],
     ),
+    # --- free-hosting tenant named after a brand, asking for credentials (LR1-03) -----
+    _rule(
+        "brand_named_free_hosting_login",
+        "high",
+        ["phishing", "brand-impersonation", "free-hosting"],
+        ["T1583.006", "T1656", "T1566.002"],
+        "A page on a free hosting or site-builder platform whose tenant name carries a brand "
+        "(microsoftaccount-kit.<builder>, ledger-live-kit.pages.dev) asks for a password, "
+        "sign-in name, card, code or recovery phrase. The page itself need not name the "
+        "brand; builder forms often have no real password field.",
+        {"fact": "brand.hosting_label", "op": "exists", "value": True},
+        ["brand.hosting_label", "final.url"],
+    ),
     _rule(
         "government_lookalike_domain",
         "high",
@@ -1401,6 +1414,7 @@ DEFAULT_WEIGHTS = {
     "trusted_redirector_to_lure": 20,
     "captcha_gated_credential_page": 25,
     "fake_captcha_paste_instructions": 55,
+    "brand_named_free_hosting_login": 50,
 }
 
 # (name, keywords, domains). Keywords match whole words, case-insensitively. A domain

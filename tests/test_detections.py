@@ -2456,3 +2456,37 @@ def test_real_challenge_and_helpdesk_paste_steps_are_not_fake_captcha():
     )
     for html in (challenge, helpdesk, far_apart):
         assert "fake_captcha_paste_instructions" not in _hits(_winx_cap(url, html))
+
+
+# --- free-hosting tenant named after a brand, asking for credentials (LR1-03) --------
+
+# A site-builder form has no password type: the kit labels a text field "Passwort".
+_BUILDER_LOGIN = {
+    "action": "",
+    "fields": [{"type": "email", "name": "field_1"}, {"type": "text", "name": "field_0"}],
+}
+_BUILDER_TEXT = "E-Mail-Adresse Passwort Land Login Melden Sie sich bei Ihrem Konto an"
+
+
+def test_brand_named_free_hosting_login_fires():
+    url = "http://microsoftaccount-kit.flazio.online/"
+    page = _page(url, "home", text=_BUILDER_TEXT, forms=[_BUILDER_LOGIN])
+    assert "brand_named_free_hosting_login" in _hits(_cap(url, [page]))
+    wallet = "https://ledger-live-kit.pages.dev/"
+    page = _page(wallet, "Sign in", forms=[PASSWORD_FORM])
+    assert "brand_named_free_hosting_login" in _hits(_cap(wallet, [page]))
+
+
+def test_brand_named_tenant_without_prompt_or_brand_is_quiet():
+    blog = "https://microsoftoutlook-tips.flazio.online/"
+    news = {"action": "", "fields": [{"type": "email"}]}
+    page = _page(blog, "Outlook tips", text="Subscribe to our newsletter", forms=[news])
+    assert "brand_named_free_hosting_login" not in _hits(_cap(blog, [page]))
+    # "chase bank" must start a label token: purchasebank is not Chase.
+    shop = "https://purchasebank-demo.vercel.app/"
+    page = _page(shop, "Sign in", forms=[PASSWORD_FORM])
+    assert "brand_named_free_hosting_login" not in _hits(_cap(shop, [page]))
+    vouched = "https://ledger-live-kit.pages.dev/"
+    page = _page(vouched, "Sign in", forms=[PASSWORD_FORM])
+    data = _cap(vouched, [page], allowlisted={"ledger-live-kit.pages.dev"})
+    assert "brand_named_free_hosting_login" not in _hits(data)

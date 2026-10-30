@@ -1121,6 +1121,40 @@ def _brand(data: CaptureData, cross_forms: list[dict[str, Any]]) -> dict[str, An
     return best
 
 
+_LABEL_TOKEN = re.compile(r"[a-z0-9]+")
+
+
+def _hosting_brand_label(data: CaptureData) -> dict[str, Any] | None:
+    """A free-hosting tenant named after a brand (microsoftaccount-kit.<builder>,
+    ledger-live-kit.pages.dev) whose page asks for credentials (LR1-03). The page
+    itself may never name the brand. A label token must start with the keyword's first
+    word, so purchasebank.example.app is not Chase; keywords under 5 letters are skipped."""
+    for frame in _all_frames(data):
+        host = _host(frame.get("url"))
+        platform = free_hosting(host) if host else None
+        if not platform or site(host) in data.allowlisted:
+            continue
+        prompt = _credential_prompt(frame)
+        if not prompt:
+            continue
+        tokens = _LABEL_TOKEN.findall(host[: -len(platform)])
+        joined = "".join(tokens)
+        for brand in data.brands:
+            for keyword in brand.keywords:
+                words = _LABEL_TOKEN.findall(keyword.lower())
+                if keyword.startswith("acronym:") or len("".join(words)) < 5:
+                    continue
+                if "".join(words) in joined and any(t.startswith(words[0]) for t in tokens):
+                    return {
+                        "brand": brand.name,
+                        "host": host,
+                        "platform": platform,
+                        "keyword": keyword,
+                        "prompt": prompt,
+                    }
+    return None
+
+
 # --- HAR access (pure over the stored HAR) --------------------------------------------
 
 _JSONRPC_METHODS = {"eth_call", "eth_getstorageat", "eth_gettransactionbyhash", "eth_getcode"}
@@ -2500,7 +2534,10 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "ages": ages,
         },
         "redirects": _redirects(data),
-        "brand": _brand(data, forms["cross_domain_credential_forms"]),
+        "brand": {
+            **_brand(data, forms["cross_domain_credential_forms"]),
+            "hosting_label": _hosting_brand_label(data),
+        },
         "network": {
             "requests": len(data.har_entries),
             "hosts": len(hosts),
