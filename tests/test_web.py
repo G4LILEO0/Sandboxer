@@ -99,3 +99,33 @@ def test_generic_unwrap_needs_an_explicit_url():
         check=True,
     )
     assert json.loads(result.stdout) == _UNWRAP_CASES
+
+
+_OPEN_REDIRECT_CASES = {
+    "https://google.com.kw/share.google?q=cg0sNh9Sa48oSYxhf?876164590083787650943": [],
+    "https://example.com/go?q=evil.example/x": ["evil.example"],
+    "https://example.com/go?url=https%3A%2F%2Fevil.example%2Fx": ["evil.example"],
+}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_open_redirect_warning_ignores_opaque_tokens():
+    script = (WEB / "js" / "url-heuristics.js").read_text(encoding="utf-8")
+    harness = (
+        "globalThis.window = globalThis;\n" + script + "\n"
+        "const cases = JSON.parse(process.argv[1]);\n"
+        "const out = {};\n"
+        "for (const url of Object.keys(cases)) {\n"
+        "  out[url] = window.urlHeuristics.analyzeUrl(url)\n"
+        "    .filter((w) => w.code === 'open_redirect_param')\n"
+        "    .map((w) => w.message.split('different domain (')[1].split(')')[0]);\n"
+        "}\n"
+        "console.log(JSON.stringify(out));\n"
+    )
+    result = subprocess.run(
+        ["node", "-e", harness, json.dumps(_OPEN_REDIRECT_CASES)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(result.stdout) == _OPEN_REDIRECT_CASES

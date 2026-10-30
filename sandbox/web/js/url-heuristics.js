@@ -57,8 +57,12 @@ function checkOpenRedirectParams(parsed) {
     if (!v) continue;
     let decoded = v;
     try { decoded = decodeURIComponent(v); } catch (e) { /* keep raw */ }
-    const embedded = parseHostSafe(decoded) || parseHostSafe(decoded.startsWith('http') ? decoded : `https://${decoded}`);
-    if (embedded && embedded.hostname && embedded.hostname !== parsed.hostname) {
+    const explicit = /^https?:\/\//i.test(decoded);
+    const embedded = parseHostSafe(explicit ? decoded : `https://${decoded}`);
+    // Without a scheme, only a dotted host name counts: an opaque token such as a
+    // share.google id would otherwise parse as a host of its own.
+    const plausible = embedded && embedded.hostname && (explicit || /\.[a-z]{2,63}$/i.test(embedded.hostname));
+    if (plausible && embedded.hostname !== parsed.hostname) {
       warnings.push({ level: 'warn', code: 'open_redirect_param', message: `Query param "${name}" points to a different domain (${embedded.hostname}) than the host (${parsed.hostname}) — possible open-redirect` });
     }
   }
