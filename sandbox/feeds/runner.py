@@ -8,6 +8,7 @@ previous data stays active and an alert is logged and audited (FED-5).
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
@@ -30,15 +31,41 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def _auth_key(ctx: WorkerContext, feed: Feed) -> str | None:
+    if feed.auth_key:
+        return feed.auth_key
+    host = (urlsplit(feed.url).hostname or "").lower()
+    env_key = ctx.settings.abusech_auth_key
+    if env_key is not None and (host == "abuse.ch" or host.endswith(".abuse.ch")):
+        return env_key.get_secret_value()
+    return None
+
+
 async def fetch(ctx: WorkerContext, feed: Feed) -> bytes:
     url = feed.url
     headers = {"User-Agent": "url-sandbox-feeds/0.1"}
-    if feed.auth_key:
-        if "{key}" in url:
-            url = url.replace("{key}", feed.auth_key)
-        else:
-            # abuse.ch services (URLhaus, ThreatFox, MalwareBazaar) take an Auth-Key header.
-            headers["Auth-Key"] = feed.auth_key
+    key = _auth_key(ctx, feed)
+    if "{key}" in url:
+        if not key:
+            hint = " or SANDBOX_ABUSECH_AUTH_KEY" if "abuse.ch" in url else ""
+            raise parsers.FeedError(f"This feed needs an auth key: set it on the feed{hint}")
+        url = url.replace("{key}", quote(key, safe=""))
+    elif key:
+        # Older abuse.ch API calls take the key as an Auth-Key header.
+        headers["Auth-Key"] = key
+    try:
+        return await _download(ctx, url, headers)
+    except Exception as exc:
+        # The key is part of the URL, and httpx puts the URL in its errors, which end up
+        # in feed_runs, the audit log and the logs.
+        message = str(exc)
+        if key and (key in message or quote(key, safe="") in message):
+            message = message.replace(quote(key, safe=""), "***").replace(key, "***")
+            raise parsers.FeedError(message) from None
+        raise
+
+
+async def _download(ctx: WorkerContext, url: str, headers: dict[str, str]) -> bytes:
     # Feed URLs are set by detection engineers and redirect wherever the server says, so
     # every hop is checked against the SSRF guard and pinned to the checked address.
     response = await safehttp.guarded_send(
