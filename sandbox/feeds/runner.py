@@ -14,6 +14,7 @@ from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 
 from sandbox.core import safehttp
+from sandbox.core.useragent import BROWSER_USER_AGENT
 from sandbox.db.audit import record_audit
 from sandbox.db.models import AllowlistDomain, AttackTechnique, Feed, FeedRun
 from sandbox.feeds import parsers
@@ -43,7 +44,7 @@ def _auth_key(ctx: WorkerContext, feed: Feed) -> str | None:
 
 async def fetch(ctx: WorkerContext, feed: Feed) -> bytes:
     url = feed.url
-    headers = {"User-Agent": "url-sandbox-feeds/0.1"}
+    headers = {"User-Agent": BROWSER_USER_AGENT}
     key = _auth_key(ctx, feed)
     if "{key}" in url:
         if not key:

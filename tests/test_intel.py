@@ -320,3 +320,17 @@ async def test_vt_relationship_pivot_refuses(client, path):
     response = await client.get(path)
     assert response.status_code == 422
     assert calls == []
+
+
+async def test_outbound_requests_look_like_a_browser(client):
+    from sandbox.core.useragent import BROWSER_USER_AGENT
+    from sandbox.runner.profiles import PROFILES
+
+    # Same user agent as the default detonation profile, so the walk and a detonation
+    # see the same thing.
+    assert PROFILES["chrome-windows"].user_agent == BROWSER_USER_AGENT
+    calls = _use(client, lambda r: httpx.Response(200, headers={"content-type": "text/html"}))
+    await client.get("/v1/intel/redirect-chain", params={"url": "https://public.example/"})
+    assert calls[0].headers["user-agent"] == BROWSER_USER_AGENT
+    assert calls[0].headers["accept"].startswith("text/html")
+    assert "accept-language" in calls[0].headers
