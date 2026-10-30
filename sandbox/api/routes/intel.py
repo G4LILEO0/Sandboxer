@@ -82,6 +82,8 @@ def _passthrough(status: int, body: dict | None, vendor: str) -> JSONResponse:
     if 200 <= status < 300 and body is not None:
         return JSONResponse(body)
     detail = body.get("error", body) if isinstance(body, dict) else None
+    if isinstance(detail, dict) and isinstance(detail.get("message"), str):
+        detail = detail["message"]  # VirusTotal: {"error": {"code": ..., "message": ...}}
     return JSONResponse(
         {"error": f"{vendor} HTTP {status}", "detail": detail}, status_code=status or 502
     )
@@ -124,12 +126,23 @@ async def virustotal_lookup(
     # Never scanned: submit, wait for the analysis, then fetch the full report.
     try:
         submit = await http.post(f"{VT_BASE}/urls", headers=headers, data={"url": value})
-        analysis_id = submit.json().get("data", {}).get("id") if submit.is_success else None
-    except (httpx.HTTPError, ValueError) as exc:
+    except httpx.HTTPError as exc:
         raise _error(502, "vendor_unreachable", str(exc)) from exc
+    try:
+        submit_body = submit.json()
+    except ValueError:
+        submit_body = None
+    analysis_id = (
+        (submit_body or {}).get("data", {}).get("id")
+        if submit.is_success and isinstance(submit_body, dict)
+        else None
+    )
     if not analysis_id:
+        # Keep VirusTotal's own reason (e.g. "Unable to canonicalize url") for the card.
         return _passthrough(
-            submit.status_code if not submit.is_success else 502, None, "VirusTotal submit"
+            submit.status_code if not submit.is_success else 502,
+            submit_body if isinstance(submit_body, dict) else None,
+            "VirusTotal submit",
         )
     for _ in range(settings.vt_url_poll_attempts):
         await asyncio.sleep(settings.vt_url_poll_interval_s)
