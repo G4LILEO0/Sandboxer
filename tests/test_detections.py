@@ -1247,6 +1247,118 @@ def test_it_help_page_describing_device_login_is_only_the_booster():
     assert "device_code_phishing_lure" not in hits
 
 
+# DE-M365-016 EvilTokens: the kit backend relays Microsoft's device code to the page.
+_ET_URL = "https://docusign-view.live-document-m36512.workers.dev/app"
+_ET_API = "https://docusign-view.live-document-m36512.workers.dev/api/device"
+_ET_CODE = (
+    '{"userCode":"QX7T-K2MB9","sessionId":"s1",'
+    '"verificationUri":"https://microsoft.com/devicelogin"}'
+)
+_ANTIBOT = {"X-Antibot-Token": "t0k"}
+_ET_KIT_RULES = {
+    "eviltokens_device_code_kit",
+    "device_code_relay_backend",
+    "device_code_kit_endpoints",
+}
+
+
+def _et_har(host_api=_ET_API, headers=_ANTIBOT):
+    return [
+        _req(f"{host_api}/gate/p1", req_headers=headers, body='{"killed":false}'),
+        _req(f"{host_api}/start", "POST", post='{"page":"p1"}', req_headers=headers, body=_ET_CODE),
+        _req(f"{host_api}/status/s1", req_headers=headers, body='{"status":"pending"}'),
+    ]
+
+
+def test_eviltokens_kit_fires_on_relayed_code_without_page_link():
+    """The code arrives over the API and is written into the DOM; no devicelogin link."""
+    page = _page(_ET_URL, title="DocuSign", text="Review the document")
+    hits = _hits(_cap(_ET_URL, [page], har=_et_har()))
+    assert _ET_KIT_RULES <= hits
+    assert defaults.DEFAULT_WEIGHTS["eviltokens_device_code_kit"] >= 70
+
+
+def test_eviltokens_kit_without_antibot_header_needs_code_or_handoff():
+    page = _page(_ET_URL, text="Review the document")
+    no_hdr = _et_har(headers={})
+    assert "eviltokens_device_code_kit" in _hits(_cap(_ET_URL, [page], har=no_hdr))
+    # Same endpoints, no code relayed and no hand-off: only the medium endpoint rule.
+    bare = [e for e in no_hdr if "/start" not in e["request"]["url"]]
+    hits = _hits(_cap(_ET_URL, [page], har=bare))
+    assert "device_code_kit_endpoints" in hits
+    assert not {"eviltokens_device_code_kit", "device_code_relay_backend"} & hits
+
+
+def test_eviltokens_gate_decoy_still_fires_on_the_antibot_header():
+    """The gate said 'killed': the decoy shows and no code is fetched, but the gate call
+    carries the kit's X-Antibot-Token, which is its fingerprint."""
+    har = [_req(f"{_ET_API}/gate/p1", req_headers=_ANTIBOT, body='{"killed":true}')]
+    hits = _hits(_cap(_ET_URL, [_page(_ET_URL, text="This link has expired")], har=har))
+    assert {"device_code_kit_endpoints", "eviltokens_device_code_kit"} <= hits
+    assert "device_code_relay_backend" not in hits
+    # Without the header a lone gate call is one endpoint kind: nothing fires.
+    har = [_req(f"{_ET_API}/gate/p1", body='{"killed":true}')]
+    hits = _hits(_cap(_ET_URL, [_page(_ET_URL, text="This link has expired")], har=har))
+    assert not _ET_KIT_RULES & hits
+
+
+def test_device_status_api_on_smart_home_console_is_quiet():
+    """Closest FP: an IoT console polling /api/device/status/<id> with ordinary JSON."""
+    url = "https://home.example-iot.net/dashboard"
+    har = [
+        _req("https://home.example-iot.net/api/device/status/42", body='{"online":true}'),
+        _req("https://home.example-iot.net/api/device/status/43", body='{"online":false}'),
+    ]
+    assert not _ET_KIT_RULES & _hits(_cap(url, [_page(url, text="Thermostat")], har=har))
+
+
+def test_eviltokens_kit_on_allowlisted_or_microsoft_host_is_quiet():
+    page = _page(_ET_URL, text="Review the document")
+    from sandbox.analysis.domains import site
+
+    host = "docusign-view.live-document-m36512.workers.dev"
+    allow = _cap(_ET_URL, [page], har=_et_har(), allowlisted=[site(host)])
+    assert not _ET_KIT_RULES & _hits(allow)
+    ms = "https://login.microsoftonline.com/common/oauth2/deviceauth"
+    ms_har = _et_har(host_api="https://login.microsoftonline.com/api/device")
+    assert not _ET_KIT_RULES & _hits(_cap(ms, [_page(ms)], har=ms_har))
+
+
+def test_device_code_grant_from_foreign_page_fires_and_ms_page_is_quiet():
+    url = "https://shared-files.example.net/"
+    dc = "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode"
+    tok = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+    grant = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code=x"
+    origin = {"Origin": "https://shared-files.example.net"}
+    har = [_req(dc, "POST", post="client_id=x", req_headers=origin)]
+    assert "device_code_relay_backend" in _hits(_cap(url, [_page(url)], har=har))
+    har = [_req(tok, "POST", post=grant, req_headers=origin)]
+    assert "device_code_relay_backend" in _hits(_cap(url, [_page(url)], har=har))
+    ms = {"Origin": "https://portal.azure.com"}
+    har = [_req(dc, "POST", post="client_id=x", req_headers=ms)]
+    assert "device_code_relay_backend" not in _hits(_cap(url, [_page(url)], har=har))
+
+
+def test_v2_device_verification_uri_is_a_handoff():
+    url = "https://docs-share.pages.dev/"
+    text = "To view the file, go to the link and enter this code: QX7T-K2MB9 to continue."
+    page = _dc_page(url, text, links=("https://login.microsoft.com/device",))
+    assert "device_code_phishing_lure" in _hits(_cap(url, [page]))
+
+
+def test_eviltokens_device_code_web_yara():
+    kit = (
+        b'const _startUrl="/api/device/start";fetch(_startUrl,{headers:{"X-Antibot-Token":t}})'
+        b".then(r=>r.json()).then(j=>{_verificationUrl=j.verificationUri;"
+        b'poll("/api/device/status/"+j.sessionId)})'
+    )
+    assert _yara("eviltokens_device_code_web").match(data=kit)
+    iot = b'fetch("/api/device/status/"+id).then(r=>r.json())'
+    assert not _yara("eviltokens_device_code_web").match(data=iot)
+    help_page = b"Go to microsoft.com/devicelogin and enter the user code shown on your TV."
+    assert not _yara("eviltokens_device_code_web").match(data=help_page)
+
+
 def test_device_code_share_pretext_with_email_gate_and_script_source():
     """The device-login URL in a script, plus an email-only gate on a share pretext."""
     url = "https://onedrive-files.example.net/"

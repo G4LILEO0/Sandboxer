@@ -597,6 +597,66 @@ BEHAVIOUR_RULES = [
         {"fact": "idp.device_code_handoff", "op": "gt", "value": 0},
         ["idp.device_code_sources", "final.url"],
     ),
+    # --- EvilTokens device-code PhaaS (DE-M365-016) -------------------------------------
+    _rule(
+        "eviltokens_device_code_kit",
+        "critical",
+        ["consent-phishing", "phishing", "eviltokens"],
+        ["T1566.002", "T1528", "T1550.001"],
+        "The page drives an EvilTokens-style device-code backend on a non-Microsoft host "
+        "(/api/device/gate, /api/device/start, /api/device/status/<session>) and either "
+        "sends the kit's X-Antibot-Token header (its fingerprint, sent even when the gate "
+        "shows a decoy), gets a Microsoft device code back, or sends the visitor to "
+        "Microsoft's device-code sign-in. The victim signs in to Microsoft for real while "
+        "the kit polls /token for their tokens.",
+        {
+            "all": [
+                {"fact": "idp.device_code_kit_api", "op": "gt", "value": 0},
+                {
+                    "any": [
+                        {"fact": "idp.device_code_relay", "op": "gt", "value": 0},
+                        {"fact": "idp.device_code_antibot_header", "op": "gt", "value": 0},
+                        {"fact": "idp.device_code_handoff", "op": "gt", "value": 0},
+                        {"fact": "idp.device_code_lure", "op": "eq", "value": True},
+                    ]
+                },
+            ]
+        },
+        ["idp.device_code_kit_details", "idp.device_code_relay_details", "final.url"],
+    ),
+    _rule(
+        "device_code_relay_backend",
+        "high",
+        ["consent-phishing", "phishing"],
+        ["T1566.002", "T1528"],
+        "A non-Microsoft, non-allowlisted host answered the page with a live Microsoft "
+        "device code (user_code with its verification URI), or the page itself ran the "
+        "device-code grant against Microsoft (/devicecode, or /token with a device_code "
+        "grant). Device codes are for TVs and CLIs, not for a web page to show visitors.",
+        {
+            "any": [
+                {"fact": "idp.device_code_relay", "op": "gt", "value": 0},
+                {"fact": "idp.device_code_browser_flow", "op": "gt", "value": 0},
+            ]
+        },
+        [
+            "idp.device_code_relay_details",
+            "idp.device_code_browser_flow_details",
+            "final.url",
+        ],
+    ),
+    _rule(
+        "device_code_kit_endpoints",
+        "medium",
+        ["consent-phishing"],
+        ["T1528"],
+        "A non-Microsoft, non-allowlisted host serves two of the EvilTokens device-flow "
+        "endpoints (/api/device/gate, /start, /status/<session>) or receives the "
+        "X-Antibot-Token header. Seen alone when the kit's gate shows its decoy instead "
+        "of the code; with a code or a hand-off it is eviltokens_device_code_kit.",
+        {"fact": "idp.device_code_kit_api", "op": "gt", "value": 0},
+        ["idp.device_code_kit_details", "idp.device_code_kit_hosts", "final.url"],
+    ),
     _rule(
         "ms_session_cookie_foreign_host",
         "critical",
@@ -1571,6 +1631,29 @@ rule tycoon2fa_web : phishing aitm
         or ($randexp and $checkpass)
 }
 """,
+    "eviltokens_device_code_web": r"""
+rule eviltokens_device_code_web : phishing
+{
+    meta:
+        description = "EvilTokens device-code phishing page script (kit API paths, X-Antibot-Token, start/verification URL handling)"
+        severity = "high"
+        mitre_attack = "T1566.002 T1528"
+    strings:
+        $api1 = "/api/device/start"
+        $api2 = "/api/device/status/"
+        $api3 = "/api/device/gate/"
+        $hdr = "X-Antibot-Token" nocase
+        $v1 = "_startUrl"
+        $v2 = "_verificationUrl"
+        $ms1 = "devicelogin" nocase
+        $ms2 = /oauth2\/(v2\.0\/)?deviceauth/ nocase
+        $uc = /user_?Code/ nocase
+    condition:
+        (2 of ($api*) and 1 of ($hdr, $v*, $ms*, $uc))
+        or ($hdr and 1 of ($api*))
+        or (all of ($v*) and 1 of ($api*))
+}
+""",
     "crypto_decrypt_then_write": r"""
 rule crypto_decrypt_then_write : obfuscation
 {
@@ -1629,6 +1712,9 @@ DEFAULT_WEIGHTS = {
     "firstparty_app_loopback_authorize": 30,
     "device_code_phishing_lure": 55,
     "device_code_handoff": 30,
+    "eviltokens_device_code_kit": 80,
+    "device_code_relay_backend": 60,
+    "device_code_kit_endpoints": 30,
     "cache_smuggled_payload": 55,
     "salty2fa_kit": 55,
     "tycoon2fa_kit": 55,
