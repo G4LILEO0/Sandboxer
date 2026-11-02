@@ -1649,6 +1649,7 @@ def _idp(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
         "device_code_handoff": len(device_code),
         "device_code_sources": device_code[:10],
         "device_code_lure": device_code_lure,
+        **_device_code_kit(data, reqs),
         "cookies_on_foreign_host": len(foreign_cookies),
         "idp_cookies": foreign_cookies[:10],
     }
@@ -1716,7 +1717,8 @@ def _url_sources(
 _DEVICE_LOGIN = re.compile(
     r"https?:(?://|\\/\\/)(?:www\.)?(?:microsoft\.com|aka\.ms)(?:/|\\/)devicelogin\b"
     r"|https?:(?://|\\/\\/)login\.microsoft(?:online)?\.com(?:/|\\/)[^\s\"'<>]{0,80}?"
-    r"oauth2(?:/|\\/)deviceauth\b",
+    r"oauth2(?:/|\\/)deviceauth\b"
+    r"|https?:(?://|\\/\\/)login\.microsoft(?:online)?\.com(?:/|\\/)device(?![\w-])",
     re.I,
 )
 _CODE_WORDING = re.compile(
@@ -1773,6 +1775,82 @@ def _device_code_handoff(
         if email_only and _SHARE_PRETEXT.search(text):
             lure = True
     return list(hits.values()), lure
+
+
+# EvilTokens device-code PhaaS (DE-M365-016): the page's script drives the kit backend,
+# which calls Microsoft's /devicecode and /token itself. ANY.RUN documents a gate check
+# (/api/device/gate/<page id>), a start call (/api/device/start) that returns the
+# userCode and verification URI, status polls (/api/device/status/<session id>) and an
+# X-Antibot-Token header on those calls.
+_DEVICE_KIT_PATH = re.compile(r"(?i)/api/device/(start|status|gate)(?:/[^/?#]+)?/?$")
+# A response that hands the page a live Microsoft device code.
+_DEVICE_CODE_FIELD = re.compile(r"(?i)[\"']?(user_?code)[\"']?\s*:\s*[\"'][A-Z0-9-]{6,12}[\"']")
+_DEVICE_VERIFY_FIELD = re.compile(
+    r"(?i)verification_?ur[il]|microsoft\.com(?:/|\\/)devicelogin|"
+    r"login\.microsoft(?:online)?\.com(?:/|\\/)device"
+)
+# The device-code grant run from the browser against Microsoft itself.
+_MS_DEVICECODE_PATH = re.compile(r"(?i)/oauth2/(?:v2\.0/)?devicecode$")
+_MS_TOKEN_PATH = re.compile(r"(?i)/oauth2/(?:v2\.0/)?token$")
+_DEVICE_GRANT = re.compile(
+    r"(?i)urn(?::|%3A)ietf(?::|%3A)params(?::|%3A)oauth(?::|%3A)grant-type(?::|%3A)device_code"
+)
+
+
+def _device_code_kit(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
+    """DE-M365-016: a device-code phishing backend seen from the browser.
+
+    Per foreign (non-Microsoft, non-allowlisted) host: the kit endpoints it served, any
+    X-Antibot-Token header sent to it, and responses carrying a device code with its
+    verification URI (the backend relaying Microsoft's /devicecode answer). A host counts
+    as a kit API only with two kinds of endpoint or the antibot header, so a lone
+    /api/device/status/1 on a smart-home console does not. Separately, browser calls to
+    Microsoft's /devicecode, or a device_code grant to /token, made by a foreign page."""
+
+    def foreign(host: str | None) -> bool:
+        if not host:
+            return False
+        return not _ms_owned(host, data.brands) and site(host) not in data.allowlisted
+
+    kinds: dict[str, set[str]] = {}
+    details: list[dict[str, Any]] = []
+    antibot: set[str] = set()
+    relay: list[dict[str, Any]] = []
+    browser_flow: list[dict[str, Any]] = []
+    for r in reqs:
+        host = r["host"]
+        if foreign(host):
+            if m := _DEVICE_KIT_PATH.search(r["path"]):
+                kind = m.group(1).lower()
+                kinds.setdefault(host, set()).add(kind)
+                if len(details) < 10:
+                    details.append(
+                        {"host": host, "kind": kind, "method": r["method"], "path": r["path"][:120]}
+                    )
+            if "x-antibot-token" in r["headers"]:
+                antibot.add(host)
+            body = r["resp_text"][:20000]
+            if _DEVICE_CODE_FIELD.search(body) and _DEVICE_VERIFY_FIELD.search(body):
+                relay.append({"host": host, "path": r["path"][:120]})
+        elif host and _ms_owned(host, data.brands):
+            page = _host(r["headers"].get("origin") or r["headers"].get("referer"))
+            if not foreign(page):
+                continue
+            if _MS_DEVICECODE_PATH.search(r["path"]):
+                browser_flow.append({"page_host": page, "endpoint": "devicecode"})
+            elif _MS_TOKEN_PATH.search(r["path"]) and _DEVICE_GRANT.search(r["post"]):
+                browser_flow.append({"page_host": page, "endpoint": "token"})
+    api_hosts = sorted(h for h, k in kinds.items() if len(k) >= 2 or h in antibot)
+    return {
+        "device_code_kit_api": len(api_hosts),
+        "device_code_kit_hosts": api_hosts[:10],
+        "device_code_kit_details": details,
+        "device_code_antibot_header": len(antibot),
+        "device_code_relay": len(relay),
+        "device_code_relay_details": relay[:10],
+        "device_code_browser_flow": len(browser_flow),
+        "device_code_browser_flow_details": browser_flow[:10],
+    }
 
 
 def _firstparty_loopback_authorize(
