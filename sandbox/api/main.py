@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 
@@ -183,6 +183,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/", include_in_schema=False)
     async def index() -> RedirectResponse:
         return RedirectResponse("/ui/")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> FileResponse:
+        return FileResponse(WEB_DIR / "favicon.ico", media_type="image/x-icon")
 
     app.mount("/ui", StaticFiles(directory=WEB_DIR, html=True), name="ui")
     return app

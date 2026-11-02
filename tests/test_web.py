@@ -70,6 +70,14 @@ def test_page_assets_exist_and_are_versioned(page):
     assert len(versions) == 1, f"{page.name} mixes asset versions {versions}"
 
 
+@pytest.mark.parametrize("page", PAGES, ids=lambda p: p.name)
+def test_page_declares_the_site_icon(page):
+    html = page.read_text(encoding="utf-8")
+    icons = re.findall(r'<link rel="(?:icon|apple-touch-icon)" href="([^"]+)"', html)
+    assert {"favicon.ico", "img/icon.svg", "img/apple-touch-icon.png"} <= set(icons)
+    assert all((WEB / ref).is_file() for ref in icons), f"{page.name} links a missing icon"
+
+
 _UNWRAP_CASES = {
     # A share id in ?q= is not a destination; it used to become https://cg0snh9sa48osyxhf/.
     "https://google.com.kw/share.google?q=cg0sNh9Sa48oSYxhf?876164590083787650943": None,
