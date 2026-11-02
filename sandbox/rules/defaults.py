@@ -812,6 +812,44 @@ BEHAVIOUR_RULES = [
         {"fact": "idp.fake_address_bar", "op": "gt", "value": 0},
         ["idp.fake_address_bar_details", "final.url"],
     ),
+    # --- fake sign-in window that frames the kit's own page ---------------------------
+    _rule(
+        "fake_browser_window_frame",
+        "high",
+        ["phishing", "bitb", "aitm"],
+        ["T1566.002", "T1036", "T1656"],
+        "A non-brand page draws a brand's URL (onedrive.office.com/..., "
+        "login.microsoftonline.com/...) as bare text, a fake address bar, right above an "
+        "iframe the brand does not serve: an in-page popup that frames the kit's own page "
+        "or its proxy of the real login. Fires before any password field loads.",
+        {"fact": "idp.fake_window_frames", "op": "gt", "value": 0},
+        ["idp.fake_window_frame_details", "final.url"],
+    ),
+    # --- real sign-in relayed through an interception web proxy -----------------------
+    _rule(
+        "web_proxy_signin_relay",
+        "critical",
+        ["phishing", "aitm", "proxy"],
+        ["T1557", "T1566.002", "T1539"],
+        "A non-allowlisted page runs an interception web proxy (Ultraviolet, Scramjet, "
+        "Rammerhead) and presents a sign-in: a fake browser window, a credential prompt or "
+        "a Microsoft sign-in page. The victim sees the brand's real login, served "
+        "through the attacker's host, which keeps the session (AiTM).",
+        {
+            "all": [
+                {"fact": "network.web_proxy_kit_count", "op": "gt", "value": 0},
+                {
+                    "any": [
+                        {"fact": "idp.fake_window_frames", "op": "gt", "value": 0},
+                        {"fact": "idp.fake_address_bar", "op": "gt", "value": 0},
+                        {"fact": "idp.ms_clone_pages", "op": "gt", "value": 0},
+                        {"fact": "brand.credential_prompt", "op": "eq", "value": True},
+                    ]
+                },
+            ]
+        },
+        ["network.web_proxy_kits", "network.web_proxy_assets", "brand.name", "final.url"],
+    ),
     # --- Salty2FA / Storm-1575 (DE-M365-015) ------------------------------------------
     _rule(
         "salty2fa_kit",
@@ -1518,6 +1556,8 @@ DEFAULT_WEIGHTS = {
     "salty2fa_kit": 55,
     "credential_post_to_form_collector": 45,
     "browser_in_the_browser_window": 50,
+    "fake_browser_window_frame": 55,
+    "web_proxy_signin_relay": 75,
     "explorer_api_dead_drop": 30,
     "wallet_drainer_lure": 30,
     "apps_script_credential_page": 25,
