@@ -2435,6 +2435,80 @@ def test_bitb_tutorial_and_linked_login_are_quiet():
     assert "browser_in_the_browser_window" not in _hits(with_link)
 
 
+# --- fake sign-in window and web-proxy relay (an_01M6E0PXYY57SXZT4E1RGYVZ0C) ----------
+
+# The window as the kit draws it once the visitor clicks its gate: a bare onedrive URL in
+# the address bar and an iframe of the kit's own Ultraviolet proxy of the Microsoft login.
+_UV_WINDOW_HTML = (
+    '<div class="bitb-window"><div class="bitb-title-bar"><span>Loading your page</span>'
+    '<button aria-label="Close">x</button></div><div class="bitb-url-bar">'
+    '<svg class="lock"></svg><span class="bitb-url-text">onedrive.office.com/:w:/g/personal/'
+    "documents/Q4_2026_Financial_Report.docx?e=8gK7mN&amp;web=1</span></div>"
+    '<iframe id="bitb-iframe" src="https://kit.example-host.org/T7L1Q/x?uv_qid=abc&amp;a=1">'
+    "</iframe></div>"
+)
+_UV_ASSETS = [
+    _req("https://kit.example-host.org/services/office365/uv/uv.config.js"),
+    _req("https://kit.example-host.org/services/office365/uv/uv.handler.js?v=1790303088"),
+]
+
+
+def test_fake_window_over_proxied_login_fires_before_the_login_loads():
+    url = "https://kit.example-host.org/T7L1Q/x"
+    page = _page(url, "Loading content", "Complete verification in the window")
+    data = _cap(url, [page], har=_UV_ASSETS, dom_html=[{"url": url, "html": _UV_WINDOW_HTML}])
+    facts = build_facts(data)
+    window = facts["idp"]["fake_window_frame_details"][0]
+    assert window["brand"] == "Microsoft"
+    assert window["shown_url"].startswith("onedrive.office.com/")
+    assert facts["network"]["web_proxy_kits"] == ["ultraviolet"]
+    hits = _hits(data)
+    assert {"fake_browser_window_frame", "web_proxy_signin_relay"} <= hits
+    # No password field ever loaded, so the older BitB rule stays quiet.
+    assert "browser_in_the_browser_window" not in hits
+
+
+def test_quoted_brand_urls_and_brand_frames_are_not_fake_windows():
+    url = "https://help.example-host.org/outlook"
+    own_frame = '<iframe src="/widgets/chat"></iframe>'
+    cases = [
+        # A help page linking the URL, or showing it in a code span, above its own widget.
+        '<p><a href="https://outlook.office.com/mail">https://outlook.office.com/mail</a></p>'
+        + own_frame,
+        "<p>Open <code>outlook.office.com/mail</code> in a new tab.</p>" + own_frame,
+        # A footer list of bare domains.
+        "<li>office.com</li>" + own_frame,
+        # The URL above a frame the brand itself serves.
+        "<div>https://outlook.office.com/mail</div>"
+        '<iframe src="https://outlook.office.com/owa/embed"></iframe>',
+        # A brand URL with no frame anywhere near it.
+        "<div>https://outlook.office.com/mail</div>" + "<p>text</p>" * 400 + own_frame,
+    ]
+    for html in cases:
+        data = _cap(url, [_page(url, "Help")], dom_html=[{"url": url, "html": html}])
+        assert build_facts(data)["idp"]["fake_window_frames"] == 0, html
+        assert "fake_browser_window_frame" not in _hits(data)
+    # Microsoft's own page drawing its own URL is never a fake window.
+    real = "https://www.office.com/"
+    data = _cap(real, [_page(real, "Office")], dom_html=[{"url": real, "html": _UV_WINDOW_HTML}])
+    assert "fake_browser_window_frame" not in _hits(data)
+
+
+def test_web_proxy_without_a_signin_is_only_a_fact():
+    # An "unblocker" site runs the same proxy for games and video, with no sign-in.
+    url = "https://unblock.example-host.org/"
+    data = _cap(url, [_page(url, "Unblocked games")], har=_UV_ASSETS)
+    assert build_facts(data)["network"]["web_proxy_kit_count"] == 1
+    assert "web_proxy_signin_relay" not in _hits(data)
+    # With a credential prompt on the proxied page, it is the relay.
+    login = _page(url, "Sign in to Microsoft", "Outlook account", forms=[PASSWORD_FORM])
+    data = _cap(url, [login], har=_UV_ASSETS)
+    assert "web_proxy_signin_relay" in _hits(data)
+    # Allowlisted proxy hosts are not counted.
+    vouched = _cap(url, [login], har=_UV_ASSETS, allowlisted={"example-host.org"})
+    assert build_facts(vouched)["network"]["web_proxy_kit_count"] == 0
+
+
 # --- JSFuck symbol-set YARA (L2-NEW-2) -----------------------------------------------
 
 

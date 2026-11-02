@@ -86,6 +86,8 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `idp.cdn_assets_on_foreign_page`, `.cdn_assets` | IdP (AADCDN / Okta CDN) sign-in branding loaded by a foreign credential page |
 | `idp.ms_paths_on_foreign_host`, `.ms_foreign_paths` | Microsoft login endpoints served from a non-Microsoft host with ESTS markers/cookies (AiTM proxy) |
 | `idp.high_risk_consent`, `.oauth_authorize_requests` | Entra authorize/consent requests: non-first-party `client_id` with high-risk Graph scopes |
+| `idp.fake_window_frames`, `.fake_window_frame_details` | A brand's URL drawn as a bare text node (with or without `https://`, not inside a link, code span or title) followed within 2500 characters by an iframe the brand does not serve: a fake sign-in window, seen even before its login loads (`{page, brand, shown_url, frame_src}`) |
+| `network.web_proxy_kits`, `.web_proxy_kit_count`, `.web_proxy_assets` | Interception web proxies the page loaded from a non-allowlisted host: Ultraviolet (`uv.config/handler/bundle/client/sw.js`, `__uv$config`), Scramjet, Rammerhead |
 | `idp.cookies_on_foreign_host`, `.idp_cookies` | Microsoft ESTS session cookies set by a non-Microsoft host |
 | `redirects.oauth_error_bounce_count`, `.oauth_error_bounce` | `prompt=none` authorize request that bounced off a real IdP (`error=…`) to a foreign host |
 | `web3.rpc_call_count`, `.rpc_calls`, `.contract_addresses` | JSON-RPC `eth_call`/`eth_getStorageAt` reads (EtherHiding dead-drop loader) |
