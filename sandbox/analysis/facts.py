@@ -1434,6 +1434,113 @@ def _fake_address_bar(data: CaptureData) -> list[dict[str, str]]:
     return out[:10]
 
 
+# A fake popup window with the sign-in still loading: a brand URL drawn as a bare text
+# node (the address bar, with or without https://) followed closely by an iframe that
+# the brand does not serve. A real brand page cannot be framed under its own URL, so
+# the frame is the kit's own content or its proxy of the real login. Help pages that
+# quote a URL put it in a link or a code span, and seldom follow it with their own frame.
+_BARE_URL_TEXT = re.compile(
+    r">\s*(?:\U0001F512\s*)?((?:https?://)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)"
+    r"(?:[/:?][^<\s]{0,300})?)\s*<",
+    re.I,
+)
+_IFRAME_SRC = re.compile(r"<iframe\b[^>]*?\bsrc\s*=\s*['\"]?([^'\"\s>]+)", re.I)
+_QUOTING_TAGS = re.compile(r"<(a|code|pre|kbd|samp|textarea|option|title|script|style)\b", re.I)
+_FAKE_WINDOW_SPAN = 2500
+
+
+def _fake_window_frames(data: CaptureData) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for page in data.dom_html:
+        url = page.get("url", "")
+        host = _host(url)
+        if not host or site(host) in data.allowlisted or brand_owner(host, data.brands):
+            continue
+        html = page.get("html", "")
+        for m in _BARE_URL_TEXT.finditer(html):
+            shown, shown_host = m.group(1), m.group(2).lower()
+            if "/" not in shown and not shown.lower().startswith("http"):
+                continue  # a bare domain is a footer or a list entry, not an address bar
+            owner = brand_owner(shown_host, data.brands)
+            if owner is None:
+                continue
+            tag_start = html.rfind("<", 0, m.start() + 1)
+            if _QUOTING_TAGS.match(html, tag_start):
+                continue
+            iframe = _IFRAME_SRC.search(html, m.end(), m.end() + _FAKE_WINDOW_SPAN)
+            if not iframe:
+                continue
+            src = unescape(iframe.group(1))
+            if src.lower().startswith(("about:", "javascript:", "data:")):
+                continue
+            src_host = _host(src) or host  # a relative src is the page's own site
+            if owner.owns(src_host):
+                continue
+            if site(src_host) != site(host) and site(src_host) in data.allowlisted:
+                continue
+            key = (shown_host, src_host)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(
+                {
+                    "page": url,
+                    "brand": owner.name,
+                    "shown_url": unescape(shown)[:200],
+                    "frame_src": src[:200],
+                }
+            )
+    return out[:10]
+
+
+# Interception web proxies (Ultraviolet, Scramjet, Rammerhead) rewrite a real site and
+# serve it from the proxy's own host through a service worker. "Unblocker" sites use
+# them; phishing kits use them to relay the real Microsoft or Google login, so the
+# victim sees a genuine page while the proxy keeps the session.
+_WEB_PROXY_PATHS = (
+    ("ultraviolet", re.compile(r"/uv\.(?:config|handler|bundle|client|sw)\.js$", re.I)),
+    ("scramjet", re.compile(r"/scramjet\.(?:all|client|worker|shared|codecs)\.js$", re.I)),
+    ("rammerhead", re.compile(r"/rammerhead(?:\.min)?\.js$", re.I)),
+)
+_WEB_PROXY_TEXT = (
+    ("ultraviolet", re.compile(r"__uv\$config\b")),
+    ("scramjet", re.compile(r"\$scramjet\b")),
+)
+
+
+def _web_proxy_kit(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
+    kits: set[str] = set()
+    assets: list[str] = []
+    urls = [r["url"] for r in reqs] + [r.get("url", "") for r in data.requests]
+    for url in urls:
+        host = _host(url)
+        if not host or site(host) in data.allowlisted:
+            continue
+        path = urlsplit(url).path
+        for name, pat in _WEB_PROXY_PATHS:
+            if pat.search(path):
+                kits.add(name)
+                if url not in assets:
+                    assets.append(url)
+    for page in data.dom_html:
+        host = _host(page.get("url"))
+        if not host or site(host) in data.allowlisted:
+            continue
+        for name, pat in _WEB_PROXY_TEXT:
+            if pat.search(page.get("html", "")):
+                kits.add(name)
+    for text in data.scripts.values():
+        for name, pat in _WEB_PROXY_TEXT:
+            if pat.search(text):
+                kits.add(name)
+    return {
+        "web_proxy_kits": sorted(kits),
+        "web_proxy_kit_count": len(kits),
+        "web_proxy_assets": [a[:300] for a in assets[:10]],
+    }
+
+
 def _ms_markers(html: str) -> list[str]:
     return [name for name, pat in _MS_MARKERS if pat.search(html)]
 
@@ -1519,9 +1626,12 @@ def _idp(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
         }
     )
     fake_bar = _fake_address_bar(data)
+    fake_windows = _fake_window_frames(data)
     return {
         "fake_address_bar": len(fake_bar),
         "fake_address_bar_details": fake_bar,
+        "fake_window_frames": len(fake_windows),
+        "fake_window_frame_details": fake_windows,
         "numeric_php_posts": len(numeric_php),
         "numeric_php_hosts": numeric_php[:10],
         "ms_clone_pages": len(clone_pages),
@@ -2762,6 +2872,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "local_probe": _local_probe(data),
             "request_log": _requests_summary(data),
             "trusted_redirectors": _trusted_redirectors(data),
+            **_web_proxy_kit(data, reqs),
         },
         "navigation": {**nav_cause, **_protocol_handler(data)},
         "cookies": {
