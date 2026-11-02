@@ -2663,7 +2663,110 @@ def _evasion(data: CaptureData) -> dict[str, Any]:
         "devtools_blocked": len(devtools),
         "devtools_blocked_keys": devtools,
         "context_menu_blocked": context_menu,
+        **_debugger_trap(data),
     }
+
+
+# Code that pauses or times the debugger to catch an open DevTools window (Tycoon 2FA,
+# obfuscator.io's debugProtection): a `debugger` statement run on a timer or around a
+# clock read, or one built at runtime from a string. A lone `debugger;` left in by a
+# developer is none of these.
+_DEBUGGER_TRAP = [
+    re.compile(r"\bset(?:Interval|Timeout)\s*\([^;]{0,200}?\bdebugger\b", re.S),
+    re.compile(
+        r"(?:performance\.now|Date\.now|new\s+Date)\s*\(\s*\)[^;]{0,120};?\s*debugger\b"
+        r".{0,200}?(?:performance\.now|Date\.now|new\s+Date)\s*\(",
+        re.S,
+    ),
+    re.compile(r"(?:constructor|Function)\s*\(\s*(['\"`])\s*debugger\s*\1"),
+    re.compile(r"(['\"`])debu\1\s*\+\s*(['\"`])gger\2"),
+]
+
+
+def _inline_scripts(data: CaptureData) -> list[tuple[str, str]]:
+    """(source, text) for fetched scripts and for each raw DOM snapshot, whose inline
+    <script> blocks kits use to hold the payload."""
+    out = [(f"sha256:{sha}", text) for sha, text in data.scripts.items()]
+    out += [(page.get("url", ""), page.get("html", "")) for page in data.dom_html]
+    return out
+
+
+def _debugger_trap(data: CaptureData) -> dict[str, Any]:
+    sources = []
+    for source, text in _inline_scripts(data):
+        if not text or is_harness_code(text) or "debu" not in text:
+            continue
+        sample = text[:2_000_000]
+        if any(p.search(sample) for p in _DEBUGGER_TRAP):
+            sources.append(source[:300])
+    return {"debugger_trap": len(sources), "debugger_trap_sources": sources[:10]}
+
+
+# Invisible-character encoding (Tycoon 2FA, 2025): the payload is written as a run of
+# two invisible code points, Hangul fillers or zero-width characters standing for 0 and
+# 1, and decoded at runtime through a Proxy getter. Text never needs dozens of them in a
+# row; emoji joiners and a byte-order mark come one at a time.
+_INVISIBLE_CHARS = (
+    "\u115f\u1160\u17b4\u17b5\u180e\u200b\u200c\u200d"  # fmt: skip
+    "\u2060\u2061\u2062\u2063\u2064\u3164\ufeff\uffa0"
+)
+_INVISIBLE_RUN = re.compile(f"[{_INVISIBLE_CHARS}]{{64,}}")
+
+
+def _invisible_unicode(data: CaptureData) -> dict[str, Any]:
+    found = []
+    for source, text in _inline_scripts(data):
+        if not text or not any(c in text for c in _INVISIBLE_CHARS):
+            continue
+        runs = [m.group(0) for m in _INVISIBLE_RUN.finditer(text[:2_000_000])]
+        runs = [r for r in runs if len(set(r)) >= 2]  # one repeated char encodes nothing
+        if not runs:
+            continue
+        longest = max(runs, key=len)
+        found.append(
+            {
+                "source": source[:300],
+                "longest_run": len(longest),
+                "chars": sorted(f"U+{ord(c):04X}" for c in set(longest)),
+            }
+        )
+    found.sort(key=lambda f: -f["longest_run"])
+    return {"invisible_unicode": len(found), "invisible_unicode_details": found[:10]}
+
+
+# A home-made CAPTCHA (Tycoon 2FA since mid-2024): a <canvas> drawing distorted characters
+# with a text box to type them into, on a page that loads no CAPTCHA provider. The canvas
+# and the wording must sit close together; a site with a chart and a captcha-protected
+# contact form elsewhere on the page does not count.
+_CAPTCHA_WORDING = re.compile(
+    r"(?i)captcha|verify (that )?(you are|you'?re) (a )?human|i'?m not a robot"
+    r"|i am not a robot|(enter|type) the (characters|letters|code|text) (you see|shown|above|below)"
+    r"|security (check|verification)|human verification"
+)
+_CANVAS_TAG = re.compile(r"(?i)<canvas\b")
+_TEXT_INPUT = re.compile(
+    r"(?i)<input\b(?![^>]*\btype\s*=\s*['\"]?(?:hidden|password|submit|button|checkbox|radio)\b)"
+)
+_CUSTOM_CAPTCHA_SPAN = 3000
+
+
+def _custom_captcha(data: CaptureData) -> list[str]:
+    pages = []
+    for page in data.dom_html:
+        url = page.get("url", "")
+        host = _host(url)
+        if not host or site(host) in data.allowlisted or brand_owner(host, data.brands):
+            continue
+        html = page.get("html", "")
+        if _CHALLENGE.search(html):
+            continue  # a real provider's widget: capture.gated already covers it
+        for m in _CANVAS_TAG.finditer(html):
+            near = html[max(0, m.start() - _CUSTOM_CAPTCHA_SPAN) : m.end() + _CUSTOM_CAPTCHA_SPAN]
+            text = _MARKUP_NOISE.sub(" ", near)
+            if _CAPTCHA_WORDING.search(text) and _TEXT_INPUT.search(near):
+                pages.append(url)
+                break
+    return sorted(set(pages))[:10]
 
 
 def _websocket(data: CaptureData, reqs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -2758,6 +2861,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
     forms = {**_forms(data), **_script_posted_credentials(data, reqs), **_apps_script(data)}
     jsapi = _jsapi_facts(data)
     challenge_gate = _challenge_gate(data, reqs)
+    custom_captcha = _custom_captcha(data)
     nav_cause = _navigation_cause(data)
     libraries = _libraries(data)
     final_allowlisted = bool(final_host) and site(final_host) in data.allowlisted
@@ -2814,7 +2918,10 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "duration_ms": r.get("duration_ms"),
             # A CAPTCHA/Turnstile gate was seen this session (DE-PHI-011): a run that stops
             # at one should prefer "unknown" to "benign" and be re-run interactively.
-            "gated": challenge_gate,
+            "gated": challenge_gate or bool(custom_captcha),
+            # A home-made canvas CAPTCHA no provider serves (Tycoon 2FA); it gates too.
+            "custom_captcha": len(custom_captcha),
+            "custom_captcha_pages": custom_captcha,
         },
         "forms": forms,
         "scripts": {
@@ -2822,6 +2929,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "max_obfuscation_score": scripts[0]["score"] if scripts else 0,
             "obfuscated": scripts[:10],
             "libraries": libraries,
+            **_invisible_unicode(data),
         },
         "js": jsapi,
         "downloads": {
