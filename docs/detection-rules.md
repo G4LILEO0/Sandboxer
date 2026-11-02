@@ -57,6 +57,7 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `forms.cross_domain_credential` | Password forms posting to another site (one brand's own domains count as the same site; `javascript:` actions are ignored) |
 | `forms.password_over_http` | Password forms served or submitted over http |
 | `scripts.max_obfuscation_score`, `scripts.obfuscated` | Obfuscation signals per script |
+| `scripts.invisible_unicode`, `.invisible_unicode_details` | Scripts (fetched, or inline in a raw DOM snapshot) holding a run of 64+ invisible characters (Hangul fillers, zero-width characters) that mixes at least two of them: an invisible-character payload encoding (`{source, longest_run, chars}`) |
 | `downloads.count`, `.executable`, `.archive`, `.disguised`, `.unprompted`, `.unprompted_risky` | Downloads; `disguised` covers `x.pdf.exe` and a PE file named `.pdf`; `unprompted_risky` counts executables, archives or disguised files downloaded without a click |
 | `clipboard.command_like` | Clipboard writes that contain any shell command |
 | `clipboard.writes`, `.max_write_len`, `.write_samples` | Page-initiated clipboard writes (analyst Ctrl+C excluded): count, longest text, and up to 5 samples (300 chars, with `user_activation`) |
@@ -99,12 +100,14 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `lure.fake_update_pages` | Non-vendor pages showing a browser/software update lure |
 | `final.ipfs` | The final page is served from an IPFS gateway (`{gateway, cid}` or null) |
 | `evasion.devtools_blocked`, `.devtools_blocked_keys`, `.context_menu_blocked` | DevTools shortcuts / context menu the page cancelled (observed via the key probe) |
+| `evasion.debugger_trap`, `.debugger_trap_sources` | Scripts with a debugger trap: `debugger` run from a timer, between two clock reads, or built from a string (`constructor("debugger")`, `'debu'+'gger'`). A lone `debugger;` does not count |
 | `downloads.types` | Content-based (magic-byte) types of downloads, e.g. `pe`, `lnk`, `iso`, `cab`, `chm`, `vhd` |
 | `downloads.archive_inner_risky`, `.archive_encrypted`, `.archive_password_on_page`, `.archives` | ZIP/TAR member listing (stdlib, directory only — never extracted); risky inner types; encrypted entries; a password printed on the page (DE-DLD-001/002) |
 | `forms.script_posted_credentials`, `.script_posted_targets` | Password field with no real form action posted by fetch/XHR/beacon to another site (needs the A3 request log) |
 | `network.request_log`, `.trusted_redirectors` | A3 browser request log summary (count, by resource type); trusted redirector / open-redirect wrappers in the chain |
 | `navigation.scripted_bounce`, `.scripted_bounces` | Script-initiated top-level bounces to a decoy (about:blank, a 404, a big-brand homepage) |
-| `capture.gated` | A CAPTCHA/Turnstile challenge was seen this session (prefer `unknown` over `benign`; re-run interactively) |
+| `capture.gated` | A CAPTCHA/Turnstile challenge, or a home-made canvas CAPTCHA, was seen this session (prefer `unknown` over `benign`; re-run interactively) |
+| `capture.custom_captcha`, `.custom_captcha_pages` | Non-allowlisted, non-brand pages with a `<canvas>`, CAPTCHA wording and a text input within 3000 characters of each other, and no CAPTCHA provider loaded (Tycoon 2FA's own CAPTCHA) |
 | `scripts.libraries` | JS library inventory parsed from CDN script URLs (`{name, version, url}`) |
 | `cookies.end_of_session` | Cookie names in the jar at teardown (values are hashed, never stored) |
 | `js.dynamic_exec_count`, `.dynamic_exec_max_len`, `.dynamic_exec_max_entropy` | Runtime eval/Function/setTimeout(string) calls: count, longest argument, highest entropy; `js.code_exec_*` are eval/Function/string-timer only and exclude the sandbox's own evaluate() and Playwright wrappers |
