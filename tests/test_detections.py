@@ -2890,3 +2890,123 @@ def test_analyst_ctrl_c_is_not_a_page_write():
     url = "https://docs.example.org/install"
     analyst = {"api": None, "text": "copied by the analyst", "trusted": True}
     assert _clip_hits(url, "Install", [analyst]) == set()
+
+
+# --- Tycoon 2FA (ANY.RUN malware-trends/tycoon) ----------------------------------------
+
+_CANVAS_CAPTCHA_HTML = (
+    "<html><body><div class=box><h2>Verify you are human</h2>"
+    '<canvas id="cv" width="220" height="70"></canvas>'
+    '<input id="code" type="text" placeholder="Enter the characters you see">'
+    "<button>Verify</button></div></body></html>"
+)
+# Two invisible code points as 0 and 1, the way Tycoon hides its page script.
+_INVISIBLE_SCRIPT = "const h=new Proxy({},{get:(t,k)=>d(k)});h[`" + "ㅤﾠ" * 60 + "`]();"
+
+
+def _tycoon(captcha=True, invisible=True, devtools=True, turnstile=False):
+    url = "https://docs-review.example-host.com/x9/"
+    har = [_req("https://challenges.cloudflare.com/turnstile/v0/api.js")] if turnstile else []
+    dom = [{"url": url, "html": _MS_CLONE_HTML}]
+    if captcha:
+        dom.insert(0, {"url": url + "verify", "html": _CANVAS_CAPTCHA_HTML})
+    data = _cap(
+        url,
+        [_page(url, "Sign in to your account", text="Microsoft", forms=[PASSWORD_FORM])],
+        har=har,
+        dom_html=dom,
+        blocked_input=[{"kind": "devtools_key", "key": "F12"}] if devtools else [],
+    )
+    if invisible:
+        data.scripts = {"a" * 64: _INVISIBLE_SCRIPT}
+    return data
+
+
+def test_tycoon2fa_kit_fires_on_canvas_captcha_invisible_script_and_ms_clone():
+    data = _tycoon()
+    facts = build_facts(data)
+    assert facts["capture"]["custom_captcha"] == 1
+    assert facts["capture"]["gated"] is True
+    assert facts["scripts"]["invisible_unicode"] == 1
+    assert facts["scripts"]["invisible_unicode_details"][0]["chars"] == ["U+3164", "U+FFA0"]
+    hits = _hits(data)
+    assert {"tycoon2fa_kit", "invisible_unicode_obfuscation"} <= hits
+    assert "captcha_gated_credential_page" in hits
+    # One Tycoon trait is enough with the gate and the sign-in clone.
+    assert "tycoon2fa_kit" in _hits(_tycoon(invisible=False))
+    assert "tycoon2fa_kit" in _hits(_tycoon(captcha=False, turnstile=True, devtools=False))
+
+
+def test_tycoon2fa_kit_needs_a_gate_and_a_trait_salty2fa_lacks():
+    # No gate at all.
+    assert "tycoon2fa_kit" not in _hits(_tycoon(captcha=False))
+    # Salty2FA-shaped: Turnstile, DevTools blocked, Microsoft clone, no Tycoon trait.
+    salty_like = _tycoon(captcha=False, invisible=False, turnstile=True)
+    assert "tycoon2fa_kit" not in _hits(salty_like)
+    # The real Microsoft sign-in behind its own challenge.
+    real = _tycoon(captcha=False, turnstile=True)
+    real.result["final_url"] = real.result["url"] = "https://login.microsoftonline.com/"
+    real.result["pages"] = [
+        _page(
+            "https://login.microsoftonline.com/", "Sign in", text="Microsoft", forms=[PASSWORD_FORM]
+        )
+    ]
+    real.dom_html = [{"url": "https://login.microsoftonline.com/", "html": _MS_CLONE_HTML}]
+    real.allowlisted = {"microsoftonline.com"}
+    assert "tycoon2fa_kit" not in _hits(real)
+
+
+def test_custom_captcha_needs_canvas_wording_and_input_together():
+    url = "https://shop.example/"
+    chart = "<canvas id=sales></canvas>" + "<p>quarterly sales</p>" * 400
+    far = chart + '<form><label>Enter the code shown above (captcha)</label><input name="c"></form>'
+    provider = _CANVAS_CAPTCHA_HTML.replace(
+        "</body>", '<script src="https://www.google.com/recaptcha/api.js"></script></body>'
+    )
+    for html in (far, provider, "<canvas></canvas><p>Verify you are human</p>"):
+        assert (
+            build_facts(_cap(url, dom_html=[{"url": url, "html": html}]))["capture"][
+                "custom_captcha"
+            ]
+            == 0
+        )
+    ok = _cap(
+        url, dom_html=[{"url": url, "html": _CANVAS_CAPTCHA_HTML}], allowlisted={"shop.example"}
+    )
+    assert build_facts(ok)["capture"]["custom_captcha"] == 0
+
+
+def test_invisible_unicode_ignores_emoji_joiners_and_single_char_padding():
+    url = "https://blog.example/"
+    emoji = "const fam='\U0001f468‍\U0001f469‍\U0001f467';" * 200
+    padding = "var pad='" + "​" * 300 + "';"
+    data = _cap(url)
+    data.scripts = {"b" * 64: emoji, "c" * 64: padding}
+    assert build_facts(data)["scripts"]["invisible_unicode"] == 0
+    assert "invisible_unicode_obfuscation" not in _hits(data)
+    inline = _cap(url, dom_html=[{"url": url, "html": f"<script>{_INVISIBLE_SCRIPT}</script>"}])
+    assert "invisible_unicode_obfuscation" in _hits(inline)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "setInterval(function(){debugger;},500)",
+        "var t=performance.now();debugger;if(performance.now()-t>100)location.replace(u)",
+        '(function(){}).constructor("debugger").call("action")',
+        "Function('debu'+'gger')()",
+    ],
+)
+def test_debugger_trap_counts_for_devtools_blocking(code):
+    url = "https://login-check.example/"
+    page = _page(url, "Sign in to your account", text="Microsoft", forms=[PASSWORD_FORM])
+    data = _cap(url, [page])
+    data.scripts = {"d" * 64: code}
+    assert build_facts(data)["evasion"]["debugger_trap"] == 1
+    assert "devtools_blocking" in _hits(data)
+
+
+def test_lone_debugger_statement_is_not_a_trap():
+    data = _cap("https://app.example/")
+    data.scripts = {"e" * 64: "function f(x){ debugger; return x + 1 }"}
+    assert build_facts(data)["evasion"]["debugger_trap"] == 0

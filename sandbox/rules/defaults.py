@@ -869,6 +869,81 @@ BEHAVIOUR_RULES = [
         },
         ["idp.numeric_php_hosts", "idp.ms_clone_page_details", "evasion.devtools_blocked_keys"],
     ),
+    # --- Tycoon 2FA / Storm-1747 (ANY.RUN malware-trends/tycoon) ----------------------
+    _rule(
+        "tycoon2fa_kit",
+        "high",
+        ["aitm", "phaas", "microsoft", "google"],
+        ["T1557", "T1566.002", "T1027", "T1622"],
+        "Tycoon 2FA traits together: a Microsoft or Google sign-in on a host the brand does "
+        "not own, behind a CAPTCHA gate, with anti-analysis (DevTools or context menu "
+        "blocked, a debugger trap, invisible-Unicode script) and one trait Salty2FA and "
+        "generic kits lack: the kit's home-made canvas CAPTCHA, invisible-Unicode encoded "
+        "script, or a real-time relay socket.",
+        {
+            "all": [
+                {
+                    "any": [
+                        {"fact": "idp.ms_clone_pages", "op": "gt", "value": 0},
+                        {
+                            "all": [
+                                {"fact": "brand.credential_prompt", "op": "eq", "value": True},
+                                {
+                                    "fact": "brand.name",
+                                    "op": "in",
+                                    "value": ["Microsoft", "Google"],
+                                },
+                            ]
+                        },
+                    ]
+                },
+                {"fact": "capture.gated", "op": "eq", "value": True},
+                {
+                    "any": [
+                        {"fact": "evasion.devtools_blocked", "op": "gt", "value": 0},
+                        {"fact": "evasion.context_menu_blocked", "op": "eq", "value": True},
+                        {"fact": "evasion.debugger_trap", "op": "gt", "value": 0},
+                        {"fact": "scripts.invisible_unicode", "op": "gt", "value": 0},
+                    ]
+                },
+                {
+                    "any": [
+                        {"fact": "capture.custom_captcha", "op": "gt", "value": 0},
+                        {"fact": "scripts.invisible_unicode", "op": "gt", "value": 0},
+                        {"fact": "websocket.foreign_count", "op": "gt", "value": 0},
+                        {"fact": "websocket.socketio_polling", "op": "gt", "value": 0},
+                    ]
+                },
+                {"not": {"fact": "final.allowlisted", "op": "eq", "value": True}},
+            ]
+        },
+        [
+            "brand.name",
+            "capture.custom_captcha_pages",
+            "scripts.invisible_unicode_details",
+            "evasion.devtools_blocked_keys",
+            "evasion.debugger_trap_sources",
+            "final.url",
+        ],
+    ),
+    # --- invisible-Unicode script encoding (Tycoon 2FA, 2025) -------------------------
+    _rule(
+        "invisible_unicode_obfuscation",
+        "medium",
+        ["obfuscation", "evasion"],
+        ["T1027", "T1027.010"],
+        "A script holds a run of 64 or more invisible characters (Hangul fillers U+3164 / "
+        "U+FFA0, zero-width spaces and joiners) mixing at least two of them: a payload "
+        "written in binary with invisible code points and decoded at runtime, as Tycoon 2FA "
+        "does to hide its sign-in page from signature scanners.",
+        {
+            "all": [
+                {"fact": "scripts.invisible_unicode", "op": "gt", "value": 0},
+                {"not": {"fact": "final.allowlisted", "op": "eq", "value": True}},
+            ]
+        },
+        ["scripts.invisible_unicode_details", "final.url"],
+    ),
     # --- protocol-handler lure (L2-NEW-6) --------------------------------------------
     _rule(
         "protocol_handler_lure",
@@ -1305,13 +1380,15 @@ BEHAVIOUR_RULES = [
         ["evasion", "anti-analysis"],
         ["T1622", "T1497"],
         "The page cancelled DevTools shortcuts (F12, Ctrl+U, Ctrl+Shift+I/J/C) or the "
-        "context menu while also showing a credential, ClickFix or download lure.",
+        "context menu, or runs a debugger trap (a timed or timer-driven `debugger`), while "
+        "also showing a credential, ClickFix or download lure.",
         {
             "all": [
                 {
                     "any": [
                         {"fact": "evasion.devtools_blocked", "op": "gt", "value": 0},
                         {"fact": "evasion.context_menu_blocked", "op": "eq", "value": True},
+                        {"fact": "evasion.debugger_trap", "op": "gt", "value": 0},
                     ]
                 },
                 {
@@ -1323,7 +1400,7 @@ BEHAVIOUR_RULES = [
                 },
             ]
         },
-        ["evasion.devtools_blocked_keys", "final.url"],
+        ["evasion.devtools_blocked_keys", "evasion.debugger_trap_sources", "final.url"],
     ),
     # --- crypto wallet drainer (DE-W3B-005), only fires when the fake wallet provider
     # is enabled and records signing requests (off by default, see config flags) ------
@@ -1554,6 +1631,8 @@ DEFAULT_WEIGHTS = {
     "device_code_handoff": 30,
     "cache_smuggled_payload": 55,
     "salty2fa_kit": 55,
+    "tycoon2fa_kit": 55,
+    "invisible_unicode_obfuscation": 25,
     "credential_post_to_form_collector": 45,
     "browser_in_the_browser_window": 50,
     "fake_browser_window_frame": 55,
