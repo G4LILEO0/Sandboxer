@@ -36,3 +36,6 @@ def configure_logging(level: str = "INFO") -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)
+    # httpx logs every request URL at INFO, and feed URLs can carry an auth key
+    # (abuse.ch, PhishTank).
+    logging.getLogger("httpx").setLevel(logging.WARNING)

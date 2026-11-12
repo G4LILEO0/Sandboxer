@@ -19,6 +19,8 @@ x-app-env: &app-env
   # Read from .env by compose; blank means that vendor's lookups are disabled.
   SANDBOX_VT_API_KEY: ${SANDBOX_VT_API_KEY:-}
   SANDBOX_ABUSEIPDB_API_KEY: ${SANDBOX_ABUSEIPDB_API_KEY:-}
+  # abuse.ch Auth-Key for the URLhaus, ThreatFox and MalwareBazaar feeds.
+  SANDBOX_ABUSECH_AUTH_KEY: ${SANDBOX_ABUSECH_AUTH_KEY:-}
   # Optional Suricata over session pcaps, e.g. jasonish/suricata:7.0.
   SANDBOX_SURICATA_IMAGE: ${SANDBOX_SURICATA_IMAGE:-}
 

@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # External enrichment for the IoC lookup page (ANA-10). Unset keys disable that vendor.
     vt_api_key: SecretStr | None = None
     abuseipdb_api_key: SecretStr | None = None
+    # One abuse.ch Auth-Key (auth.abuse.ch) serves URLhaus, ThreatFox and MalwareBazaar.
+    # A key set on a feed in Admin -> Feeds takes precedence.
+    abusech_auth_key: SecretStr | None = None
     intel_timeout_s: float = 15.0
     # VirusTotal URL scans: how long to wait for a fresh submission to finish.
     vt_url_poll_attempts: int = 10
@@ -147,6 +150,7 @@ class Settings(BaseSettings):
     @field_validator(
         "vt_api_key",
         "abuseipdb_api_key",
+        "abusech_auth_key",
         "suricata_image",
         "novnc_dir",
         "metrics_token",

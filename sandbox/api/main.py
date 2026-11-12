@@ -27,6 +27,7 @@ from sandbox.api.routes import (
     sessions,
 )
 from sandbox.config import Settings, get_settings
+from sandbox.core.useragent import BROWSER_USER_AGENT
 from sandbox.db.engine import make_engine, make_sessionmaker
 from sandbox.logs import configure_logging, request_id_var
 from sandbox.runtime_config import get_config
@@ -76,7 +77,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # The engine connects lazily, so liveness works even when the database is down.
         app.state.engine = make_engine(settings.database_url)
         app.state.sessionmaker = make_sessionmaker(app.state.engine)
-        app.state.http = httpx.AsyncClient(timeout=settings.intel_timeout_s)
+        app.state.http = httpx.AsyncClient(
+            timeout=settings.intel_timeout_s, headers={"User-Agent": BROWSER_USER_AGENT}
+        )
         app.state.store = make_store(settings)
         app.state.embed_origins = (0.0, [])
         yield

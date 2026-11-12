@@ -10,11 +10,14 @@ function vtUrlId(url) {
 
 async function intelGet(path) {
   try {
-    const resp = await fetch(`${CONFIG.INTEL_BASE_URL}${path}`);
+    // Api.headers() carries the dev sign-in (X-Dev-User), so lookups are logged under
+    // the analyst the picker shows, not the default dev@localhost.
+    const headers = typeof Api !== 'undefined' ? Api.headers() : {};
+    const resp = await fetch(`${CONFIG.INTEL_BASE_URL}${path}`, { headers, credentials: 'same-origin' });
     const data = await resp.json().catch(() => null);
     if (!resp.ok) {
       const msg = data && (data.detail && typeof data.detail === 'string' ? `${data.error}: ${data.detail}` : data.error);
-      return { ok: false, error: msg || `HTTP ${resp.status}` };
+      return { ok: false, status: resp.status, error: msg || `HTTP ${resp.status}` };
     }
     return { ok: true, data };
   } catch (e) { return { ok: false, error: e.message }; }

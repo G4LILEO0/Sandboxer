@@ -424,8 +424,86 @@ function renderHits(r) {
       el('td', {}, el('span', { className: `sev sev-${h.severity}`, textContent: h.severity })),
       el('td', {}, h.tags.map((t) => Api.tagChip(t))),
       el('td', { className: 'small', textContent: h.attack.join(', ') }),
-      el('td', {}, details(h.detail.artifact ? `in ${h.detail.artifact}` : 'facts', h.detail.facts || h.detail.matches || h.detail)));
+      el('td', {}, el('button', { className: 'copy-btn', textContent: 'Evidence', title: h.detail.artifact ? `Matched in ${h.detail.artifact}` : 'What this rule matched on', onclick: () => showEvidence(h) })));
   })));
+}
+
+// --- rule-hit evidence (REP-4): the condition, the matched content and its files ------
+
+const PREVIEW_CHARS = 2000;
+function fmtValue(v) {
+  if (v === null || v === undefined) return '—';
+  return typeof v === 'object' ? JSON.stringify(v) : String(v);
+}
+
+async function showEvidence(h) {
+  const body = el('div', { className: 'evidence-body' }, empty('Loading…'));
+  const close = el('button', { className: 'copy-btn', textContent: 'Close', onclick: () => dlg.close() });
+  const dlg = el('dialog', { className: 'evidence' },
+    el('div', { className: 'evidence-head' },
+      el('div', {}, el('h2', { textContent: h.rule }), el('span', { className: 'small muted', textContent: `${h.engine} · ${h.severity}` })),
+      close),
+    body);
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
+  document.body.appendChild(dlg);
+  dlg.showModal();
+  const res = await Api.get(`/v1/analyses/${encodeURIComponent(analysisId)}/rule-hits/${encodeURIComponent(h.id)}/evidence`);
+  if (!res.ok) { body.replaceChildren(empty(res.error)); return; }
+  const ev = res.data;
+  const parts = [];
+  if (ev.description) parts.push(el('p', { className: 'small', textContent: ev.description }));
+  if (ev.condition.length) {
+    parts.push(el('h3', { className: 'section-title', textContent: 'Condition' }),
+      table(['Fact', 'Op', 'Threshold', 'Actual', ''], ev.condition.map((c) => el('tr', { className: c.passed ? '' : 'muted' },
+        el('td', { className: 'monospace small', textContent: `${c.negated ? 'NOT ' : ''}${c.fact}` }),
+        el('td', { className: 'small', textContent: c.op }),
+        el('td', { className: 'monospace small', textContent: fmtValue(c.threshold) }),
+        el('td', { className: 'monospace small evidence-actual', textContent: c.missing ? '(missing)' : fmtValue(c.actual) }),
+        el('td', {}, el('span', { className: `pass ${c.passed ? 'pass-yes' : 'pass-no'}`, textContent: c.passed ? 'pass' : 'fail' }))))));
+  } else if (h.engine === 'behaviour' && !ev.rule_found) {
+    parts.push(empty('The rule no longer exists; showing the facts recorded when it fired.'));
+  }
+  if (ev.rule_source) parts.push(details('YARA rule source', ev.rule_source));
+  parts.push(el('h3', { className: 'section-title', textContent: `Matched content (${ev.samples.length})` }),
+    ev.samples.length ? el('div', { className: 'evidence-samples' }, ev.samples.map(sampleBlock)) : empty('No concrete content is stored for these facts; see the recorded facts below.'));
+  if (ev.files.length) {
+    parts.push(el('h3', { className: 'section-title', textContent: `Files (${ev.files.length})` }),
+      table(['File', 'Kind', 'Size', 'Why', ''], ev.files.map((f) => {
+        let action;
+        if (f.deleted) action = el('span', { className: 'small muted', textContent: 'removed' });
+        else if (f.quarantined) action = el('button', { className: 'copy-btn danger', textContent: 'Download (encrypted zip)', onclick: () => downloadQuarantined(f) });
+        else action = el('a', { href: artifactUrl(f.id), target: '_blank', rel: 'noopener', textContent: 'View as text' });
+        return el('tr', {},
+          el('td', {}, el('div', { className: 'monospace small', textContent: f.name }), el('div', { className: 'monospace small muted', textContent: f.sha256.slice(0, 16) + '…' })),
+          el('td', { className: 'small', textContent: f.kind }),
+          el('td', { className: 'small', textContent: Api.fmtBytes(f.size) }),
+          el('td', { className: 'small muted', textContent: f.why }),
+          el('td', {}, action));
+      })));
+  }
+  parts.push(details('Recorded facts (raw)', ev.facts));
+  body.replaceChildren(...parts);
+}
+
+function sampleBlock(s) {
+  const pre = el('pre', { className: 'small', textContent: s.content.slice(0, PREVIEW_CHARS) });
+  const meta = [`${s.length.toLocaleString()} chars`, s.entropy !== undefined ? `entropy ${s.entropy}` : null, s.source].filter(Boolean).join(' · ');
+  const extra = [];
+  if (s.content.length > PREVIEW_CHARS) {
+    const toggle = el('button', { className: 'copy-btn', textContent: 'Show full' });
+    toggle.addEventListener('click', () => {
+      const full = toggle.textContent === 'Show full';
+      pre.textContent = full ? s.content : s.content.slice(0, PREVIEW_CHARS);
+      toggle.textContent = full ? 'Show less' : 'Show full';
+    });
+    extra.push(toggle);
+  }
+  if (s.truncated) extra.push(el('span', { className: 'small muted', textContent: `Cut at ${Math.round(s.content.length / 1024)} KB; open the file for the rest.` }));
+  const copy = el('button', { className: 'copy-btn', textContent: 'Copy', onclick: async () => { const ok = await copyLocal(s.content); Api.toast(ok ? 'Copied' : 'Copy failed', !ok); } });
+  return el('div', { className: 'evidence-sample' },
+    el('div', { className: 'evidence-sample-head' }, el('strong', { className: 'small', textContent: s.label }), el('span', { className: 'small muted', textContent: meta })),
+    pre, el('div', { className: 'clip-actions' }, copy, ...extra));
 }
 
 function renderIndicators(hits) {

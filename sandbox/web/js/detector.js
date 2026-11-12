@@ -6,7 +6,8 @@ function refang(input) {
   if (!input) return input;
   let s = input.trim();
 
-  // Scheme de-obfuscation: hxxp / hxx[t]p / h''tt''p style tricks -> http
+  // Scheme de-obfuscation: hxxp / hxx[t]p / hXXp[s] / h**p style tricks -> http
+  s = s.replace(/\bh(?:xx|\*\*|tt)\[?(t?)\]?p(\[?s\]?)?(?=\[?:)/gi, (m, t, sec) => (sec ? 'https' : 'http'));
   s = s.replace(/h[x]{2}p/gi, 'http');
   s = s.replace(/h[x]{2}ps/gi, 'https');
   s = s.replace(/hxxt?ps?/gi, (m) => (/s$/i.test(m) ? 'https' : 'http'));
@@ -35,7 +36,8 @@ function refang(input) {
 
   // collapse genuine "spaced dot" defang: "1 . 2 . 3 . 4" -> "1.2.3.4"
   // (only when surrounded by digits/word chars on both sides to avoid eating real spaces)
-  s = s.replace(/(\w)\s+\.\s+(\w)/g, '$1.$2');
+  // (a lookahead, so "1 . 2 . 3" collapses fully: consuming the "2" skipped the next dot)
+  s = s.replace(/(\w)\s+\.\s+(?=\w)/g, '$1.');
 
   return s.trim();
 }
@@ -54,9 +56,36 @@ function looksLikeIPv6(s) {
   return groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff);
 }
 
+// Labels may hold underscores (_dmarc, some malware C2 names); the TLD is letters or
+// an IDN in punycode (xn--p1ai). Unicode names are converted to punycode first.
 function looksLikeDomain(s) {
-  if (s.length > 253) return false;
-  return /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*\.[a-z]{2,}$/i.test(s);
+  if (!s || s.length > 253) return false;
+  return /^(?!-)[a-z0-9_-]{1,63}(?<!-)(\.(?!-)[a-z0-9_-]{1,63}(?<!-))*\.(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/i.test(s);
+}
+
+// "пример.рф" -> "xn--e1afmkfd.xn--p1ai", via the URL parser's IDNA handling.
+function toAsciiHost(host) {
+  if (!host || /^[\x00-\x7f]*$/.test(host)) return host;
+  try { return new URL(`http://${host}/`).hostname; } catch (e) { return host; }
+}
+
+// Pasted IoCs often carry wrapping from mail, chat or tables: <https://x>, "x", (x),
+// a trailing full stop or comma. A closing parenthesis is kept when the IoC opened it
+// (https://en.wikipedia.org/wiki/Foo_(bar)).
+function stripWrapping(s) {
+  const count = (str, ch) => str.split(ch).length - 1;
+  let out = s.trim();
+  for (let i = 0; i < 4; i++) {
+    const before = out;
+    out = out.replace(/^[<"'`“‘]+/, '').replace(/[>"'`”’]+$/, '');
+    out = out.replace(/[.,;!?]+$/, '');
+    if (out.startsWith('(') && out.endsWith(')')) out = out.slice(1, -1);
+    else if (out.startsWith('(')) out = out.slice(1);
+    else if (out.endsWith(')') && count(out, ')') > count(out, '(')) out = out.slice(0, -1);
+    out = out.trim();
+    if (out === before) break;
+  }
+  return out;
 }
 
 function looksLikeURL(s) {
@@ -79,39 +108,91 @@ function possibleTypes(input) {
   if (looksLikeIPv4(s) || looksLikeIPv6(s)) types.push('ip');
   if (/^[a-fA-F0-9]{32}$/.test(s) || /^[a-fA-F0-9]{40}$/.test(s) || /^[a-fA-F0-9]{64}$/.test(s)) types.push('hash');
   if (looksLikeDomain(s)) types.push('domain'); // offered even when a URL match exists, as an override option
+  if (/^(?:mailto:)?[^\s@/:]+@[^\s@/:]+$/i.test(s)) types.push('email');
   if (!types.length) types.push('unknown');
   return [...new Set(types)];
 }
 
 function detectIoC(raw) {
   const trimmedRaw = raw.trim();
-  const value = refang(trimmedRaw);
+  let value = stripWrapping(refang(trimmedRaw));
   const out = {
     raw: trimmedRaw,
     value,
     type: 'unknown',
     hash_type: null,
+    port: null,
     ambiguous: false,
     candidates: [],
   };
 
   if (!value) return out;
 
-  const candidates = possibleTypes(trimmedRaw);
+  const candidates = possibleTypes(value);
   out.candidates = candidates;
   out.ambiguous = candidates.length > 1;
 
-  // Hashes are unambiguous by length/charset — check first.
-  if (/^[a-fA-F0-9]{32}$/.test(value)) { out.type = 'hash'; out.hash_type = 'md5'; return out; }
-  if (/^[a-fA-F0-9]{40}$/.test(value)) { out.type = 'hash'; out.hash_type = 'sha1'; return out; }
-  if (/^[a-fA-F0-9]{64}$/.test(value)) { out.type = 'hash'; out.hash_type = 'sha256'; return out; }
+  // Hashes are unambiguous by length/charset — check first. Lower-cased so that the
+  // same hash pasted in upper and lower case is one lookup, not two.
+  const hashTypes = { 32: 'md5', 40: 'sha1', 64: 'sha256' };
+  if (/^[a-fA-F0-9]+$/.test(value) && hashTypes[value.length]) {
+    out.type = 'hash'; out.hash_type = hashTypes[value.length]; out.value = value.toLowerCase(); return out;
+  }
 
-  if (looksLikeIPv4(value) || looksLikeIPv6(value)) { out.type = 'ip'; return out; }
+  // [2001:db8::1] and [2001:db8::1]:443 are how IPv6 addresses appear in logs and URLs.
+  const bracketed = value.match(/^\[([0-9a-f:.]+)\](?::(\d{1,5}))?$/i);
+  if (bracketed && looksLikeIPv6(bracketed[1])) {
+    out.type = 'ip'; out.value = bracketed[1].toLowerCase(); out.port = bracketed[2] || null; return out;
+  }
+  if (looksLikeIPv4(value)) { out.type = 'ip'; out.value = value.replace(/\b0+(\d)/g, '$1'); return out; }
+  if (looksLikeIPv6(value)) { out.type = 'ip'; out.value = value.toLowerCase(); return out; }
+  // 185.220.101.4:9001 is an address and a port (firewall and proxy logs), not a URL.
+  const withPort = value.match(/^(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})$/);
+  if (withPort && looksLikeIPv4(withPort[1])) {
+    out.type = 'ip'; out.value = withPort[1].replace(/\b0+(\d)/g, '$1'); out.port = withPort[2]; return out;
+  }
 
   if (looksLikeURL(value)) { out.type = 'url'; return out; }
 
-  if (looksLikeDomain(value)) { out.type = 'domain'; return out; }
+  // Sender and reply-to addresses from phishing mail: looked up by their domain.
+  const email = value.match(/^(?:mailto:)?([^\s@/:]+)@([^\s@/:]+)$/i);
+  if (email) {
+    const domain = toAsciiHost(email[2].replace(/\.$/, '')).toLowerCase();
+    if (looksLikeDomain(domain)) {
+      out.type = 'email'; out.value = `${email[1]}@${domain}`.toLowerCase(); out.email_domain = domain; return out;
+    }
+  }
 
+  const host = toAsciiHost(value.replace(/\.$/, '')).toLowerCase();
+  if (looksLikeDomain(host)) { out.type = 'domain'; out.value = host; return out; }
+
+  return out;
+}
+
+// Splits a paste into IoCs: one per line, and within a line by commas, semicolons,
+// tabs or spaces. A comma inside a URL (https://x.example/a,b) is kept, because the
+// piece after it is not an IoC of its own. Spaced-out defangs ("1 . 2 . 3 . 4",
+// "evil [.] com") are refanged before splitting on spaces.
+function splitIoCs(text) {
+  if (!text) return [];
+  const out = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    const compact = line
+      .replace(/\s*(\[\.\]|\(\.\)|\[dot\]|\(dot\)|\[:\]|\[:\/\/\])\s*/gi, '$1')
+      .replace(/(\d)\s+\.\s+(?=\d)/g, '$1.');
+    for (const token of compact.split(/[\s;]+/).filter(Boolean)) {
+      const merged = [];
+      for (const piece of token.split(',')) {
+        const prev = merged[merged.length - 1];
+        if (prev !== undefined && detectIoC(prev).type === 'url' && detectIoC(piece).type === 'unknown') {
+          merged[merged.length - 1] = `${prev},${piece}`;
+        } else {
+          merged.push(piece);
+        }
+      }
+      out.push(...merged.map((x) => x.trim()).filter(Boolean));
+    }
+  }
   return out;
 }
 
@@ -252,9 +333,18 @@ function defang(input) {
     .replace(/@/g, '[at]');
 }
 
+// Defangs only the host names, IPs and URLs inside free text (a warning message, a
+// page title), leaving the prose readable: "crosses domains (a[.]com -> b[.]net)".
+function defangText(text) {
+  if (!text) return text;
+  return String(text)
+    .replace(/\bhttp(s?):\/\//gi, 'hxxp$1://')
+    .replace(/\b(?:[a-z0-9_-]+\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]+|\d{1,3})\b/gi, (m) => (/^\d+(\.\d+)?$/.test(m) ? m : m.replace(/\./g, '[.]')));
+}
+
 // Export for browser global (classic <script>, no bundler/module system)
 window.detector = {
-  detectIoC, refang, defang, possibleTypes,
+  detectIoC, refang, defang, defangText, splitIoCs, stripWrapping, toAsciiHost, possibleTypes,
   looksLikeIPv4, looksLikeIPv6, looksLikeDomain, looksLikeURL,
   isPrivateIP,
 };

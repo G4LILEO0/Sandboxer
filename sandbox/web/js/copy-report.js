@@ -31,9 +31,21 @@ function fmt(value) {
   return window.render ? window.render.displayValue(value) : String(value);
 }
 
+function fmtText(value) {
+  if (value === null || value === undefined) return '';
+  return window.render && window.render.displayText ? window.render.displayText(value) : String(value);
+}
+
+// A cell that starts with = + - @ (or a tab/CR) is run as a formula by Excel and
+// Sheets. Page titles, tags and threat names come from attackers, so such cells get
+// a leading apostrophe, which spreadsheets show as plain text.
+function spreadsheetSafe(s) {
+  return /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+}
+
 function csvEscape(value) {
-  const s = value === null || value === undefined ? '' : String(value);
-  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  const s = spreadsheetSafe(value === null || value === undefined ? '' : String(value));
+  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
 
@@ -101,10 +113,16 @@ const FIELDS = [
   { id: 'registrar', label: 'Registrar', group: 'Domain', value: (n) => n.network.registrar || null },
 
   { id: 'unwrapped_url', label: 'Unwrapped URL', group: 'URL', value: (n) => (n.urls && n.urls.unwrapped && n.urls.unwrapped !== n.urls.original ? fmt(n.urls.unwrapped) : null) },
+  { id: 'landing_url', label: 'Lands on', group: 'URL', value: (n) => (n.urls && n.urls.landing ? fmt(n.urls.landing) : null) },
+  { id: 'landing_title', label: 'Landing title', group: 'URL', value: (n) => (n.urls && n.urls.landing_title) || null },
   { id: 'final_url', label: 'Final URL', group: 'URL', value: (n) => (n.urls && n.urls.vt_final_url ? fmt(n.urls.vt_final_url) : null) },
   { id: 'page_title', label: 'Page title', group: 'URL', value: (n) => (n.urls && n.urls.vt_title) || null },
   { id: 'redirects', label: 'Redirect chain', group: 'URL', value: (n) => (n.urls && n.urls.redirect_chain && n.urls.redirect_chain.length ? n.urls.redirect_chain.map((h) => fmt(h.url || h.location)).join(' -> ') : null) },
-  { id: 'url_warnings', label: 'URL warnings', group: 'URL', value: (n) => (n.urls && n.urls.warnings && n.urls.warnings.length ? n.urls.warnings.map((w) => w.message).join('; ') : null) },
+  { id: 'url_warnings', label: 'Warnings', group: 'URL', value: (n) => {
+    const all = [...(n.warnings || []), ...((n.urls && n.urls.warnings) || [])];
+    return all.length ? all.map((w) => fmtText(w.message)).join('; ') : null;
+  } },
+  { id: 'domain_age', label: 'Domain age', group: 'Domain', value: (n) => (typeof n.domain_age_days === 'number' ? `${n.domain_age_days} days` : null) },
 
   { id: 'file_type', label: 'File type', group: 'File', value: (n) => n.network.file_type || null },
   { id: 'file_size', label: 'File size', group: 'File', value: (n) => (has(n.network.file_size) ? String(n.network.file_size) : null) },
@@ -121,7 +139,7 @@ const FORMATS = {
 };
 
 const BUILTIN_PRESETS = {
-  Summary: { fields: ['ioc', 'type', 'verdict', 'local_summary', 'local_feeds', 'vt_detections', 'abuse_score', 'infra', 'country', 'asn', 'unwrapped_url', 'vt_link', 'abuse_link'], format: 'lines', includeEmpty: false },
+  Summary: { fields: ['ioc', 'type', 'verdict', 'local_summary', 'local_feeds', 'vt_detections', 'abuse_score', 'infra', 'country', 'asn', 'unwrapped_url', 'landing_url', 'vt_link', 'abuse_link'], format: 'lines', includeEmpty: false },
   Triage: { fields: ['verdict', 'ioc', 'usage_type', 'asn', 'abuse_categories'], format: 'inline', includeEmpty: false },
   'IP reputation': { fields: ['ioc', 'verdict', 'abuse_score', 'abuse_reports', 'abuse_categories', 'usage_type', 'isp', 'asn', 'country', 'infra', 'abuse_link'], format: 'lines', includeEmpty: false },
   'Spreadsheet row': { fields: ['ioc', 'type', 'verdict', 'vt_detections', 'abuse_score', 'country', 'infra', 'vt_link'], format: 'values', includeEmpty: true },
@@ -192,7 +210,7 @@ function renderOne(norm, template) {
   if (template.format === 'inline') {
     return [...shown.map((c) => `${c.label}: ${c.value ?? '-'}`), ...(note ? [note] : [])].join(' | ');
   }
-  if (template.format === 'values') return row.map((c) => (c.value ?? '').replace(/\t/g, ' ')).join('\t');
+  if (template.format === 'values') return row.map((c) => spreadsheetSafe((c.value ?? '').replace(/[\t\r\n]+/g, ' '))).join('\t');
   return [...shown.map((c) => `${c.label}: ${c.value ?? '-'}`), ...(note ? [note] : [])].join('\n');
 }
 
@@ -335,14 +353,27 @@ function mountTemplateEditor(root) {
 
 // --- Report basket ----------------------------------------------------------
 const ReportBasket = (function () {
+  // Kept in this browser so a reload or a closed tab does not lose the case notes.
+  // Raw vendor payloads are left out of storage: they are large, and the report
+  // fields come from the normalised values.
+  const KEY = 'ioc-report-basket';
   let items = [];
+  try { items = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { items = []; }
+  if (!Array.isArray(items)) items = [];
   const listeners = new Set();
 
   function keyOf(n) { return `${n.type}:${n.ioc}`; }
-  function notify() { listeners.forEach((cb) => { try { cb(items.slice()); } catch (e) { /* ignore */ } }); }
+  function persist() {
+    try { localStorage.setItem(KEY, JSON.stringify(items.map((n) => ({ ...n, raw: {} })))); } catch (e) { /* storage full or unavailable */ }
+  }
+  function notify() { persist(); listeners.forEach((cb) => { try { cb(items.slice()); } catch (e) { /* ignore */ } }); }
+  function has(norm) { return items.some((i) => keyOf(i) === keyOf(norm)); }
 
+  // A newer lookup of the same IoC replaces the stored one.
   function add(norm) {
-    if (!items.some((i) => keyOf(i) === keyOf(norm))) { items.push(norm); notify(); }
+    const i = items.findIndex((x) => keyOf(x) === keyOf(norm));
+    if (i >= 0) items[i] = norm; else items.push(norm);
+    notify();
   }
   function remove(norm) {
     items = items.filter((i) => keyOf(i) !== keyOf(norm));
@@ -366,7 +397,7 @@ const ReportBasket = (function () {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  return { add, remove, clear, list, subscribe, toMarkdown, toCSV, toJSON, downloadFile };
+  return { add, remove, clear, list, has, keyOf, subscribe, toMarkdown, toCSV, toJSON, downloadFile };
 })();
 
 window.copyReport = {

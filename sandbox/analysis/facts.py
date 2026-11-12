@@ -4,11 +4,14 @@ with newer rules without detonating again (ANA-13, FED-13)."""
 
 import base64
 import binascii
+import ipaddress
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
+from html import unescape
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -24,6 +27,7 @@ from sandbox.analysis.domains import (
     registrable,
     site,
 )
+from sandbox.runner.page_scripts import is_harness_code
 
 EXECUTABLE_EXTENSIONS = {
     "exe",
@@ -214,7 +218,8 @@ _PADDED_DECOY = re.compile(r"^[^\n]*\S([ \t]{12,}|[-_=]{10,})[^\n]*[A-Za-z][^\n]
 # Heavy caret escaping inside a word (f^^i^^n^^g^^e^^r): no copyable docs command does this.
 _CARET_OBFUSCATION = re.compile(r"(\w\^+){3,}\w")
 _RUN_DIALOG = re.compile(
-    r"(win(dows)?(\s*(key|logo))?\s*\+\s*r\b|⊞|press\s+(the\s+)?windows\s+(key|button)|"
+    r"(win(dows)?(\s*(key|logo))?\s*\+\s*r\b|⊞|press\s+(and\s+hold\s+)?(the\s+)?windows\s+"
+    r"(key|button)|"
     r"open\s+(the\s+)?(run\s+dialog|terminal|powershell|windows\s+terminal)|"
     r"powershell\s*\(\s*admin\s*\)|win\s*\+\s*x|cmd\s*\+\s*space|command\s*\+\s*space|"
     r"ctrl\s*\+\s*l\b|explorer('s)?\s+address\s+bar|file\s+explorer)",
@@ -294,6 +299,26 @@ def _frames(result: dict[str, Any]) -> list[dict[str, Any]]:
 def _all_frames(data: CaptureData) -> list[dict[str, Any]]:
     """Live frames at the end of the session plus every page seen earlier."""
     return _frames(data.result) + data.dom_pages
+
+
+_MARKUP_NOISE = re.compile(r"(?is)<(script|style|noscript)\b[^>]*>.*?</\1\s*>|<[^>]+>")
+
+
+def _lure_frames(data: CaptureData) -> list[dict[str, Any]]:
+    """_all_frames plus the whole text of each raw DOM snapshot, hidden elements included
+    (LR1-02). Fake-verification kits append their overlay after a long page and reveal
+    the Win+R / Win+X steps only after the checkbox click, so the capped, visible-only
+    page text never reaches them. Used for the run-dialog and fake-CAPTCHA facts only.
+    The text is cut into overlapping 4000-character windows, so the wording those facts
+    pair up must sit close together, as it does on one overlay."""
+    extra = []
+    for doc in data.dom_html:
+        text = _MARKUP_NOISE.sub(" ", (doc.get("html") or "")[:2_000_000])
+        text = " ".join(unescape(text).split())
+        url = doc.get("url", "")
+        for start in range(0, max(len(text) - 2000, 1), 2000):
+            extra.append({"url": url, "title": "", "text": text[start : start + 4000]})
+    return _all_frames(data) + extra
 
 
 def contacted_hosts(data: CaptureData) -> list[str]:
@@ -662,6 +687,17 @@ def _clipboard(data: CaptureData) -> dict[str, Any]:
         "no_gesture_writes": len(no_gesture),
         "no_gesture_commands": len(no_gesture_cmds),
         "overwritten_command": overwritten,
+        # Any page write, command or not: payloads the command patterns miss still show
+        # up as evidence, and their length separates them from coupon codes and links.
+        "max_write_len": max((len(c.get("text", "")) for c in writes), default=0),
+        "write_samples": [
+            {
+                "api": c.get("api"),
+                "text": c.get("text", "")[:300],
+                "user_activation": c.get("user_activation"),
+            }
+            for c in writes
+        ][:5],
         "commands": [
             {"api": c.get("api"), "text": c.get("text", "")[:1000], "frame_url": c.get("frame_url")}
             for c in commands
@@ -695,7 +731,7 @@ def _lure(data: CaptureData) -> dict[str, Any]:
     pages = sorted(
         {
             f.get("url", "")
-            for f in frames
+            for f in _lure_frames(data)
             if _RUN_DIALOG.search(f.get("text", "")) and _PASTE.search(f.get("text", ""))
         }
     )
@@ -1095,6 +1131,65 @@ def _brand(data: CaptureData, cross_forms: list[dict[str, Any]]) -> dict[str, An
                     "legit_domains": list(brand.domains),
                 }
     return best
+
+
+_LABEL_TOKEN = re.compile(r"[a-z0-9]+")
+
+
+def _hosting_brand_label(data: CaptureData) -> dict[str, Any] | None:
+    """A free-hosting tenant named after a brand (microsoftaccount-kit.<builder>,
+    ledger-live-kit.pages.dev) whose page asks for credentials (LR1-03). The page
+    itself may never name the brand. A label token must start with the keyword's first
+    word, so purchasebank.example.app is not Chase; keywords under 5 letters are skipped."""
+    for frame in _all_frames(data):
+        host = _host(frame.get("url"))
+        platform = free_hosting(host) if host else None
+        if not platform or site(host) in data.allowlisted:
+            continue
+        prompt = _credential_prompt(frame)
+        if not prompt:
+            continue
+        tokens = _LABEL_TOKEN.findall(host[: -len(platform)])
+        joined = "".join(tokens)
+        for brand in data.brands:
+            for keyword in brand.keywords:
+                words = _LABEL_TOKEN.findall(keyword.lower())
+                if keyword.startswith("acronym:") or len("".join(words)) < 5:
+                    continue
+                if "".join(words) in joined and any(t.startswith(words[0]) for t in tokens):
+                    return {
+                        "brand": brand.name,
+                        "host": host,
+                        "platform": platform,
+                        "keyword": keyword,
+                        "prompt": prompt,
+                    }
+    return None
+
+
+# Favicon services a webmail kit uses to show the icon of the victim's own mail domain,
+# so one page passes for every provider (LR1-04).
+_FAVICON_SERVICE = re.compile(
+    r"^https?://(?:www\.google\.com/s2/favicons\?(?:[^#]*&)?domain(?:_url)?="
+    r"|t\d\.gstatic\.com/faviconV2\?(?:[^#]*&)?url=|icons\.duckduckgo\.com/ip3/"
+    r"|logo\.clearbit\.com/|icon\.horse/icon/)([^&?#]+)",
+    re.I,
+)
+
+
+def _favicon_lookups(data: CaptureData, reqs: list[dict[str, Any]]) -> list[str]:
+    """Hosts whose favicon the page fetched through a favicon service, other than the
+    sites the session itself visited."""
+    visited = {site(h) for f in _all_frames(data) if (h := _host(f.get("url")))}
+    out = set()
+    for r in reqs:
+        if not (m := _FAVICON_SERVICE.match(r["url"])):
+            continue
+        target = unquote(m.group(1)).strip().lower()
+        host = _host(target) if "://" in target else target.split("/")[0].removesuffix(".ico")
+        if host and "." in host and site(host) not in visited:
+            out.add(host)
+    return sorted(out)
 
 
 # --- HAR access (pure over the stored HAR) --------------------------------------------
@@ -1873,14 +1968,172 @@ def _ip_lookups(reqs: list[dict[str, Any]]) -> list[str]:
     return sorted({r["host"] for r in reqs if r["host"] in IP_LOOKUP_HOSTS})
 
 
+# Browser-based local port scanning: a page opens WebSockets, fetches or images, or
+# WebRTC TURN/STUN servers, against many ports on 127.0.0.1 or the LAN to see what is
+# listening (remote-access tools in particular). Anti-fraud scripts (ThreatMetrix, as
+# on eBay) do it to spot remote-controlled sessions; scam and recon pages do it too.
+# The SSRF guard blocks every attempt, which leaves it in result["blocked"]; TURN/STUN
+# servers never pass the request filter, so the page hook records them (result["webrtc"]).
+_REMOTE_ACCESS_PORTS = {
+    22: "ssh",
+    23: "telnet",
+    3389: "rdp",
+    4899: "radmin",
+    5650: "remote-utilities",
+    5800: "vnc",
+    5900: "vnc",
+    5901: "vnc",
+    5902: "vnc",
+    5903: "vnc",
+    5931: "ammyy",
+    5938: "teamviewer",
+    5939: "teamviewer",
+    6129: "dameware",
+    6568: "anydesk",
+    7070: "anydesk",
+}
+# Desktop apps whose own sites look for their local helper on a fixed port range.
+_LOCAL_APP_PORTS = {"discord-rpc": range(6463, 6473)}
+# Anti-fraud device profiling that scans local ports by design. ThreatMetrix is often
+# served from a first-party CNAME, so its /fp/ tag paths count as well as its own host.
+_FRAUD_VENDOR_SCRIPTS = {
+    "threatmetrix": re.compile(
+        r"(?i)^https?://[^/]*online-metrix\.net/|/fp/(?:tags|check|clear|ls_fp)\.js|"
+        r"[?&]org_id=[^&]+&(?:[^&]+&)*session_id="
+    ),
+}
+# The ports each profiler is known to probe (ThreatMetrix: loopback WebSockets).
+_FRAUD_VENDOR_PORTS = {
+    "threatmetrix": {3389, 5279, 5900, 5901, 5902, 5903, 5931, 5938, 5939, 5944, 5950,
+                     6039, 6040, 7070, 63333},
+}  # fmt: skip
+
+
+def _fraud_vendor(urls: list[str]) -> str | None:
+    return next(
+        (n for n, rx in _FRAUD_VENDOR_SCRIPTS.items() if any(rx.search(u) for u in urls)), None
+    )
+
+
+_DEFAULT_PORTS = {"http": 80, "ws": 80, "https": 443, "wss": 443, "stun": 3478, "turn": 3478,
+                  "stuns": 5349, "turns": 5349}  # fmt: skip
+_ICE_URL = re.compile(r"(?i)^(stuns?|turns?):(\[[^\]]+\]|[^:?/\s]+)(?::(\d{1,5}))?")
+
+
+def _local_kind(host: str, reason: str = "") -> str | None:
+    """Classify a probe target as loopback, private or neither (None). Link-local is
+    left out: 169.254.169.254 is cloud-metadata SSRF, not a port scan."""
+    host = host.strip("[]").lower().rstrip(".")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        if host == "localhost" or host.endswith(".localhost") or "loopback" in reason:
+            return "loopback"
+        return "private" if "private address" in reason else None
+    if ip.is_loopback or ip.is_unspecified:  # 0.0.0.0 reaches local services too
+        return "loopback"
+    return "private" if ip.is_private and not ip.is_link_local else None
+
+
+def _local_probe(data: CaptureData) -> dict[str, Any]:
+    initiators = {
+        str(r.get("url", "")): (r.get("initiator") or {}).get("script_url") for r in data.requests
+    }
+    probes: list[tuple[str, str, int, str | None]] = []  # (channel, host, port, script)
+    for b in data.result.get("blocked", []):
+        url = str(b.get("url", ""))
+        try:
+            parts = urlsplit(url)
+            port = parts.port or _DEFAULT_PORTS.get(parts.scheme.lower())
+        except ValueError:
+            continue
+        host = parts.hostname or ""
+        if parts.scheme not in ("http", "https", "ws", "wss"):
+            continue
+        if not port or not host or not _local_kind(host, str(b.get("reason", ""))):
+            continue
+        channel = "websocket" if b.get("websocket") or parts.scheme in ("ws", "wss") else "http"
+        probes.append((channel, host, port, initiators.get(url)))
+    for rtc in data.result.get("webrtc", []):
+        for url in rtc.get("urls", []) or []:
+            if not (m := _ICE_URL.match(str(url))):
+                continue
+            host = m.group(2).strip("[]").lower()
+            port = int(m.group(3)) if m.group(3) else _DEFAULT_PORTS[m.group(1).lower()]
+            if _local_kind(host):
+                # The page hook's stack-derived URL ends in :line:col.
+                script = re.sub(r":\d+:\d+$", "", str(rtc.get("script_url") or "")) or None
+                probes.append(("webrtc", host, port, script))
+    ports = sorted({p for _, _, p, _ in probes})
+    hosts = sorted({h for _, h, _, _ in probes})
+    scripts = sorted({s for *_, s in probes if s})
+    remote = [p for p in ports if p in _REMOTE_ACCESS_PORTS]
+    vendor = _fraud_vendor(scripts) if probes else None
+    if not vendor and probes and not scripts:
+        # Blocked WebSockets carry no initiator (Playwright's socket routing replaces the
+        # page's WebSocket, so the browser never creates one). A profiler loaded on the
+        # page explains them only when the probes look exactly like its own scan, so a
+        # page cannot silence the rule just by also loading the vendor's tag.
+        loaded = [
+            str(u)
+            for u in (
+                [r.get("url") for r in data.requests]
+                + [e.get("request", {}).get("url") for e in data.har_entries]
+                + [u for sc in data.result.get("scripts", []) for u in sc.get("urls", [])]
+            )
+            if u
+        ]
+        if (vendor := _fraud_vendor(loaded)) and not (
+            {c for c, *_ in probes} == {"websocket"}
+            and all(_local_kind(h) == "loopback" for h in hosts)
+            and set(ports) <= _FRAUD_VENDOR_PORTS[vendor]
+        ):
+            vendor = None
+    app = next((n for n, r in _LOCAL_APP_PORTS.items() if ports and set(ports) <= set(r)), None)
+    return {
+        "attempts": len(probes),
+        "port_count": len(ports),
+        "ports": ports[:50],
+        "host_count": len(hosts),
+        "hosts": hosts[:20],
+        "remote_access_count": len(remote),
+        "remote_access": [f"{p}/{_REMOTE_ACCESS_PORTS[p]}" for p in remote],
+        "channels": sorted({c for c, *_ in probes}),
+        "scripts": scripts[:10],
+        "fraud_vendor": vendor,
+        "local_app": app,
+    }
+
+
 def _final_ipfs(final_url: str | None) -> dict[str, str] | None:
     return {"url": final_url} if final_url and _IPFS_URL.search(final_url) else None
+
+
+# Cloudflare's block page for a hostname it has confirmed as phishing or malware. The
+# bypass form on the site's own /cdn-cgi/ path is the marker; the wording alone is what
+# an article about these warnings would contain (LR1-05).
+_ABUSE_WARNING = re.compile(r"(?i)\bsuspected\s+(phishing|malware)\b")
+
+
+def _abuse_interstitial(data: CaptureData, final_host: str) -> dict[str, str] | None:
+    for frame in _frames(data.result):
+        if _host(frame.get("url")) != final_host:
+            continue
+        bypass = any(
+            urlsplit(f.get("action") or "").path == "/cdn-cgi/phish-bypass"
+            and _host(f.get("action")) == final_host
+            for f in frame.get("forms", [])
+        )
+        warning = _ABUSE_WARNING.search(f"{frame.get('title', '')} {frame.get('text', '')}")
+        if bypass and warning:
+            return {"provider": "cloudflare", "kind": warning.group(1).lower()}
+    return None
 
 
 def _fake_captcha(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
     evidence: set[str] = set()
     wording = fake = False
-    for frame in _all_frames(data):
+    for frame in _lure_frames(data):
         text = f"{frame.get('title', '')} {frame.get('text', '')}"
         found = {m.group(0).strip().lower() for m in _VERIFY_WORDING.finditer(text)}
         if not found:
@@ -2110,19 +2363,65 @@ def _libraries(data: CaptureData) -> list[dict[str, str]]:
     return out[:30]
 
 
+def _entropy(s: str) -> float:
+    """Shannon entropy of the first 4 KB, as the page hook computes it."""
+    s = s[:4096]
+    if not s:
+        return 0.0
+    counts: dict[str, int] = {}
+    for ch in s:
+        counts[ch] = counts.get(ch, 0) + 1
+    return round(-sum(n / len(s) * math.log2(n / len(s)) for n in counts.values()), 2)
+
+
+# Google Tag Manager compiles custom-JS variables and custom-HTML tags through eval; the
+# compiled code calls google_tag_manager["rm"]["<container>"](n). Only readable tag code
+# is let off: a sample that also carries a long encoded run, \x escapes or obfuscator.io
+# names still counts, so the marker cannot be used as a wrapper for packed code (LR2-01).
+_TAG_MANAGER_EVAL = re.compile(r"""google_tag_manager\[\s*["']rm["']\s*\]\s*\[\s*["']\d+["']""")
+_PACKED_RUN = re.compile(r"[A-Za-z0-9+/=]{200,}|(?:\\x[0-9a-f]{2}){40,}", re.I)
+
+
+def _tag_manager_code(code: str) -> bool:
+    return bool(
+        _TAG_MANAGER_EVAL.search(code)
+        and not _PACKED_RUN.search(code)
+        and not _OBFUSCATOR_IO.search(code)
+    )
+
+
+def _code_exec(execs: dict[str, Any]) -> tuple[int, int, float]:
+    """eval/Function aggregates without the sandbox's own code or readable tag-manager
+    code. Captures made before the runner dropped its own code still hold COLLECT_SCRIPT
+    and Playwright's init wrappers; their samples (256+ chars) are enough to take them
+    out again."""
+    count = execs.get("code_count", 0)
+    max_len, max_entropy = execs.get("code_max_len", 0), execs.get("code_max_entropy", 0.0)
+    samples = execs.get("code_samples") or []
+    page = [s for s in samples if not is_harness_code(s) and not _tag_manager_code(s)]
+    if len(page) == len(samples):
+        return count, max_len, max_entropy
+    return (
+        max(0, count - (len(samples) - len(page))),
+        max((len(s) for s in page), default=0),
+        max((_entropy(s) for s in page), default=0.0),
+    )
+
+
 def _jsapi_facts(data: CaptureData) -> dict[str, Any]:
     j = data.result.get("jsapi") or {}
     execs = j.get("exec") or {}
     apis = j.get("apis") or {}
     blobs = j.get("blobs") or []
+    code_count, code_max_len, code_max_entropy = _code_exec(execs)
     return {
         "dynamic_exec_count": execs.get("count", 0),
         "dynamic_exec_max_len": execs.get("max_len", 0),
         "dynamic_exec_max_entropy": execs.get("max_entropy", 0.0),
         # eval/Function/string-timer only (L2-01); 0 on captures that predate the split.
-        "code_exec_count": execs.get("code_count", 0),
-        "code_exec_max_len": execs.get("code_max_len", 0),
-        "code_exec_max_entropy": execs.get("code_max_entropy", 0.0),
+        "code_exec_count": code_count,
+        "code_exec_max_len": code_max_len,
+        "code_exec_max_entropy": code_max_entropy,
         "blob_constructs": len(blobs),
         "blob_details": blobs[:10],
         "history_floods": apis.get("history.pushState", 0) + apis.get("history.replaceState", 0),
@@ -2391,6 +2690,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "free_hosting": free_hosting(final_host) if final_host else None,
             "ipfs": _final_ipfs(final_url),
             "title": r.get("title") or "",
+            "abuse_interstitial": _abuse_interstitial(data, final_host) if final_host else None,
         },
         "capture": {
             "end_reason": r.get("end_reason"),
@@ -2447,13 +2747,19 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             "ages": ages,
         },
         "redirects": _redirects(data),
-        "brand": _brand(data, forms["cross_domain_credential_forms"]),
+        "brand": {
+            **_brand(data, forms["cross_domain_credential_forms"]),
+            "hosting_label": _hosting_brand_label(data),
+            "favicon_lookups": (favicons := _favicon_lookups(data, reqs))[:10],
+            "favicon_lookup_count": len(favicons),
+        },
         "network": {
             "requests": len(data.har_entries),
             "hosts": len(hosts),
             "blocked_internal": len(internal),
             "blocked": blocked[:20],
             "ip_lookups": _ip_lookups(reqs),
+            "local_probe": _local_probe(data),
             "request_log": _requests_summary(data),
             "trusted_redirectors": _trusted_redirectors(data),
         },
