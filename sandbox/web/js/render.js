@@ -157,6 +157,99 @@ function renderUrlSection(norm) {
   return wrap;
 }
 
+const LOCAL_TONE = {
+  listed: 'malicious', related_malicious: 'warn', related_suspicious: 'warn',
+  allowlisted: 'info', seen: 'info', unknown: 'info',
+};
+
+// "Sandboxer" block: what the feeds and past analyses already say, shown above the
+// vendor results because it is checked first.
+function renderLocalSection(norm) {
+  const local = norm.local;
+  if (!local) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'local-section';
+
+  const head = document.createElement('div'); head.className = 'local-head';
+  const title = document.createElement('strong'); title.textContent = 'Sandboxer';
+  const chip = document.createElement('span');
+  chip.className = `warn-chip ${LOCAL_TONE[local.summary] || 'info'}`;
+  chip.textContent = window.localClient.LOCAL_SUMMARY_LABELS[local.summary] || local.summary;
+  head.append(title, chip);
+  wrap.appendChild(head);
+
+  const feeds = local.feeds || [];
+  if (feeds.length) {
+    const ul = document.createElement('ul'); ul.className = 'local-list small';
+    for (const f of feeds.slice(0, 8)) {
+      const li = document.createElement('li');
+      const state = f.suppressed ? 'suppressed' : (f.active ? 'active' : `expired ${String(f.expires_at).slice(0, 10)}`);
+      const what = f.match === 'exact' ? '' : ` (${f.match}: ${displayValue(f.value)})`;
+      const tags = f.tags && f.tags.length ? `, ${f.tags.slice(0, 5).join(', ')}` : '';
+      li.textContent = `${f.feed}${what}: confidence ${f.confidence}${tags}, last seen ${String(f.last_seen).slice(0, 10)}, ${state}`;
+      if (!f.active || f.suppressed) li.className = 'muted';
+      ul.appendChild(li);
+    }
+    if (feeds.length > 8) {
+      const li = document.createElement('li'); li.className = 'muted'; li.textContent = `and ${feeds.length - 8} more`;
+      ul.appendChild(li);
+    }
+    wrap.appendChild(ul);
+  } else if (local.feeds) {
+    const none = document.createElement('div'); none.className = 'small muted'; none.textContent = 'No threat feed lists it.';
+    wrap.appendChild(none);
+  }
+
+  if (local.suppressed) {
+    const sup = document.createElement('div'); sup.className = 'small muted';
+    sup.textContent = `Suppressed by ${local.suppressed.by}: ${local.suppressed.reason}`;
+    wrap.appendChild(sup);
+  }
+  if (local.allowlisted) {
+    const al = document.createElement('div'); al.className = 'small';
+    al.textContent = `Allowlisted site ${local.allowlisted.site} (${local.allowlisted.source}${local.allowlisted.rank ? `, rank ${local.allowlisted.rank}` : ''})`;
+    wrap.appendChild(al);
+  }
+
+  const s = local.sightings;
+  if (s && s.total) {
+    const counts = Object.entries(s.by_verdict || {}).filter(([, n]) => n > 0)
+      .map(([v, n]) => `${n} ${v === 'none' ? 'without verdict' : v}`).join(', ');
+    const line = document.createElement('div'); line.className = 'small';
+    line.textContent = `Seen in ${s.total} past ${s.total === 1 ? 'analysis' : 'analyses'}${counts ? ` (${counts})` : ''}:`;
+    wrap.appendChild(line);
+    const ul = document.createElement('ul'); ul.className = 'local-list small';
+    for (const a of s.items.slice(0, 5)) {
+      const li = document.createElement('li');
+      li.appendChild(makeBadge(a.verdict || 'unknown'));
+      li.append(' ');
+      const link = document.createElement('a');
+      link.href = `report.html?id=${encodeURIComponent(a.analysis_id)}`;
+      link.target = '_blank'; link.rel = 'noopener';
+      link.textContent = displayValue(a.url);
+      li.appendChild(link);
+      li.append(` · ${String(a.created_at).slice(0, 10)}`);
+      const vt = a.enrichment && a.enrichment.virustotal;
+      if (vt && vt.last_analysis_stats) li.append(` · VT then: ${vt.last_analysis_stats.malicious || 0} malicious`);
+      ul.appendChild(li);
+    }
+    if (s.total > 5) {
+      const li = document.createElement('li');
+      const more = document.createElement('button');
+      more.type = 'button'; more.className = 'link-btn';
+      more.textContent = `List all ${s.total} analyses`;
+      more.onclick = () => window.sandbox.showAnalysesFor(s.items[0].matched_value);
+      li.appendChild(more);
+      ul.appendChild(li);
+    }
+    wrap.appendChild(ul);
+  } else if (s) {
+    const none = document.createElement('div'); none.className = 'small muted'; none.textContent = 'Not collected by any past analysis you can see.';
+    wrap.appendChild(none);
+  }
+  return wrap;
+}
+
 function renderCard(norm, opts = {}) {
   const container = document.createElement('div');
   container.className = `card spined v-${norm.verdict || 'unknown'}`;
@@ -195,6 +288,18 @@ function renderCard(norm, opts = {}) {
   container.appendChild(header);
 
   const body = document.createElement('div'); body.className = 'body';
+
+  const localSection = renderLocalSection(norm);
+  if (localSection) body.appendChild(localSection);
+
+  if (opts.pending) {
+    const wait = document.createElement('div'); wait.className = 'small muted pending-vendors';
+    wait.textContent = norm.type === 'ip' ? 'Checking VirusTotal and AbuseIPDB…' : 'Checking VirusTotal…';
+    body.appendChild(wait);
+    container.classList.add('pending');
+    container.appendChild(body);
+    return container;
+  }
 
   if (!norm.network.is_private) {
     const scoreEl = document.createElement('div'); scoreEl.className = 'small scores';
@@ -298,4 +403,4 @@ function renderCard(norm, opts = {}) {
   return container;
 }
 
-window.render = { renderCard, renderLoadingCard, renderErrorCard, escapeHtml, displayValue, makeBadge };
+window.render = { renderCard, renderLocalSection, renderLoadingCard, renderErrorCard, escapeHtml, displayValue, makeBadge };
