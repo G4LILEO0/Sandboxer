@@ -1,0 +1,8 @@
+# Publishes the API on the LAN as well as on 127.0.0.1.
+#   docker compose -f compose.yaml -f compose.lan.yaml up -d
+# Dev auth has no sign-in: anyone who can reach this address can act as admin.
+# See docs/lan-exposure-assessment.md before using this on an untrusted network.
+services:
+  api:
+    ports:
+      - "${SANDBOX_LAN_IP:-192.168.68.108}:8000:8000"
