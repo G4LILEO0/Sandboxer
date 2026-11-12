@@ -32,6 +32,7 @@ function normalizeResult(detected) {
     related: {},
     urls: {},
     vendor_links: {},
+    local: null,  // /v1/intel/local: feeds and past analyses, checked first
     raw: {},
     _errors: [],
   };
@@ -190,6 +191,31 @@ function computeInfrastructureFlag(norm) {
   return norm;
 }
 
+// Sandboxer's own record of the IoC, looked up before the vendors.
+function mergeLocalData(norm, res) {
+  norm.raw = norm.raw || {};
+  norm.raw.sandboxer = res;
+  if (!res || !res.ok) {
+    if (res && res.error) norm._errors.push(`Sandboxer: ${res.error}`);
+    norm.local = null;
+    return norm;
+  }
+  const d = res.data || {};
+  const feeds = d.feeds || [];
+  const live = feeds.filter((f) => f.active && !f.suppressed);
+  norm.local = {
+    summary: d.summary || 'unknown',
+    value: d.value,
+    feeds,
+    live_feeds: live,
+    suppressed: d.suppressed || null,
+    allowlisted: d.allowlisted || null,
+    sightings: d.sightings || null,
+  };
+  for (const f of live) norm.tags = [...new Set([...norm.tags, ...(f.tags || [])])];
+  return norm;
+}
+
 function computeVerdict(norm) {
   const vtMal = norm.score_summary.vt_malicious || 0;
   const vtSusp = norm.score_summary.vt_suspicious || 0;
@@ -198,9 +224,14 @@ function computeVerdict(norm) {
   const hasMaliciousWarning = urlWarnings.some((w) => w.level === 'malicious');
   const hasWarnWarning = urlWarnings.some((w) => w.level === 'warn');
 
-  if (vtMal > 3 || abuseScore > 75 || hasMaliciousWarning) norm.verdict = 'malicious';
-  else if (vtMal > 0 || vtSusp > 0 || abuseScore > 10 || hasWarnWarning) norm.verdict = 'suspicious';
-  else if (norm._errors && norm._errors.length && !norm.raw.vt && !norm.raw.abuseipdb) norm.verdict = 'unknown';
+  const local = (norm.local && norm.local.summary) || 'unknown';
+  const localBad = local === 'listed';
+  const localSusp = local === 'related_malicious' || local === 'related_suspicious';
+
+  if (vtMal > 3 || abuseScore > 75 || hasMaliciousWarning || localBad) norm.verdict = 'malicious';
+  else if (vtMal > 0 || vtSusp > 0 || abuseScore > 10 || hasWarnWarning || localSusp) norm.verdict = 'suspicious';
+  // No vendor answered and Sandboxer has nothing against it: not enough to call it clean.
+  else if (!['vt', 'abuseipdb'].some((v) => norm.raw[v] && norm.raw[v].ok)) norm.verdict = 'unknown';
   else norm.verdict = 'clean';
 
   return norm;
@@ -209,6 +240,7 @@ function computeVerdict(norm) {
 window.normalize = {
   normalizeResult,
   mergeVendorData,
+  mergeLocalData,
   computeInfrastructureFlag,
   computeVerdict,
   ABUSEIPDB_CATEGORIES,

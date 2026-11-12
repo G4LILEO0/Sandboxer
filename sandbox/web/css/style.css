@@ -249,6 +249,11 @@ details > summary:hover { color: var(--ink); }
 .warn-chip.warn { background: var(--sus-soft); color: var(--sus-ink); }
 .warn-chip.malicious { background: var(--mal-soft); color: var(--mal-ink); }
 .links { font-size: 13px; display: flex; gap: 14px; }
+.local-section { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--sunken); border-radius: var(--r-sm); }
+.local-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.local-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; word-break: break-all; }
+.local-list .badge { font-size: 11px; }
+.link-btn { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
 .footer-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .footer-actions .detonate { margin-left: auto; }
 .raw-sources { display: flex; gap: 6px; flex-wrap: wrap; }

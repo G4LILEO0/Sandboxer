@@ -225,4 +225,12 @@ async function detonateFromCard(url, btn) {
   showView(initial);
 })();
 
-window.sandbox = { submitAnalysis, refreshAnalyses, detonateFromCard, showView };
+// From a lookup card: list every analysis that collected this IoC.
+function showAnalysesFor(ioc) {
+  searchForm.reset();
+  searchForm.elements.ioc.value = ioc;
+  pageOffset = 0;
+  showView('sandbox');
+}
+
+window.sandbox = { submitAnalysis, refreshAnalyses, detonateFromCard, showView, showAnalysesFor };
