@@ -13,6 +13,8 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
+from sandbox.analysis.har_pcap import SYNTHETIC_CLIENT_IP
+
 log = logging.getLogger(__name__)
 
 
@@ -24,7 +26,7 @@ def _tar(files: dict[str, Path]) -> bytes:
     return buf.getvalue()
 
 
-def _run(settings, image: str, rules: Path, pcap: Path | None) -> tuple[bool, str]:
+def _run(settings, image: str, rules: Path, pcaps: list[Path]) -> tuple[bool, str]:
     import docker
 
     client = (
@@ -33,11 +35,13 @@ def _run(settings, image: str, rules: Path, pcap: Path | None) -> tuple[bool, st
         else docker.from_env()
     )
     files = {"rules.rules": rules}
-    if pcap is not None:
-        files["capture.pcap"] = pcap
+    if pcaps:
+        # A directory of pcaps is read file by file in one run, so the rules load once.
+        for n, path in enumerate(pcaps):
+            files[f"pcaps/{n}.pcap"] = path
         cmd = [
             "-r",
-            "/work/capture.pcap",
+            "/work/pcaps",
             "-S",
             "/work/rules.rules",
             "-l",
@@ -62,7 +66,7 @@ def _run(settings, image: str, rules: Path, pcap: Path | None) -> tuple[bool, st
         logs = container.logs(stdout=True, stderr=True).decode("utf-8", "replace")
         if status.get("StatusCode") != 0:
             return False, logs
-        if pcap is None:
+        if not pcaps:
             return True, logs
         stream, _ = container.get_archive("/work/out/eve.json")
         data = io.BytesIO(b"".join(stream))
@@ -73,8 +77,12 @@ def _run(settings, image: str, rules: Path, pcap: Path | None) -> tuple[bool, st
         container.remove(force=True, v=True)
 
 
-async def run_suricata(ctx, image: str, rules: Path, pcap: Path | None) -> tuple[bool, str]:
-    return await asyncio.to_thread(_run, ctx.settings, image, rules, pcap)
+async def run_suricata(
+    ctx, image: str, rules: Path, pcap: Path | list[Path] | None
+) -> tuple[bool, str]:
+    """Run ``rules`` over one or more pcaps, or only validate them when there is none."""
+    pcaps = [] if pcap is None else [pcap] if isinstance(pcap, Path) else list(pcap)
+    return await asyncio.to_thread(_run, ctx.settings, image, rules, pcaps)
 
 
 def parse_alerts(eve: str) -> list[dict[str, Any]]:
@@ -99,12 +107,17 @@ def parse_alerts(eve: str) -> list[dict[str, Any]]:
             },
         )
         if len(entry["flows"]) < 10:
-            entry["flows"].append(
-                {
-                    "src": f"{event.get('src_ip')}:{event.get('src_port')}",
-                    "dest": f"{event.get('dest_ip')}:{event.get('dest_port')}",
-                    "proto": event.get("proto"),
-                    "ts": event.get("timestamp"),
-                }
-            )
+            flow = {
+                "src": f"{event.get('src_ip')}:{event.get('src_port')}",
+                "dest": f"{event.get('dest_ip')}:{event.get('dest_port')}",
+                "proto": event.get("proto"),
+                "ts": event.get("timestamp"),
+            }
+            # Flows rebuilt from the HAR (har_pcap) stand for HTTPS requests.
+            if SYNTHETIC_CLIENT_IP in (event.get("src_ip"), event.get("dest_ip")):
+                flow["decrypted_https"] = True
+                http = event.get("http") or {}
+                if http.get("hostname"):
+                    flow["url"] = f"https://{http['hostname']}{http.get('url') or ''}"
+            entry["flows"].append(flow)
     return list(alerts.values())
