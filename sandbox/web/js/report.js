@@ -658,7 +658,7 @@ function renderDomains(r) {
   const ids = net.suricata_alerts || [];
   section('r-ids').replaceChildren(ids.length ? table(['SID', 'Signature', 'Category', 'Flows'], ids.map((a) => el('tr', {},
     el('td', { textContent: a.sid }), el('td', { textContent: a.signature }), el('td', { className: 'small', textContent: a.category }),
-    el('td', { className: 'small monospace', textContent: a.flows.map((f) => `${f.src} → ${f.dest}`).join('\n') })))) : empty('No IDS alerts (or Suricata is not configured).'));
+    el('td', { className: 'small monospace', textContent: a.flows.map((f) => (f.decrypted_https ? `HTTPS (decrypted) ${f.url || f.dest}` : `${f.src} → ${f.dest}`)).join('\n') })))) : empty('No IDS alerts (or Suricata is not configured).'));
 }
 
 // --- IOCs, notes, tags -------------------------------------------------------------

@@ -189,6 +189,17 @@ IOC extraction also emits `eth_address` indicators (from `eth_call` targets, pag
 
 ## Suricata rules
 
-Suricata runs over the session pcap when `SANDBOX_SURICATA_IMAGE` is set; the bundle build runs `suricata -T` against the rule set. ET Open is imported as `sid:<n>` rules. Severity comes from `priority`, then ET's `signature_severity`, then the `classtype`; `ET INFO`, `ET POLICY` and `ET HUNTING` rules are imported as `info`.
+Suricata runs over the session pcap when `SANDBOX_SURICATA_IMAGE` is set; the bundle build runs `suricata -T` against the rule set.
+
+The session pcap carries HTTPS as ciphertext, so on its own Suricata only sees TLS metadata (SNI, certificates, JA3) for HTTPS sites, and HTTP rules (URI, header and body matches) never fire on them. To close that gap, the analysis also rebuilds every HTTPS request in the HAR, which the browser already decrypted, as plaintext HTTP/1.1 in a second pcap (`sandbox/analysis/har_pcap.py`), and Suricata reads both in one run. In those rebuilt flows:
+
+- the client is `10.250.0.2` and the server port is 80, so `$HOME_NET`, `$EXTERNAL_NET` and `$HTTP_PORTS` rules match as usual;
+- the server is the real IPv4 address from the HAR, or a stable address in `198.18.0.0/15` when the HAR has none (IPv6 or missing);
+- HTTP/2 is written as HTTP/1.1, bodies are the decoded bodies from the HAR (so `Content-Encoding` is dropped and `Content-Length` is the real length), and bodies the HAR truncated are empty;
+- only HTTPS requests that got a response are written; plain HTTP is already readable in the real pcap.
+
+Alerts from the rebuilt flows are marked `decrypted_https` with the request URL in the report, and score like any other alert. Rules about TCP or TLS behaviour (flow sizes, handshakes, JA3) still only make sense on the real pcap. Set `SANDBOX_SURICATA_DECRYPTED_HTTPS=false` to scan the real pcap only. Re-analysis (ANA-13) rebuilds the plaintext pcap from the stored HAR, so older analyses benefit too.
+
+This was chosen over mitmproxy, which would change the TLS fingerprint the site sees (some phishing kits cloak on JA3/JA4), and over a TLS key log, which Suricata cannot use to decrypt. ET Open is imported as `sid:<n>` rules. Severity comes from `priority`, then ET's `signature_severity`, then the `classtype`; `ET INFO`, `ET POLICY` and `ET HUNTING` rules are imported as `info`.
 
 Each alert scores the `suricata:alert` weight (default 20) × its eve severity: 1 → 100%, 2 → 50%, 3 → 15%. Informational signatures (`ET INFO`, `ET POLICY`, `ET HUNTING`, `GPL INFO`, Suricata's own `SURICATA …` decoder events) score 0 but stay visible. The total is capped at 45 unless a cap is configured. Local Suricata rules use the usual syntax, one per line, with a unique `sid`.
