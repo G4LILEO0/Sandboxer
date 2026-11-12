@@ -1828,6 +1828,124 @@ def test_runtime_dynamic_execution_ignores_innerhtml_markup():
     assert "runtime_dynamic_execution" not in _hits(_cap("https://x.example/", jsapi=_MARKUP_EXEC))
 
 
+# --- the sandbox's own evaluate() calls are not page code (live round 1) --------------
+
+_PW_WRAPPER = (
+    "(() => {\n      globalThis.__pwInitScripts = globalThis.__pwInitScripts || {};\n"
+    '      const hasInitScript = globalThis.__pwInitScripts["3cde9adf29a22048e823b4a13cbd417f"];'
+    "\n" + "      Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});\n" * 6
+)
+_PW_WS_DISPATCH = (
+    'globalThis.__pwWebSocketDispatch({"id":"' + "5" * 64 + '","type":"sendToPage",'
+    '"data":{"data":"430[null,{\\"serverVersion\\":3}]' + "x" * 400 + '"}})'
+)
+_PACKED = "".join(chr(33 + (i * 7919) % 90) for i in range(3000))  # high-entropy string
+
+
+def _harness_exec(*page_samples):
+    from sandbox.runner.page_scripts import COLLECT_SCRIPT
+
+    samples = [_PW_WRAPPER, COLLECT_SCRIPT.strip(), _PW_WS_DISPATCH, *page_samples]
+    return {
+        "exec": {
+            "count": 18,
+            "max_len": 3000 if page_samples else 2074,
+            "max_entropy": 6.4 if page_samples else 5.15,
+            "code_count": 16 + len(page_samples),
+            "code_max_len": 3000 if page_samples else 2074,
+            "code_max_entropy": 6.4 if page_samples else 5.15,
+            "code_samples": samples,
+        }
+    }
+
+
+def test_runtime_dynamic_execution_ignores_runner_and_playwright_evals():
+    """Live round 1: example.com scored 25 because frame.evaluate(COLLECT_SCRIPT) and
+    Playwright's init-script wrappers go through the page's hooked eval."""
+    url = "https://example.com/"
+    assert "runtime_dynamic_execution" not in _hits(_cap(url, jsapi=_harness_exec()))
+    js = build_facts(_cap(url, jsapi=_harness_exec()))["js"]
+    assert (js["code_exec_count"], js["code_exec_max_len"]) == (13, 0)
+    # A page that really evals a large packed string next to the harness noise still hits.
+    packed = _cap(url, jsapi=_harness_exec(_PACKED, _PACKED[::-1]))
+    assert "runtime_dynamic_execution" in _hits(packed)
+
+
+def test_runner_drops_its_own_evaluate_from_exec_aggregates(tmp_path):
+    from types import SimpleNamespace
+
+    from sandbox.runner.capture import Capture
+    from sandbox.runner.page_scripts import COLLECT_SCRIPT
+
+    (tmp_path / "scripts").mkdir()
+    stub = SimpleNamespace(jsapi={}, dynamic_scripts=0, out=tmp_path)
+    for code in (COLLECT_SCRIPT.strip(), _PW_WRAPPER, _PW_WS_DISPATCH):
+        Capture._on_jsapi(stub, "js_exec", {"api": "eval", "len": len(code), "code": code})
+    assert stub.jsapi == {} and not list((tmp_path / "scripts").iterdir())
+    Capture._on_jsapi(stub, "js_exec", {"api": "eval", "len": 3000, "code": _PACKED})
+    assert stub.jsapi["exec"]["code_count"] == 1 and stub.dynamic_scripts == 1
+
+
+# --- tag-manager eval is not packed code (live round 2) ------------------------------
+
+_TRACKING_PARAMS = (
+    "client_id fbclid twclid msclkid unapproved moderation-hash wps_preview wvideo "
+    "hss_channel scrlybrkr li_fat_id redirect lang_geo ck_subscriber_id _hsenc _hsmi "
+    "__hssc __hstc __hsfp hsa_acc hsa_cam hsa_grp hsa_ad hsCtaTracking wchannelid "
+    "_thumbnail_id preview_nonce preview_id w3tc_note edd_action download_key price_id "
+    "download_id mc_cid mc_eid"
+).split()
+# Shape of a GTM-compiled custom-JS variable that strips tracking parameters.
+_GTM_VARIABLE = (
+    '(function(){var the_hostname=google_tag_manager["rm"]["9334995"](9);'
+    'var the_path=google_tag_manager["rm"]["9334995"](10);'
+    'var the_query=google_tag_manager["rm"]["9334995"](11);'
+    "var params_to_remove=[" + ",".join(f'"{p}"' for p in _TRACKING_PARAMS) + "];"
+    "var query_params=new URLSearchParams(the_query);params_to_remove.forEach("
+    'function(value,key){query_params["delete"](value)});var patterns_to_redact=['
+    'new RegExp(/\\S+(@|%40)\\S+\\.\\S+/,"gi")];query_params.forEach(function(value,key)'
+    "{var len=patterns_to_redact.length;for(i=0;i<len;i++)if(value.match("
+    "patterns_to_redact[i]))query_params.set(key,value.replace(patterns_to_redact[i],"
+    '"REDACTED"))});var cleaned_path=the_path;var lastChar=cleaned_path.substr(-1);'
+    'if(lastChar!="/")cleaned_path=cleaned_path+"/";if(query_params.toString().length)'
+    'cleaned_path=cleaned_path+"?"+query_params.toString();return cleaned_path})();'
+)
+
+
+def _gtm_exec(*samples):
+    return {
+        "exec": {
+            "count": 401,
+            "max_len": max(len(s) for s in samples),
+            "max_entropy": 5.4,
+            "code_count": 401,
+            "code_max_len": max(len(s) for s in samples),
+            "code_max_entropy": 5.4,
+            "code_samples": [_PW_WRAPPER, *samples],
+        }
+    }
+
+
+def test_runtime_dynamic_execution_ignores_tag_manager_variables():
+    """Live round 2: wordpress.org scored 35 on GTM's own eval of tag code."""
+    from sandbox.analysis.facts import _entropy
+
+    assert len(_GTM_VARIABLE) > 1024 and _entropy(_GTM_VARIABLE) > 4.5  # would have hit
+    url = "https://wordpress.example/news/"
+    assert "runtime_dynamic_execution" not in _hits(_cap(url, jsapi=_gtm_exec(_GTM_VARIABLE)))
+
+
+def test_tag_manager_marker_does_not_hide_packed_code():
+    import base64
+
+    blob = base64.b64encode(_PACKED.encode()).decode()
+    wrapped = _GTM_VARIABLE[:-4] + f';eval(atob("{blob}"))}})();'
+    url = "https://kit.example/"
+    assert "runtime_dynamic_execution" in _hits(_cap(url, jsapi=_gtm_exec(_GTM_VARIABLE, wrapped)))
+    plain = _cap(url, jsapi=_gtm_exec(_GTM_VARIABLE, _PACKED, _PACKED[::-1]))
+    assert "runtime_dynamic_execution" in _hits(plain)
+
+
 def test_html_smuggling_binary_blob_fires_and_csv_export_is_quiet():
     jsapi = {"blobs": [{"ctor": "Blob", "size": 50000, "mime": "application/octet-stream"}]}
     data = _cap(
@@ -2351,3 +2469,350 @@ def test_password_page_posting_to_form_collector_fires_and_contact_form_is_quiet
     contact_form = {"action": "", "fields": [{"type": "email"}, {"type": "textarea"}]}
     contact = _cap(url, [_page(url, "Contact us", forms=[contact_form])], har=har)
     assert "credential_post_to_form_collector" not in _hits(contact)
+
+
+# --- fake verification with Win+X / Run paste steps, no clipboard yet (LR1-02) -------
+
+# Sanitised from a live EtherHiding kit on a compromised WordPress site: the overlay is
+# appended after ~220 KB of page and its steps stay hidden until the checkbox click.
+_WINX_OVERLAY = (
+    '<div class="main-content" style="display:none"><p>site.example Verifying...</p>'
+    "<p>Human Verification</p><p>Authorize your browser now</p>"
+    "<b>PRESS AND HOLD WINDOWS KEY, THEN PRESS X</b><ol><li>In the menu that opens, select "
+    "Terminal or press I</li><li>In the terminal verification, press Ctrl + V</li>"
+    "<li>Press Enter</li></ol><span>Ray ID: 0000000000000000</span></div>"
+)
+_FILLER = "<p>" + "Consultoria especializada para maximizar resultados. " * 400 + "</p>"
+
+
+def _winx_cap(url, html, text="Consultoria Contacto"):
+    page = _page(url, "STRATEX - Consultoria", text=text)
+    return _cap(url, [page], dom_html=[{"url": url, "html": html}])
+
+
+def test_fake_captcha_paste_steps_fire_when_hidden_after_a_long_page():
+    url = "https://site.example/"
+    data = _winx_cap(url, f"<html><body>{_FILLER}{_WINX_OVERLAY}</body></html>")
+    assert "fake_captcha_paste_instructions" in _hits(data)
+    assert build_facts(data)["clipboard"]["writes"] == 0  # no click, no clipboard write
+
+
+def test_real_challenge_and_helpdesk_paste_steps_are_not_fake_captcha():
+    url = "https://site.example/"
+    challenge = (
+        "<html><body><h1>Verify you are human by completing the action below.</h1>"
+        "<p>site.example needs to review the security of your connection.</p>"
+        "<p>Ray ID: 0000000000000000</p></body></html>"
+    )
+    helpdesk = (
+        "<html><body><h1>Install the VPN client</h1><p>Press Win + X, open Terminal, then "
+        "paste the command below with Ctrl + V.</p></body></html>"
+    )
+    # Both phrasings on one long page, but nowhere near each other.
+    far_apart = (
+        "<html><body><p>Enter the verification code we emailed you.</p>"
+        f"{_FILLER}{_FILLER}<p>Press Win + X, open Terminal and paste with Ctrl + V.</p>"
+        "</body></html>"
+    )
+    for html in (challenge, helpdesk, far_apart):
+        assert "fake_captcha_paste_instructions" not in _hits(_winx_cap(url, html))
+
+
+# --- free-hosting tenant named after a brand, asking for credentials (LR1-03) --------
+
+# A site-builder form has no password type: the kit labels a text field "Passwort".
+_BUILDER_LOGIN = {
+    "action": "",
+    "fields": [{"type": "email", "name": "field_1"}, {"type": "text", "name": "field_0"}],
+}
+_BUILDER_TEXT = "E-Mail-Adresse Passwort Land Login Melden Sie sich bei Ihrem Konto an"
+
+
+def test_brand_named_free_hosting_login_fires():
+    url = "http://microsoftaccount-kit.flazio.online/"
+    page = _page(url, "home", text=_BUILDER_TEXT, forms=[_BUILDER_LOGIN])
+    assert "brand_named_free_hosting_login" in _hits(_cap(url, [page]))
+    wallet = "https://ledger-live-kit.pages.dev/"
+    page = _page(wallet, "Sign in", forms=[PASSWORD_FORM])
+    assert "brand_named_free_hosting_login" in _hits(_cap(wallet, [page]))
+
+
+def test_brand_named_tenant_without_prompt_or_brand_is_quiet():
+    blog = "https://microsoftoutlook-tips.flazio.online/"
+    news = {"action": "", "fields": [{"type": "email"}]}
+    page = _page(blog, "Outlook tips", text="Subscribe to our newsletter", forms=[news])
+    assert "brand_named_free_hosting_login" not in _hits(_cap(blog, [page]))
+    # "chase bank" must start a label token: purchasebank is not Chase.
+    shop = "https://purchasebank-demo.vercel.app/"
+    page = _page(shop, "Sign in", forms=[PASSWORD_FORM])
+    assert "brand_named_free_hosting_login" not in _hits(_cap(shop, [page]))
+    vouched = "https://ledger-live-kit.pages.dev/"
+    page = _page(vouched, "Sign in", forms=[PASSWORD_FORM])
+    data = _cap(vouched, [page], allowlisted={"ledger-live-kit.pages.dev"})
+    assert "brand_named_free_hosting_login" not in _hits(data)
+
+
+# --- hosting provider's phishing / malware block page (LR1-05) -----------------------
+
+
+def _cf_page(url, title, text, action_path):
+    form = {"action": url.rstrip("/") + action_path, "fields": [{"type": "hidden"}]}
+    return _page(url, title, text=text, forms=[form])
+
+
+def test_cloudflare_abuse_interstitial_fires():
+    url = "https://kit.example-host.workers.dev/"
+    for kind in ("Phishing", "Malware"):
+        page = _cf_page(
+            url,
+            f"Suspected {kind} | Cloudflare",
+            f"Warning Suspected {kind} This website has been reported. Ignore & Proceed",
+            "/cdn-cgi/phish-bypass",
+        )
+        assert "hosting_abuse_interstitial" in _hits(_cap(url, [page]))
+
+
+def test_cloudflare_challenge_and_article_are_not_abuse_interstitial():
+    url = "https://shop.example/"
+    challenge = _cf_page(
+        url, "Just a moment...", "Verify you are human", "/cdn-cgi/challenge-platform/h/g"
+    )
+    assert "hosting_abuse_interstitial" not in _hits(_cap(url, [challenge]))
+    article = _page(
+        "https://news.example/cf", "What a Suspected Phishing warning from Cloudflare means"
+    )
+    assert "hosting_abuse_interstitial" not in _hits(_cap("https://news.example/cf", [article]))
+
+
+# --- webmail kit borrowing the victim's mail-domain favicon (LR1-04) -----------------
+
+
+def _favicon(domain):
+    return _req(f"https://www.google.com/s2/favicons?domain={domain}")
+
+
+def test_dynamic_brand_favicon_login_fires():
+    url = "https://webmail-kit.example-host.vercel.app/"
+    page = _page(
+        url,
+        "Webmail Sign-in",
+        text="I am not a robot click on the checkbox to verify if you're human.",
+        forms=[PASSWORD_FORM],
+    )
+    har = [_favicon("mail-provider.example"), _req("https://api.ipify.org/?format=json")]
+    data = _cap(url, [page], har=har)
+    assert "dynamic_brand_favicon_login" in _hits(data)
+    assert build_facts(data)["brand"]["favicon_lookups"] == ["mail-provider.example"]
+
+
+def test_favicon_grid_and_plain_login_are_not_dynamic_brand():
+    url = "https://links.example-host.vercel.app/"
+    page = _page(url, "Sign in", forms=[PASSWORD_FORM])
+    grid = [_favicon(f"site{i}.example") for i in range(6)]  # a bookmarks dashboard
+    assert "dynamic_brand_favicon_login" not in _hits(_cap(url, [page], har=grid))
+    # An established domain with no other trait, showing a partner's icon.
+    corp = "https://portal.example-corp.com/"
+    page = _page(corp, "Sign in", forms=[PASSWORD_FORM])
+    har = [_favicon("partner.example")]
+    assert "dynamic_brand_favicon_login" not in _hits(_cap(corp, [page], har=har))
+
+
+# --- browser-based local port scanning -----------------------------------------------
+
+# The remote-access ports ThreatMetrix's profiler was seen probing over WebSockets.
+_TMX_PORTS = [3389, 5900, 5901, 5902, 5903, 5931, 5938, 5939, 5944, 5950, 6039, 6040, 7070]
+
+
+def _local_scan(ports, script, host="127.0.0.1", scheme="wss"):
+    blocked, requests = [], []
+    for port in ports:
+        url = f"{scheme}://{host}:{port}/"
+        reason = f"{host} is a loopback address"
+        blocked.append({"url": url, "reason": reason, "websocket": scheme.startswith("ws")})
+        requests.append({"url": url, "type": "WebSocket", "initiator": {"script_url": script}})
+    return blocked, requests
+
+
+def test_local_port_scan_fires_on_remote_access_probe():
+    url = "https://support-desk.example/"
+    blocked, requests = _local_scan(_TMX_PORTS, "https://support-desk.example/js/p.js")
+    data = _cap(url, blocked=blocked, requests=requests)
+    assert "local_port_scan" in _hits(data)
+    probe = build_facts(data)["network"]["local_probe"]
+    named = {"3389/rdp", "5900/vnc", "5938/teamviewer", "7070/anydesk"}
+    assert named <= set(probe["remote_access"])
+    assert probe["channels"] == ["websocket"]
+    assert probe["scripts"] == ["https://support-desk.example/js/p.js"]
+    # Two remote-access ports are enough (SSH + RDP over fetch/img to localhost by name).
+    pair = [
+        {"url": "http://localhost:22/", "reason": "127.0.0.1 is a loopback address"},
+        {"url": "http://localhost:3389/x.png", "reason": "127.0.0.1 is a loopback address"},
+    ]
+    assert "local_port_scan" in _hits(_cap(url, blocked=pair))
+    # Many ordinary ports, and a LAN sweep of one port across private hosts.
+    many, _ = _local_scan([3000, 4200, 5000, 8000, 8080, 8443, 9000], None, scheme="http")
+    assert "local_port_scan" in _hits(_cap(url, blocked=many))
+    sweep = [
+        {"url": f"http://192.168.1.{i}/", "reason": f"192.168.1.{i} is a private address"}
+        for i in range(1, 13)
+    ]
+    assert "local_port_scan" in _hits(_cap(url, blocked=sweep))
+    # IPv6 loopback and 0.0.0.0 (which reaches local services on Linux and macOS).
+    v6 = [{"url": f"ws://[::1]:{p}/", "reason": "::1 is a loopback address"} for p in (22, 5900)]
+    zero = [
+        {"url": f"http://0.0.0.0:{p}/", "reason": "0.0.0.0 is a reserved address"}
+        for p in (3389, 5938)
+    ]
+    assert "local_port_scan" in _hits(_cap(url, blocked=v6))
+    assert "local_port_scan" in _hits(_cap(url, blocked=zero))
+
+
+def test_local_port_scan_quiet_on_fraud_vendor_dev_and_apps():
+    url = "https://shop.example/checkout"
+    # ThreatMetrix from its own host, and from a first-party CNAME with its /fp/ tag path.
+    for script in (
+        "https://h.online-metrix.net/fp/tags.js?org_id=abc&session_id=123",
+        "https://src.shop.example/fp/check.js?org_id=abc&session_id=123",
+    ):
+        blocked, requests = _local_scan(_TMX_PORTS, script)
+        data = _cap(url, blocked=blocked, requests=requests)
+        assert "local_port_scan" not in _hits(data)
+        assert build_facts(data)["network"]["local_probe"]["fraud_vendor"] == "threatmetrix"
+    # Blocked WebSockets carry no initiator: the profiler loaded on the page explains them.
+    blocked, _ = _local_scan(_TMX_PORTS, None)
+    tags = [{"url": "https://h.online-metrix.net/fp/tags.js?org_id=abc&session_id=1"}]
+    assert "local_port_scan" not in _hits(_cap(url, blocked=blocked, requests=tags))
+    # Evasion: loading the tag does not excuse probes unlike the profiler's own scan
+    # (other ports, or fetch/image/WebRTC channels, or LAN hosts).
+    ssh, _ = _local_scan([22, 445, 3389, 5900], None)
+    assert "local_port_scan" in _hits(_cap(url, blocked=ssh, requests=tags))
+    over_http, _ = _local_scan(_TMX_PORTS, None, scheme="http")
+    assert "local_port_scan" in _hits(_cap(url, blocked=over_http, requests=tags))
+    rtc = [{"urls": ["turn:127.0.0.1:3389", "turn:127.0.0.1:5900"]}]
+    assert "local_port_scan" in _hits(_cap(url, webrtc=rtc, requests=tags))
+    lan, _ = _local_scan(_TMX_PORTS, None, host="192.168.0.10")
+    assert "local_port_scan" in _hits(_cap(url, blocked=lan, requests=tags))
+    # ...but not when the initiating script is known and is someone else's.
+    blocked, requests = _local_scan(_TMX_PORTS, "https://shop.example/scan.js")
+    assert "local_port_scan" in _hits(_cap(url, blocked=blocked, requests=requests + tags))
+    # The same scan by an unknown script on an allowlisted site.
+    blocked, requests = _local_scan(_TMX_PORTS, "https://shop.example/a.js")
+    assert "local_port_scan" not in _hits(
+        _cap(url, blocked=blocked, requests=requests, allowlisted={"shop.example"})
+    )
+    # A dev build left in production: webpack-dev-server and livereload on localhost.
+    loopback = "127.0.0.1 is a loopback address"
+    dev = [
+        {"url": "ws://localhost:8080/sockjs-node", "reason": loopback, "websocket": True},
+        {"url": "http://localhost:35729/livereload.js", "reason": loopback},
+    ]
+    assert "local_port_scan" not in _hits(_cap(url, blocked=dev))
+    # Discord's site looking for the desktop client's RPC server on 6463-6472.
+    discord, _ = _local_scan(range(6463, 6473), None, scheme="ws")
+    assert "local_port_scan" not in _hits(_cap("https://discord.example/invite/x", blocked=discord))
+    # One SSH port, cloud-metadata SSRF, and blocked non-http schemes are not a scan.
+    ssh = [{"url": "http://127.0.0.1:22/", "reason": "127.0.0.1 is a loopback address"}]
+    meta = [
+        {"url": f"http://169.254.169.254:{p}/", "reason": "a link-local address"}
+        for p in (80, 22, 3389, 5900, 8080, 8443)
+    ]
+    schemes = [
+        {"url": f"ms-rd://127.0.0.1:{p}", "reason": "scheme 'ms-rd' is not allowed"}
+        for p in _TMX_PORTS
+    ]
+    for blocked in (ssh, meta, schemes):
+        assert "local_port_scan" not in _hits(_cap(url, blocked=blocked))
+    # The generic internal-probe rule still records the blocked attempts.
+    assert "internal_network_probe" in _hits(_cap(url, blocked=ssh))
+
+
+def test_local_port_scan_over_webrtc_turn():
+    """TURN/STUN servers never reach the route filter; the page hook records them."""
+    url = "https://scan.example/"
+    rtc = [
+        {
+            "urls": [
+                "turn:127.0.0.1:3389?transport=tcp",
+                "turn:127.0.0.1:5900?transport=tcp",
+                "stun:stun.l.google.com:19302",
+            ],
+            "script_url": "https://scan.example/rtc.js",
+        }
+    ]
+    data = _cap(url, webrtc=rtc)
+    assert "local_port_scan" in _hits(data)
+    probe = build_facts(data)["network"]["local_probe"]
+    assert probe["ports"] == [3389, 5900] and probe["channels"] == ["webrtc"]
+    # Ordinary calls: public STUN/TURN servers only.
+    public = [{"urls": ["stun:stun.l.google.com:19302", "turns:turn.example.net:443"]}]
+    assert "local_port_scan" not in _hits(_cap(url, webrtc=public))
+    # LAN TURN servers on the default port count by host.
+    lan = [{"urls": [f"turn:10.0.0.{i}" for i in range(1, 11)]}]
+    assert build_facts(_cap(url, webrtc=lan))["network"]["local_probe"]["ports"] == [3478]
+    assert "local_port_scan" in _hits(_cap(url, webrtc=lan))
+
+
+# --- clipboard writes the command patterns miss ---------------------------------------
+
+# Inert stand-in for an obfuscated payload: alias lookup plus base64 that the command
+# patterns do not know; it decodes to "sandboxer-test".
+_ODD_PAYLOAD = (
+    "&(gal ?e?)([Text.Encoding]::UTF8.GetString("
+    "[Convert]::FromBase64String('c2FuZGJveGVyLXRlc3Q=')))"
+)
+_RUN_STEPS = "Verify you are human: press Win + R, paste with Ctrl + V and press Enter."
+_CLIPBOARD_RULES = {
+    "clickfix_clipboard_command",
+    "clipboard_command_write",
+    "fake_captcha_clipboard_command",
+    "filefix_command_disguised_as_path",
+    "clipboard_command_tampering",
+    "clipboard_write_with_paste_lure",
+    "clipboard_no_gesture_write",
+    "clipboard_page_write",
+}
+
+
+def _clip_hits(url, text, writes, allowlisted=()):
+    page = _page(url, "Verification", text=text)
+    data = _cap(url, [page], clipboard=writes, allowlisted=allowlisted)
+    return _hits(data) & _CLIPBOARD_RULES
+
+
+def test_unrecognised_payload_with_run_steps_is_the_paste_lure():
+    url = "https://verify.example-host.com/"
+    assert (
+        build_facts(_cap(url, clipboard=[_cwrite(_ODD_PAYLOAD)]))["clipboard"]["command_like"] == 0
+    )
+    assert _clip_hits(url, _RUN_STEPS, [_cwrite(_ODD_PAYLOAD)]) == {
+        "clipboard_write_with_paste_lure"
+    }
+
+
+def test_write_without_gesture_is_the_no_gesture_rule():
+    url = "https://verify.example-host.com/"
+    hits = _clip_hits(url, "Loading...", [_cwrite("ref-7Q2X-session-token", gesture=False)])
+    assert hits == {"clipboard_no_gesture_write"}
+
+
+def test_copy_buttons_only_get_the_low_rule():
+    docs = "https://docs.example.org/install"
+    shop = "https://shop.example/deals"
+    cases = [
+        (docs, "Install the package. Copy", "pip install sandboxer-docs"),
+        (shop, "Use code SAVE20NOW at checkout. Copy code", "SAVE20NOW"),
+        (shop, "Share this product", "https://shop.example/p/123?ref=share"),
+        # A help article that copies a short path for the Run dialog.
+        (docs, "Press Win + R, paste %temp% with Ctrl + V and press Enter.", "%temp%"),
+    ]
+    for url, text, copied in cases:
+        assert _clip_hits(url, text, [_cwrite(copied)]) == {"clipboard_page_write"}, copied
+    # An allowlisted site's long copy next to Run steps is not the high rule either.
+    hits = _clip_hits(docs, _RUN_STEPS, [_cwrite(_ODD_PAYLOAD)], allowlisted={"example.org"})
+    assert hits == {"clipboard_page_write"}
+
+
+def test_analyst_ctrl_c_is_not_a_page_write():
+    url = "https://docs.example.org/install"
+    analyst = {"api": None, "text": "copied by the analyst", "trusted": True}
+    assert _clip_hits(url, "Install", [analyst]) == set()

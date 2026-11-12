@@ -112,6 +112,39 @@ async def test_vt_url_submits_and_polls_when_unknown(client):
     assert response.json()["data"]["type"] == "url"
 
 
+async def test_vt_url_submit_rejection_keeps_vendor_message(client):
+    url = "https://cg0snh9sa48osyxhf/?876164590083787650943"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "code": "InvalidArgumentError",
+                        "message": "Unable to canonicalize url",
+                    }
+                },
+            )
+        return httpx.Response(404, json={"error": {"code": "NotFoundError"}})
+
+    _use(client, handler)
+    response = await client.get(f"/v1/intel/vt/url/{quote(url, safe='')}")
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "VirusTotal submit HTTP 400",
+        "detail": "Unable to canonicalize url",
+    }
+
+
+async def test_vt_url_lookup_keeps_every_question_mark(client):
+    url = "https://google.com.kw/share.google?q=cg0sNh9Sa48oSYxhf?876164590083787650943"
+    calls = _use(client, lambda r: httpx.Response(200, json={"data": {"type": "url"}}))
+    response = await client.get(f"/v1/intel/vt/url/{quote(url, safe='')}")
+    assert response.status_code == 200
+    assert calls[0].url.path == f"/api/v3/urls/{vt_url_id(url)}"
+
+
 async def test_abuseipdb_lookup(client):
     calls = _use(client, lambda r: httpx.Response(200, json={"data": {"abuseConfidenceScore": 5}}))
     response = await client.get("/v1/intel/abuseipdb/93.184.216.34")
@@ -160,3 +193,144 @@ async def test_redirect_chain_detects_loop(client):
         await client.get("/v1/intel/redirect-chain", params={"url": "https://public.example/"})
     ).json()["hops"]
     assert hops[-1]["note"] == "redirect loop detected"
+
+
+async def test_redirect_chain_follows_meta_refresh_and_reports_title(client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/landing":
+            page = (
+                "<html><head><title>Loading&hellip;</title>"
+                "<META HTTP-EQUIV='Refresh' CONTENT='0; URL=https://public.example/final'>"
+            )
+            return httpx.Response(200, headers={"content-type": "text/html"}, text=page)
+        return httpx.Response(
+            200, headers={"content-type": "text/html; charset=utf-8"}, text="<title>Twitch</title>"
+        )
+
+    calls = _use(client, handler)
+    hops = (
+        await client.get(
+            "/v1/intel/redirect-chain", params={"url": "https://public.example/landing"}
+        )
+    ).json()["hops"]
+    assert [h["url"] for h in hops] == [
+        "https://public.example/landing",
+        "https://public.example/final",
+    ]
+    assert hops[0]["via"] == "meta-refresh"
+    assert hops[0]["location"] == "https://public.example/final"
+    assert hops[0]["title"] == "Loading…"
+    assert hops[1]["title"] == "Twitch"
+    assert hops[1]["location"] is None
+    assert calls[0].headers["accept-encoding"] == "identity"
+
+
+async def test_redirect_chain_follows_refresh_header(client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/":
+            return httpx.Response(200, headers={"refresh": "3;url=/next"}, text="")
+        return httpx.Response(200, headers={"content-type": "application/pdf"}, content=b"%PDF")
+
+    _use(client, handler)
+    hops = (
+        await client.get("/v1/intel/redirect-chain", params={"url": "https://public.example/"})
+    ).json()["hops"]
+    assert [h["url"] for h in hops] == ["https://public.example/", "https://public.example/next"]
+    assert hops[0]["via"] == "refresh-header"
+
+
+async def test_redirect_chain_flags_script_redirect_without_following(client):
+    page = "<script>window.location.href = atob('aHR0cHM6Ly9ldmlsLmV4YW1wbGUv');</script>"
+    calls = _use(
+        client, lambda r: httpx.Response(200, headers={"content-type": "text/html"}, text=page)
+    )
+    hops = (
+        await client.get("/v1/intel/redirect-chain", params={"url": "https://public.example/"})
+    ).json()["hops"]
+    assert len(hops) == 1 and len(calls) == 1
+    assert hops[0]["script_redirect"] is True
+    assert hops[0]["location"] is None
+
+
+async def test_redirect_chain_reads_only_the_start_of_a_page(client):
+    from sandbox.api.routes import intel
+
+    # The refresh tag sits past the cap, so it must not be seen.
+    body = (
+        "<html>"
+        + " " * (intel.BODY_PEEK_BYTES + 10)
+        + '<meta http-equiv="refresh" content="0;url=/x">'
+    )
+    _use(client, lambda r: httpx.Response(200, headers={"content-type": "text/html"}, text=body))
+    hops = (
+        await client.get("/v1/intel/redirect-chain", params={"url": "https://public.example/"})
+    ).json()["hops"]
+    assert len(hops) == 1
+    assert hops[0]["location"] is None
+
+
+@pytest.mark.parametrize(
+    ("value", "target"),
+    [
+        ("0; url=https://a.example/", "https://a.example/"),
+        ("0;URL='/next?a=1&amp;b=2'", "/next?a=1&b=2"),
+        ("https://a.example/", "https://a.example/"),
+        ("5", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_refresh_target(value, target):
+    from sandbox.api.routes.intel import refresh_target
+
+    assert refresh_target(value) == target
+
+
+def test_script_redirect_hint_ignores_lookalike_words():
+    from sandbox.api.routes.intel import inspect_page
+
+    assert "script_redirect" not in inspect_page(
+        "<p>geolocation = enabled; if (a == location) {}</p>"
+    )
+    assert inspect_page("<script>location.replace('/x')</script>")["script_redirect"] is True
+
+
+async def test_vt_relationship_pivot(client):
+    calls = _use(client, lambda r: httpx.Response(200, json={"data": [], "meta": {"count": 0}}))
+    response = await client.get("/v1/intel/vt-relations/domain/resolutions/example.com?limit=5")
+    assert response.status_code == 200
+    assert str(calls[0].url) == (
+        "https://www.virustotal.com/api/v3/domains/example.com/resolutions?limit=5"
+    )
+    url = "https://public.example/a?b=1"
+    await client.get(f"/v1/intel/vt-relations/url/redirects_to/{quote(url, safe='')}")
+    assert calls[1].url.path == f"/api/v3/urls/{vt_url_id(url)}/redirects_to"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/intel/vt-relations/domain/comments/example.com",  # not offered
+        "/v1/intel/vt-relations/ip/resolutions/10.0.0.1",  # private address
+        "/v1/intel/vt-relations/hash/resolutions/" + "a" * 64,  # not a file relationship
+    ],
+)
+async def test_vt_relationship_pivot_refuses(client, path):
+    calls = _use(client, lambda r: httpx.Response(200, json={}))
+    response = await client.get(path)
+    assert response.status_code == 422
+    assert calls == []
+
+
+async def test_outbound_requests_look_like_a_browser(client):
+    from sandbox.core.useragent import BROWSER_USER_AGENT
+    from sandbox.runner.profiles import PROFILES
+
+    # Same user agent as the default detonation profile, so the walk and a detonation
+    # see the same thing.
+    assert PROFILES["chrome-windows"].user_agent == BROWSER_USER_AGENT
+    calls = _use(client, lambda r: httpx.Response(200, headers={"content-type": "text/html"}))
+    await client.get("/v1/intel/redirect-chain", params={"url": "https://public.example/"})
+    assert calls[0].headers["user-agent"] == BROWSER_USER_AGENT
+    assert calls[0].headers["accept"].startswith("text/html")
+    assert "accept-language" in calls[0].headers

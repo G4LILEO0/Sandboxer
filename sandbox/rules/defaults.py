@@ -37,6 +37,18 @@ _CLICKFIX_LIKE = {
         },
     ]
 }
+# A page write the command patterns did not recognise, on a page that tells the visitor
+# to paste into Run or a terminal: an obfuscated ClickFix payload. A short write (a
+# %temp% path a help article copies) or an allowlisted site is left to the low rule.
+_PASTE_LURE_WRITE = {
+    "all": [
+        {"fact": "clipboard.writes", "op": "gt", "value": 0},
+        {"fact": "clipboard.command_like", "op": "eq", "value": 0},
+        {"fact": "lure.run_dialog_instructions", "op": "gt", "value": 0},
+        {"fact": "clipboard.max_write_len", "op": "gte", "value": 40},
+        {"not": {"fact": "final.allowlisted", "op": "eq", "value": True}},
+    ]
+}
 
 BEHAVIOUR_RULES = [
     _rule(
@@ -114,6 +126,53 @@ BEHAVIOUR_RULES = [
             ]
         },
         ["clipboard.commands"],
+    ),
+    # --- clipboard writes the command patterns miss -----------------------------------
+    _rule(
+        "clipboard_write_with_paste_lure",
+        "high",
+        ["clickfix", "suspicious-clipboard"],
+        ["T1204.004"],
+        "The page wrote 40+ characters to the clipboard that match no known command "
+        "pattern, and tells the visitor to paste into Run or a terminal: an obfuscated or "
+        "unusual ClickFix payload.",
+        _PASTE_LURE_WRITE,
+        ["clipboard.write_samples", "lure.run_dialog_pages", "final.url"],
+    ),
+    _rule(
+        "clipboard_no_gesture_write",
+        "medium",
+        ["suspicious-clipboard"],
+        ["T1204.004", "T1115"],
+        "The page wrote non-command text to the clipboard with no user gesture behind it. "
+        "Copy buttons, share links and coupon codes copy on a click; a write nobody asked "
+        "for is how a lure pre-loads what it will tell the visitor to paste.",
+        {
+            "all": [
+                {"fact": "clipboard.no_gesture_writes", "op": "gt", "value": 0},
+                {"fact": "clipboard.command_like", "op": "eq", "value": 0},
+            ]
+        },
+        ["clipboard.write_samples", "final.url"],
+    ),
+    _rule(
+        "clipboard_page_write",
+        "low",
+        ["clipboard"],
+        ["T1115"],
+        "The page wrote to the clipboard (informational). Copy buttons, share links and "
+        "coupon codes do this on a click; it is listed so that any write, command or not, "
+        "is visible in the report. Does not fire alongside another clipboard rule.",
+        {
+            "all": [
+                {"fact": "clipboard.writes", "op": "gt", "value": 0},
+                {"fact": "clipboard.command_like", "op": "eq", "value": 0},
+                {"fact": "clipboard.path_disguised", "op": "eq", "value": 0},
+                {"fact": "clipboard.no_gesture_writes", "op": "eq", "value": 0},
+                {"not": _PASTE_LURE_WRITE},
+            ]
+        },
+        ["clipboard.write_samples", "final.url"],
     ),
     _rule(
         "newly_registered_domain",
@@ -206,6 +265,58 @@ BEHAVIOUR_RULES = [
         {"fact": "brand.free_hosting_lure", "op": "eq", "value": True},
         ["brand"],
     ),
+    # --- free-hosting tenant named after a brand, asking for credentials (LR1-03) -----
+    _rule(
+        "brand_named_free_hosting_login",
+        "high",
+        ["phishing", "brand-impersonation", "free-hosting"],
+        ["T1583.006", "T1656", "T1566.002"],
+        "A page on a free hosting or site-builder platform whose tenant name carries a brand "
+        "(microsoftaccount-kit.<builder>, ledger-live-kit.pages.dev) asks for a password, "
+        "sign-in name, card, code or recovery phrase. The page itself need not name the "
+        "brand; builder forms often have no real password field.",
+        {"fact": "brand.hosting_label", "op": "exists", "value": True},
+        ["brand.hosting_label", "final.url"],
+    ),
+    # --- hosting provider's phishing / malware block page (LR1-05) --------------------
+    _rule(
+        "hosting_abuse_interstitial",
+        "high",
+        ["phishing", "malware-download", "takedown"],
+        ["T1583.006"],
+        "The page ended on Cloudflare's 'Suspected Phishing' or 'Suspected Malware' block "
+        "for this hostname: the provider has already confirmed abuse, so the payload is "
+        "not visible but the URL is not clean. Re-run only if the payload is needed.",
+        {"fact": "final.abuse_interstitial", "op": "exists", "value": True},
+        ["final.abuse_interstitial", "final.url"],
+    ),
+    # --- webmail kit borrowing the victim's mail-domain favicon (LR1-04) --------------
+    _rule(
+        "dynamic_brand_favicon_login",
+        "high",
+        ["phishing", "credential-harvest"],
+        ["T1566.002", "T1656"],
+        "A password page fetches another site's favicon through a favicon service (Google "
+        "s2/faviconV2, DuckDuckGo, Clearbit), the trick webmail kits use to wear the "
+        "victim's own mail-provider icon, and it is on free hosting, a domain under 30 "
+        "days old, calls an IP-lookup service or shows verification wording.",
+        {
+            "all": [
+                {"fact": "forms.password_forms", "op": "gt", "value": 0},
+                {"fact": "brand.favicon_lookup_count", "op": "gt", "value": 0},
+                {"fact": "brand.favicon_lookup_count", "op": "lte", "value": 3},
+                {
+                    "any": [
+                        {"fact": "final.free_hosting", "op": "exists", "value": True},
+                        {"fact": "domains.final_age_days", "op": "lt", "value": 30},
+                        {"fact": "network.ip_lookups", "op": "exists", "value": True},
+                        {"fact": "lure.verification_wording", "op": "eq", "value": True},
+                    ]
+                },
+            ]
+        },
+        ["brand.favicon_lookups", "network.ip_lookups", "final.url"],
+    ),
     _rule(
         "government_lookalike_domain",
         "high",
@@ -292,6 +403,43 @@ BEHAVIOUR_RULES = [
         "The page tried to reach internal or cloud-metadata addresses (blocked).",
         {"fact": "network.blocked_internal", "op": "gt", "value": 0},
         ["network.blocked"],
+    ),
+    # --- browser-based local port scanning ------------------------------------------
+    _rule(
+        "local_port_scan",
+        "medium",
+        ["fingerprinting", "local-port-scan"],
+        ["T1046", "T1592.004"],
+        "The page tried several ports on localhost or the LAN (WebSocket, fetch/image or "
+        "WebRTC TURN/STUN), often remote-access ports such as RDP, VNC, SSH or "
+        "TeamViewer: browser-based local port scanning, used to fingerprint visitors or "
+        "spot remote-access tools. Known anti-fraud scripts (ThreatMetrix), a desktop "
+        "app's own helper ports and allowlisted sites are left out.",
+        {
+            "all": [
+                {
+                    "any": [
+                        {
+                            "fact": "network.local_probe.remote_access_count",
+                            "op": "gte",
+                            "value": 2,
+                        },
+                        {"fact": "network.local_probe.port_count", "op": "gte", "value": 5},
+                        {"fact": "network.local_probe.host_count", "op": "gte", "value": 10},
+                    ]
+                },
+                {"not": {"fact": "network.local_probe.fraud_vendor", "op": "exists"}},
+                {"not": {"fact": "network.local_probe.local_app", "op": "exists"}},
+                {"not": {"fact": "final.allowlisted", "op": "eq", "value": True}},
+            ]
+        },
+        [
+            "network.local_probe.remote_access",
+            "network.local_probe.ports",
+            "network.local_probe.hosts",
+            "network.local_probe.channels",
+            "network.local_probe.scripts",
+        ],
     ),
     _rule(
         "hidden_iframe",
@@ -537,6 +685,24 @@ BEHAVIOUR_RULES = [
             ]
         },
         ["lure.fake_captcha_evidence", "clipboard.commands", "final.url"],
+    ),
+    # --- fake verification with Run / terminal paste steps, before any copy (LR1-02) --
+    _rule(
+        "fake_captcha_paste_instructions",
+        "high",
+        ["clickfix"],
+        ["T1204.004", "T1059.001"],
+        "A fake verification page tells the visitor to open Run or a terminal (Win+R, "
+        "Win+X) and paste. Kits write the command only after the checkbox click, so an "
+        "automated run sees the steps but no clipboard write; hidden steps count. A real "
+        "challenge page never asks for either.",
+        {
+            "all": [
+                {"fact": "lure.fake_captcha", "op": "eq", "value": True},
+                {"fact": "lure.run_dialog_instructions", "op": "gt", "value": 0},
+            ]
+        },
+        ["lure.fake_captcha_evidence", "lure.run_dialog_pages", "final.url"],
     ),
     _rule(
         "filefix_command_disguised_as_path",
@@ -1332,6 +1498,9 @@ DEFAULT_WEIGHTS = {
     "indicator": 60,
     "suricata:alert": 20,
     "clickfix_clipboard_command": 80,
+    "clipboard_write_with_paste_lure": 50,
+    "clipboard_no_gesture_write": 25,
+    "clipboard_page_write": 5,
     "form_posts_cross_domain": 50,
     "seed_phrase_harvest": 60,
     "telegram_bot_exfil": 80,
@@ -1382,6 +1551,10 @@ DEFAULT_WEIGHTS = {
     "cloaking_scripted_bounce": 30,
     "trusted_redirector_to_lure": 20,
     "captcha_gated_credential_page": 25,
+    "fake_captcha_paste_instructions": 55,
+    "brand_named_free_hosting_login": 50,
+    "dynamic_brand_favicon_login": 50,
+    "hosting_abuse_interstitial": 40,
 }
 
 # (name, keywords, domains). Keywords match whole words, case-insensitively. A domain
@@ -1581,29 +1754,38 @@ DEFAULT_BRANDS = [
 ]
 
 # FED-1 feeds. Check each feed's current terms and key requirements before enabling in
-# production; abuse.ch services may require a free Auth-Key.
+# production. abuse.ch exports need a free Auth-Key in the URL ({key}), taken from the
+# feed or from SANDBOX_ABUSECH_AUTH_KEY.
+# Default URLs abuse.ch retired (410 Gone); the seed moves feeds still on them to the
+# current default, leaving URLs an engineer changed alone.
+RETIRED_FEED_URLS = {
+    "urlhaus": "https://urlhaus.abuse.ch/downloads/csv_recent/",
+    "threatfox": "https://threatfox.abuse.ch/export/json/recent/",
+    "malwarebazaar": "https://bazaar.abuse.ch/export/csv/recent/",
+}
+_ABUSECH_KEY_NOTE = "Needs an abuse.ch Auth-Key (SANDBOX_ABUSECH_AUTH_KEY or Set key)."
 DEFAULT_FEEDS = [
     {
         "name": "urlhaus",
         "kind": "indicators",
         "parser": "urlhaus_csv",
-        "url": "https://urlhaus.abuse.ch/downloads/csv_recent/",
+        "url": "https://urlhaus-api.abuse.ch/v2/files/exports/{key}/recent.csv",
         "schedule_s": 3600,
         "default_confidence": 80,
         "ttl_days": 30,
         "enabled": True,
-        "licence_note": "abuse.ch URLhaus, CC0. May require an abuse.ch Auth-Key.",
+        "licence_note": f"abuse.ch URLhaus, CC0. {_ABUSECH_KEY_NOTE}",
     },
     {
         "name": "threatfox",
         "kind": "indicators",
         "parser": "threatfox_json",
-        "url": "https://threatfox.abuse.ch/export/json/recent/",
+        "url": "https://threatfox-api.abuse.ch/v2/files/exports/{key}/recent.json",
         "schedule_s": 3600,
         "default_confidence": 75,
         "ttl_days": 30,
         "enabled": True,
-        "licence_note": "abuse.ch ThreatFox, CC0. May require an abuse.ch Auth-Key.",
+        "licence_note": f"abuse.ch ThreatFox, CC0. {_ABUSECH_KEY_NOTE}",
     },
     {
         "name": "openphish",
@@ -1632,12 +1814,12 @@ DEFAULT_FEEDS = [
         "name": "malwarebazaar",
         "kind": "indicators",
         "parser": "malwarebazaar_csv",
-        "url": "https://bazaar.abuse.ch/export/csv/recent/",
+        "url": "https://mb-api.abuse.ch/v2/files/exports/{key}/recent.csv",
         "schedule_s": 3600,
         "default_confidence": 85,
         "ttl_days": 90,
         "enabled": True,
-        "licence_note": "abuse.ch MalwareBazaar, CC0. May require an abuse.ch Auth-Key.",
+        "licence_note": f"abuse.ch MalwareBazaar, CC0. {_ABUSECH_KEY_NOTE}",
     },
     {
         "name": "phishtank",

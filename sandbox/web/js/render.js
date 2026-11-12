@@ -15,6 +15,12 @@ function displayValue(v) {
   return isDefangOn() && window.detector ? window.detector.defang(String(v)) : String(v);
 }
 
+// For prose that mentions hosts (warnings, hop notes): only the hosts are defanged.
+function displayText(v) {
+  if (v === null || v === undefined) return '';
+  return isDefangOn() && window.detector ? window.detector.defangText(String(v)) : String(v);
+}
+
 const VERDICT_CLASSES = new Set(['malicious', 'suspicious', 'clean', 'private']);
 
 function makeBadge(verdict) {
@@ -52,6 +58,77 @@ function fieldRow(label, value, opts = {}) {
   return row;
 }
 
+// Long vendor lists (EICAR has hundreds of file names) would bury the card.
+function capList(values, n) {
+  if (!Array.isArray(values) || values.length <= n) return values;
+  return [...values.slice(0, n), `and ${values.length - n} more`];
+}
+
+function fmtEpochOrIso(v) {
+  if (!v) return null;
+  const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
+  return isNaN(d) ? String(v) : d.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+}
+
+// The rest of what the vendors returned (spec 4.1 / 4.2), folded away under
+// "More details" so the card stays scannable.
+function renderDetails(norm) {
+  const n = norm.network || {};
+  const s = norm.score_summary || {};
+  const u = norm.urls || {};
+  const votes = s.vt_community_votes;
+  const ranks = n.popularity_ranks && Object.entries(n.popularity_ranks).map(([k, v]) => `${k} #${v.rank}`);
+  const sig = n.signature_info || {};
+  const packers = n.packers && Object.entries(n.packers).map(([k, v]) => `${v} (${k})`);
+  const sandboxes = n.sandbox_verdicts && Object.entries(n.sandbox_verdicts).map(([k, v]) => `${k}: ${v.category}${v.malware_names ? ` (${v.malware_names.join(', ')})` : ''}`);
+  const rows = [
+    fieldRow('VT reputation', s.vt_reputation),
+    fieldRow('Community votes', votes ? `${votes.malicious || 0} malicious, ${votes.harmless || 0} harmless` : null),
+    fieldRow('VT suspicious', s.vt_suspicious ? `${s.vt_suspicious} engines` : null),
+    fieldRow('Flagged by', capList(n.flagging_engines, 12)),
+    fieldRow('Threat names', n.threat_names),
+    fieldRow('Popularity', ranks),
+    fieldRow('Network', n.network_range, { copyable: true }),
+    fieldRow('Continent', n.continent),
+    fieldRow('Registry', n.regional_internet_registry),
+    fieldRow('Registrar', n.registrar),
+    fieldRow('AbuseIPDB reports', s.abuseipdb_total_reports !== undefined && norm.vendor_links.abuseipdb ? `${s.abuseipdb_total_reports} from ${s.abuseipdb_distinct_reporters || 0} reporters` : null),
+    fieldRow('Last reported', n.abuse_last_reported ? fmtEpochOrIso(n.abuse_last_reported) : null),
+    fieldRow('Owner domain', n.domain),
+    fieldRow('Allowlisted', norm.vendor_links.abuseipdb ? (n.is_whitelisted ? 'yes (AbuseIPDB)' : null) : null),
+    fieldRow('Tor', n.tor_mentioned_in_reports ? 'mentioned in AbuseIPDB reports' : null),
+    fieldRow('VT final URL', u.vt_final_url && u.vt_final_url !== norm.ioc ? displayValue(u.vt_final_url) : null),
+    fieldRow('VT page title', u.vt_title),
+    fieldRow('Magic', n.magic),
+    fieldRow('Signed by', sig.signers || null),
+    fieldRow('Signature', sig.verified || null),
+    fieldRow('Product', [sig.product, sig.description, sig.copyright].filter(Boolean).join(' · ') || null),
+    fieldRow('Packers', packers),
+    fieldRow('Sandboxes', sandboxes),
+  ].filter(Boolean);
+  const whois = n.whois_raw;
+  if (!rows.length && !whois) return null;
+  const box = document.createElement('details'); box.className = 'details-box';
+  const summary = document.createElement('summary'); summary.textContent = 'More details';
+  const grid = document.createElement('div'); grid.className = 'fields';
+  rows.forEach((r) => grid.appendChild(r));
+  box.append(summary, grid);
+  if (whois) {
+    const pre = document.createElement('pre'); pre.textContent = whois;
+    const w = document.createElement('details'); w.className = 'details-box';
+    const ws = document.createElement('summary'); ws.textContent = 'WHOIS';
+    w.append(ws, pre);
+    box.appendChild(w);
+  }
+  return box;
+}
+
+// Kept in step with the basket, so removing an IoC there re-enables its card's button.
+function setAddedState(btn, added) {
+  btn.textContent = added ? 'In report ✓' : 'Add to report';
+  btn.disabled = added;
+}
+
 function renderLoadingCard(ioc, type) {
   const c = document.createElement('div');
   c.className = 'card loading';
@@ -84,7 +161,7 @@ function renderWarnings(warnings) {
   for (const w of warnings) {
     const chip = document.createElement('span');
     chip.className = `warn-chip ${w.level || 'info'}`;
-    chip.textContent = w.message;
+    chip.textContent = displayText(w.message);
     wrap.appendChild(chip);
   }
   return wrap;
@@ -138,6 +215,14 @@ function renderUrlSection(norm) {
     row.appendChild(v); row.appendChild(makeCopyIcon(u.unwrapped, 'unwrapped URL'));
     wrap.appendChild(row);
   }
+  if (u.landing) {
+    const row = document.createElement('div'); row.className = 'field-row';
+    const l = document.createElement('span'); l.className = 'field-label'; l.textContent = 'Lands on (redirect walk)';
+    const v = document.createElement('span'); v.className = 'field-value monospace';
+    v.textContent = displayValue(u.landing) + (u.landing_title ? `  “${u.landing_title}”` : '');
+    row.append(l, v, makeCopyIcon(u.landing, 'landing URL'));
+    wrap.appendChild(row);
+  }
   if (u.note) {
     const note = document.createElement('div'); note.className = 'small note'; note.textContent = u.note;
     wrap.appendChild(note);
@@ -147,8 +232,25 @@ function renderUrlSection(norm) {
     wrap.appendChild(note);
   }
   if (u.redirect_chain && u.redirect_chain.length) {
-    const chainWrap = document.createElement('div'); chainWrap.className = 'redirect-chain small';
-    chainWrap.textContent = 'Redirect chain: ' + u.redirect_chain.map((h) => h.url || h.location).join('  ->  ');
+    // One line per hop, defanged like every other value on the card.
+    const chainWrap = document.createElement('ol'); chainWrap.className = 'redirect-chain small';
+    chainWrap.setAttribute('aria-label', 'Redirect chain');
+    for (const h of u.redirect_chain) {
+      const li = document.createElement('li');
+      const url = document.createElement('span'); url.className = 'monospace'; url.textContent = displayValue(h.url || h.location);
+      li.appendChild(url);
+      const notes = [];
+      if (h.status) notes.push(String(h.status));
+      if (h.via === 'meta-refresh') notes.push('meta refresh');
+      else if (h.via === 'refresh-header') notes.push('Refresh header');
+      if (h.title) notes.push(`title “${h.title}”`);
+      if (h.script_redirect) notes.push('may redirect with script');
+      if (h.blocked) notes.push(`blocked: ${h.blocked}`);
+      if (h.error) notes.push(`error: ${h.error}`);
+      if (h.note) notes.push(h.note);
+      if (notes.length) li.appendChild(document.createTextNode(`  ${displayText(notes.join(', '))}`));
+      chainWrap.appendChild(li);
+    }
     wrap.appendChild(chainWrap);
   }
   const warnEl = renderWarnings(u.warnings);
@@ -259,7 +361,8 @@ function renderCard(norm, opts = {}) {
   const iocLine = document.createElement('div'); iocLine.className = 'monospace ioc-value';
   iocLine.textContent = displayValue(norm.ioc);
   iocLine.appendChild(makeCopyIcon(norm.ioc, 'IoC'));
-  const typeLine = document.createElement('div'); typeLine.className = 'small'; typeLine.textContent = norm.type;
+  const typeLine = document.createElement('div'); typeLine.className = 'small';
+  typeLine.textContent = norm.port ? `${norm.type}, port ${norm.port}` : norm.type;
   if (opts.duplicateCount && opts.duplicateCount > 1) {
     const dupBadge = document.createElement('span');
     dupBadge.className = 'badge duplicate';
@@ -305,7 +408,12 @@ function renderCard(norm, opts = {}) {
     const scoreEl = document.createElement('div'); scoreEl.className = 'small scores';
     const parts = [];
     const stat = (label, value) => { const s = document.createElement('span'); const b = document.createElement('strong'); b.textContent = value; s.append(`${label} `, b); return s; };
-    parts.push(stat('VirusTotal', `${norm.score_summary.vt_malicious || 0} of ${norm.score_summary.vt_total_engines || 0} engines`));
+    // "0 of 0 engines" read like a clean result when VirusTotal had not answered at all.
+    let vtText = 'no answer';
+    if (norm.score_summary.vt_total_engines) vtText = `${norm.score_summary.vt_malicious || 0} of ${norm.score_summary.vt_total_engines} engines`;
+    else if (norm.vt_not_found) vtText = 'not seen before';
+    else if (norm.raw && norm.raw.vt && norm.raw.vt.ok) vtText = 'no engine results yet';
+    parts.push(stat('VirusTotal', vtText));
     if (norm.score_summary.abuseipdb_score !== undefined) parts.push(stat('AbuseIPDB confidence', `${norm.score_summary.abuseipdb_score}%`));
     scoreEl.replaceChildren(...parts);
     body.appendChild(scoreEl);
@@ -316,6 +424,9 @@ function renderCard(norm, opts = {}) {
     errEl.textContent = norm._errors.join(' | ');
     body.appendChild(errEl);
   }
+
+  const general = renderWarnings(norm.warnings); // e.g. a newly registered domain
+  if (general) body.appendChild(general);
 
   const fields = document.createElement('div'); fields.className = 'fields';
   [
@@ -329,10 +440,13 @@ function renderCard(norm, opts = {}) {
     fieldRow('Usage type', norm.network.usage_type),
     fieldRow('File type', norm.network.file_type),
     fieldRow('File size', norm.network.file_size),
-    fieldRow('Names seen', norm.network.names_seen),
+    fieldRow('Names seen', capList(norm.network.names_seen, 10)),
     fieldRow('Tags', norm.tags),
   ].forEach((row) => { if (row) fields.appendChild(row); });
   body.appendChild(fields);
+
+  const more = renderDetails(norm);
+  if (more) body.appendChild(more);
 
   if (norm.network.report_categories && Object.keys(norm.network.report_categories).length) {
     const cats = document.createElement('div'); cats.className = 'small';
@@ -364,6 +478,11 @@ function renderCard(norm, opts = {}) {
   }
   body.appendChild(links);
 
+  if (opts.onLookUp && window.pivots) {
+    const pivots = window.pivots.mountPivots(norm, opts.onLookUp);
+    if (pivots) body.appendChild(pivots);
+  }
+
   const actions = document.createElement('div'); actions.className = 'footer-actions';
 
   const copySummaryBtn = document.createElement('button'); copySummaryBtn.className = 'copy-btn'; copySummaryBtn.textContent = 'Copy';
@@ -377,11 +496,9 @@ function renderCard(norm, opts = {}) {
   actions.appendChild(copyRowBtn);
 
   const addBtn = document.createElement('button'); addBtn.className = 'copy-btn add-report'; addBtn.textContent = 'Add to report';
-  addBtn.onclick = () => {
-    window.copyReport.ReportBasket.add(norm);
-    addBtn.textContent = 'Added ✓';
-    addBtn.disabled = true;
-  };
+  addBtn.dataset.key = window.copyReport.ReportBasket.keyOf(norm);
+  addBtn.onclick = () => window.copyReport.ReportBasket.add(norm);
+  setAddedState(addBtn, window.copyReport.ReportBasket.has(norm));
   actions.appendChild(addBtn);
 
   if (opts.onDetonate) {
@@ -403,4 +520,4 @@ function renderCard(norm, opts = {}) {
   return container;
 }
 
-window.render = { renderCard, renderLocalSection, renderLoadingCard, renderErrorCard, escapeHtml, displayValue, makeBadge };
+window.render = { setAddedState, renderCard, renderLocalSection, renderLoadingCard, renderErrorCard, escapeHtml, displayValue, displayText, makeBadge };

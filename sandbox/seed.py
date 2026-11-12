@@ -4,12 +4,13 @@ content current.
 Built-in rule bodies are refreshed when the shipped version changes (admins cannot edit
 them, only disable or re-weight them, and both survive). Built-in brand domains are
 merged into existing brand rows; keywords, extra domains and ``enabled`` set by an
-admin are kept. Weights and feeds are only ever inserted.
+admin are kept. Weights are only ever inserted, and so are feeds, except that a feed
+still on a default URL its provider retired moves to the current default.
 """
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -112,6 +113,12 @@ async def ensure_defaults(db: AsyncSession) -> None:
             .values(id=new_id("fd"), **feed)
             .on_conflict_do_nothing(index_elements=[Feed.name])
         )
+        if retired := defaults.RETIRED_FEED_URLS.get(feed["name"]):
+            await db.execute(
+                update(Feed)
+                .where(Feed.name == feed["name"], Feed.url == retired)
+                .values(url=feed["url"], licence_note=feed["licence_note"])
+            )
 
     await db.flush()
     # A first bundle so analyses always have a pinned rule set (FED-9), and a fresh one

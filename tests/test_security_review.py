@@ -106,6 +106,20 @@ async def test_redirect_walk_is_pinned(client):
     assert calls[0].headers["host"] == "public.example"
 
 
+async def test_checked_address_prefers_ipv4_for_dual_stack_hosts():
+    # The system resolver sorts its answers, which puts "2001:..." first; Docker has no
+    # IPv6 route, so the walk used to fail on its first hop for hosts like google.com.kw.
+    async def dual_stack(host: str) -> list[str]:
+        return ["2001:4860:4802:32::78", "216.239.38.120"]
+
+    assert await safehttp.checked_address("dual.example", GUARD, dual_stack) == "216.239.38.120"
+
+    async def v6_only(host: str) -> list[str]:
+        return ["2001:4860:4802:32::78"]
+
+    assert await safehttp.checked_address("v6.example", GUARD, v6_only) == "2001:4860:4802:32::78"
+
+
 # --- SR-02: YARA include directives ----------------------------------------------------
 
 

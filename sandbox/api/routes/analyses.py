@@ -7,14 +7,22 @@ import json
 import math
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from sqlalchemy import and_, delete, exists, func, or_, select
 
 from sandbox.api.access import get_visible, visible_clause
-from sandbox.api.auth import Principal, Reader, Role, SeniorAnalyst, Submitter, UserOnly
+from sandbox.api.auth import (
+    Principal,
+    Reader,
+    Role,
+    SeniorAnalyst,
+    Submitter,
+    UserOnly,
+    require_scope,
+)
 from sandbox.api.deps import AppSettings, Db, DnsResolver, Guard, Store
 from sandbox.api.report import build_report, current_tags, latest_override
 from sandbox.api.schemas import (
@@ -38,11 +46,14 @@ from sandbox.db.audit import record_audit
 from sandbox.db.models import (
     Analysis,
     AnalysisTag,
+    AnalysisVersion,
     ApiClient,
     Artifact,
     Event,
     Ioc,
     Note,
+    Rule,
+    RuleHit,
     Session,
     VerdictOverride,
 )
@@ -581,6 +592,78 @@ async def list_artifacts(analysis_id: str, principal: Reader, db: Db) -> dict[st
         .order_by(Artifact.kind, Artifact.name)
     )
     return json.loads(json.dumps({"items": [artifact_dict(a) for a in rows]}, default=str))
+
+
+@router.get("/{analysis_id}/rule-hits/{hit_id}/evidence", responses={404: {"model": ErrorBody}})
+async def rule_hit_evidence(
+    analysis_id: str,
+    hit_id: str,
+    principal: Annotated[Principal, Depends(require_scope("artifacts:read"))],
+    db: Db,
+    store: Store,
+) -> JSONResponse:
+    """What a fired detection matched on (REP-4): the condition with the values it saw,
+    the concrete content behind those facts, and the files they came from."""
+    from sandbox.api.evidence import resolve
+    from sandbox.api.report import artifact_dict
+    from sandbox.rules.behaviour import RuleSyntaxError, parse_rule
+
+    await get_visible(db, principal, analysis_id)
+    hit = await db.get(RuleHit, hit_id)
+    if hit is None or hit.analysis_id != analysis_id:
+        raise _error(404, "not_found", f"No rule hit {hit_id}")
+    rule = None
+    if hit.rule_id and (row := await db.get(Rule, hit.rule_id)) is not None:
+        if row.engine == "behaviour":
+            try:
+                rule = {**parse_rule(row.body), "description": row.description}
+            except (RuleSyntaxError, ValueError):
+                rule = {"description": row.description}
+        else:
+            rule = {"description": row.description, "source_text": row.body}
+    version = await db.scalar(
+        select(AnalysisVersion).where(
+            AnalysisVersion.analysis_id == analysis_id, AnalysisVersion.version == hit.version
+        )
+    )
+    rows = list(
+        await db.scalars(
+            select(Artifact).where(Artifact.analysis_id == analysis_id).order_by(Artifact.name)
+        )
+    )
+    artifacts = [artifact_dict(a) for a in rows]
+    keys = {a.id: a.object_key for a in rows}
+
+    def read(artifact: dict[str, Any]) -> bytes | None:
+        key = keys.get(artifact["id"])
+        if key is None or artifact["quarantined"] or not store.exists(key):
+            return None
+        with store.open(key) as fh:
+            return fh.read(4 * 1024 * 1024)
+
+    capture: dict[str, Any] = {}
+    result = next((a for a in artifacts if a["kind"] == "capture_result"), None)
+    if result is not None and (raw := read(result)) is not None:
+        try:
+            capture = json.loads(raw)
+        except ValueError:
+            capture = {}
+    evidence = resolve(
+        {
+            "id": hit.id,
+            "rule_id": hit.rule_id,
+            "rule_name": hit.rule_name,
+            "engine": hit.engine,
+            "artifact_id": hit.artifact_id,
+            "detail": hit.detail,
+        },
+        rule,
+        all_facts=(version.summary if version else {}).get("facts", {}),
+        artifacts=artifacts,
+        capture=capture if isinstance(capture, dict) else {},
+        read=read,
+    )
+    return JSONResponse(json.loads(json.dumps(evidence, default=str)))
 
 
 def defang(value: str) -> str:

@@ -25,11 +25,16 @@ class UnresolvedHost(httpx.ConnectError):
 
 
 async def checked_address(host: str, guard: NetGuard, resolver: Resolver) -> str:
-    """The address to connect to for ``host``; raises if any of its addresses is refused."""
+    """The address to connect to for ``host``; raises if any of its addresses is refused.
+
+    IPv4 is preferred: Docker networks have no IPv6 route by default, and the resolver's
+    sorted list puts "2001:..." before "216...", so taking the first address would fail
+    to connect to any dual-stack host.
+    """
     addresses = await guard.check_host(host, resolver)
     if not addresses:
         raise UnresolvedHost(f"{host} did not resolve")
-    return addresses[0]
+    return min(addresses, key=lambda a: ipaddress.ip_address(a).version)
 
 
 def pinned_request(

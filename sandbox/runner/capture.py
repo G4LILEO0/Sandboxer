@@ -42,7 +42,13 @@ from playwright.async_api import Error as PlaywrightError
 
 from sandbox.core.netguard import NetGuard, system_resolver
 from sandbox.runner.events import Emitter, now_iso
-from sandbox.runner.page_scripts import BINDING, COLLECT_SCRIPT, INIT_SCRIPT, WALLET_SCRIPT
+from sandbox.runner.page_scripts import (
+    BINDING,
+    COLLECT_SCRIPT,
+    INIT_SCRIPT,
+    WALLET_SCRIPT,
+    is_harness_code,
+)
 from sandbox.runner.profiles import get_profile
 from sandbox.runner.spec import RunSpec
 
@@ -136,6 +142,7 @@ class Capture:
         self.clipboard: list[dict[str, Any]] = []
         self.websocket_frames: list[dict[str, Any]] = []
         self.wallet_requests: list[dict[str, Any]] = []
+        self.webrtc: list[dict[str, Any]] = []
         self.blocked_input: list[dict[str, Any]] = []
         self.cdp_requests: list[dict[str, Any]] = []
         self.pw_requests: list[dict[str, Any]] = []
@@ -551,6 +558,12 @@ class Capture:
                 self.wallet_requests.append(entry)
                 self.events.emit("wallet_request", "browser", **entry)
             return
+        if kind == "webrtc_ice":
+            if len(self.webrtc) < 200:
+                entry = {"page": pid, **data}
+                self.webrtc.append(entry)
+                self.events.emit("webrtc_ice", "network", **entry)
+            return
         if kind == "blocked_input":
             if len(self.blocked_input) < 200:
                 self.blocked_input.append({"page": pid, **data})
@@ -571,6 +584,8 @@ class Capture:
         """A1/A14: aggregate runtime hook events. Decoded code over 1 KB is written as a
         dynamic script artifact so the YARA pass scans stages that only exist at runtime."""
         j = self.jsapi
+        if kind == "js_exec" and is_harness_code(data.get("code") or ""):
+            return  # our own frame.evaluate / Playwright init wrapper, not the page
         if kind == "js_exec":
             execs = j.setdefault("exec", {"count": 0, "max_len": 0, "max_entropy": 0.0, "apis": []})
             execs["count"] += 1
@@ -849,6 +864,7 @@ class Capture:
             "clipboard": self.clipboard,
             "websocket_frames": self.websocket_frames,
             "wallet_requests": self.wallet_requests,
+            "webrtc": self.webrtc,
             "blocked_input": self.blocked_input,
             "cookies": self.cookies,
             "jsapi": self.jsapi,

@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>URL Sandbox</title>
-  <script src="js/theme.js?v=20261112-1"></script>
-  <link rel="stylesheet" href="css/style.css?v=20261112-1" />
-  <link rel="stylesheet" href="css/report.css?v=20261112-1" />
+  <script src="js/theme.js?v=20261113-1"></script>
+  <link rel="stylesheet" href="css/style.css?v=20261113-1" />
+  <link rel="stylesheet" href="css/report.css?v=20261113-1" />
 </head>
 <body>
   <header class="topbar">
@@ -48,6 +48,13 @@
         <span id="counts">No results yet</span>
         <span id="rate-status" class="rate-status"></span>
         <span class="spacer"></span>
+        <div id="verdict-filter" class="verdict-filter" role="group" aria-label="Show only"></div>
+        <label class="small muted" for="sort-results">Order</label>
+        <select id="sort-results" class="mini" title="Order of the result cards">
+          <option value="pasted">As pasted</option>
+          <option value="severity">Most severe first</option>
+        </select>
+        <button id="copy-iocs-btn" class="copy-btn" type="button" title="The shown IoCs, one per line (defanged if Defang results is on), for a blocklist or ticket">Copy IoC list</button>
         <span id="copy-template-summary" class="copy-summary-label"></span>
         <button id="copy-fields-btn" class="copy-btn" type="button" aria-expanded="false" aria-controls="copy-template">Choose copy fields</button>
         <button id="copy-all-summaries-btn" class="copy-btn" type="button">Copy all results</button>
@@ -156,20 +163,21 @@
     </div>
   </main>
 
-  <script src="js/config.js?v=20261112-1"></script>
-  <script src="js/api.js?v=20261112-1"></script>
-  <script src="js/detector.js?v=20261112-1"></script>
-  <script src="js/cache.js?v=20261112-1"></script>
-  <script src="js/vt-client.js?v=20261112-1"></script>
-  <script src="js/abuseipdb-client.js?v=20261112-1"></script>
-  <script src="js/local-client.js?v=20261112-1"></script>
-  <script src="js/unwrap-url.js?v=20261112-1"></script>
-  <script src="js/redirect-check.js?v=20261112-1"></script>
-  <script src="js/url-heuristics.js?v=20261112-1"></script>
-  <script src="js/normalize.js?v=20261112-1"></script>
-  <script src="js/render.js?v=20261112-1"></script>
-  <script src="js/copy-report.js?v=20261112-1"></script>
-  <script src="js/sandbox.js?v=20261112-1"></script>
-  <script src="js/app.js?v=20261112-1"></script>
+  <script src="js/config.js?v=20261113-1"></script>
+  <script src="js/api.js?v=20261113-1"></script>
+  <script src="js/detector.js?v=20261113-1"></script>
+  <script src="js/cache.js?v=20261113-1"></script>
+  <script src="js/vt-client.js?v=20261113-1"></script>
+  <script src="js/abuseipdb-client.js?v=20261113-1"></script>
+  <script src="js/local-client.js?v=20261113-1"></script>
+  <script src="js/unwrap-url.js?v=20261113-1"></script>
+  <script src="js/redirect-check.js?v=20261113-1"></script>
+  <script src="js/url-heuristics.js?v=20261113-1"></script>
+  <script src="js/normalize.js?v=20261113-1"></script>
+  <script src="js/render.js?v=20261113-1"></script>
+  <script src="js/copy-report.js?v=20261113-1"></script>
+  <script src="js/pivots.js?v=20261113-1"></script>
+  <script src="js/sandbox.js?v=20261113-1"></script>
+  <script src="js/app.js?v=20261113-1"></script>
 </body>
 </html>

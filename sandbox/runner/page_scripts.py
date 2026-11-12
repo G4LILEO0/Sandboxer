@@ -9,6 +9,8 @@ test credentials do not end up in the timeline.
 iframes and a text excerpt from each frame.
 """
 
+import re
+
 BINDING = "__sandboxReport"
 
 INIT_SCRIPT = r"""
@@ -197,6 +199,25 @@ INIT_SCRIPT = r"""
       navigator.keyboard.lock = nativeize((...a) => { send('js_api', { api: 'keyboard.lock' }); return O(...a); }, 'lock');
     }
   } catch (e) {}
+  // Local port scanning over WebRTC: TURN/STUN servers on 127.0.0.1 or LAN addresses
+  // make Chromium try those ports without a request the route filter could see.
+  try {
+    const PC = window.RTCPeerConnection;
+    if (PC) {
+      let rtcCount = 0;
+      const iceUrls = (cfg) => {
+        const out = [];
+        try { for (const srv of (cfg && cfg.iceServers) || []) { const u = srv && srv.urls; for (const x of (Array.isArray(u) ? u : [u])) if (x) out.push(String(x).slice(0, 300)); } } catch (e) {}
+        return out.slice(0, 50);
+      };
+      const sendIce = (cfg) => { const urls = iceUrls(cfg); if (urls.length && rtcCount++ < 200) send('webrtc_ice', { urls, script_url: scriptUrl() }); };
+      const W = new Proxy(PC, { construct(t, args, nt) { sendIce(args[0]); return Reflect.construct(t, args, nt === W ? t : nt); } });
+      window.RTCPeerConnection = W;
+      if (window.webkitRTCPeerConnection) window.webkitRTCPeerConnection = W;
+      const SC = PC.prototype.setConfiguration;
+      if (SC) PC.prototype.setConfiguration = nativeize(function (cfg) { sendIce(cfg); return SC.call(this, cfg); }, 'setConfiguration');
+    }
+  } catch (e) {}
   // History flooding / back-button hijack (DE-SCM-002).
   try {
     for (const api of ['pushState', 'replaceState']) {
@@ -321,3 +342,18 @@ COLLECT_SCRIPT = r"""
   };
 }
 """
+
+# Playwright guards every init script with this wrapper, and relays routed WebSocket
+# frames with __pwWebSocketDispatch; like frame.evaluate, both are compiled through the
+# page's eval, which the exec hook wraps.
+_PW_HARNESS = re.compile(
+    r"\s*(\(\(\)\s*=>\s*\{\s*globalThis\.__pwInitScripts\s*="
+    r"|globalThis\.__pwWebSocketDispatch\(\{\"id\":\"[0-9a-f]{64}\")"
+)
+
+
+def is_harness_code(code: str) -> bool:
+    """Code the sandbox itself sent through the page's eval: COLLECT_SCRIPT, Playwright's
+    init-script wrappers and its WebSocket route dispatch. It is not page code, so the
+    exec hook's aggregates must leave it out."""
+    return code.strip() == COLLECT_SCRIPT.strip() or bool(_PW_HARNESS.match(code))

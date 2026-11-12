@@ -22,6 +22,7 @@ FAKE_DNS = {
     "public.example": ["93.184.216.34"],
     "internal.example": ["10.0.0.5"],
     "openphish.com": ["93.184.216.34"],
+    "urlhaus-api.abuse.ch": ["93.184.216.34"],
 }
 
 
