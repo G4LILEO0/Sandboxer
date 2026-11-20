@@ -1,8 +1,9 @@
 """Insert built-in rules, weights, brands and feeds that are missing, and keep built-in
 content current.
 
-Built-in rule bodies are refreshed when the shipped version changes (admins cannot edit
-them, only disable or re-weight them, and both survive). Built-in brand domains are
+Built-in rule bodies are refreshed when the shipped version changes, unless a detection
+engineer edited the body in Admin: that edit is kept until it is reverted. Disables and
+weights always survive. Built-in brand domains are
 merged into existing brand rows; keywords, extra domains and ``enabled`` set by an
 admin are kept. Weights are only ever inserted, and so are feeds, except that a feed
 still on a default URL its provider retired moves to the current default.
@@ -22,7 +23,10 @@ from sandbox.rules.importer import content_hash, validate_yara, yara_metadata
 
 
 def _refresh(rule: Rule, body: str, **values) -> bool:
-    """Bring a built-in rule up to the shipped body; True if it changed."""
+    """Bring a built-in rule up to the shipped body; True if it changed. A body a
+    detection engineer edited in Admin (``modified_by``) is kept until it is reverted."""
+    if rule.modified_by:
+        return False
     digest = content_hash(body)
     if rule.content_hash == digest:
         return False

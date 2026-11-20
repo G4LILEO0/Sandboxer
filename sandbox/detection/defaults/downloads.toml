@@ -1,0 +1,125 @@
+# Downloads: detection strings read by the fact builders.
+# Shipped defaults. Change them in Admin > Detection strings (stored as an
+# override, audited, revertible); edit this file only to change what ships.
+# Regex syntax is Python re. flags: i = ignore case, s = dot matches newline,
+# m = multi-line, x = verbose.
+
+title = 'Downloads'
+
+[executable_extensions]
+title = 'Executable file extensions'
+description = 'File extensions counted as executables, scripts or disk images (downloads.executable).'
+type = "words"
+values = [
+  'apk',
+  'appx',
+  'bat',
+  'cmd',
+  'com',
+  'cpl',
+  'dll',
+  'dmg',
+  'exe',
+  'hta',
+  'img',
+  'iso',
+  'jar',
+  'js',
+  'jse',
+  'lnk',
+  'msi',
+  'msix',
+  'msp',
+  'one',
+  'pkg',
+  'ps1',
+  'reg',
+  'scr',
+  'url',
+  'vbe',
+  'vbs',
+  'vhd',
+  'vhdx',
+  'wsf',
+]
+
+[archive_extensions]
+title = 'Archive file extensions'
+description = 'File extensions counted as archives (downloads.archive).'
+type = "words"
+values = [
+  '7z',
+  'ace',
+  'arj',
+  'bz2',
+  'cab',
+  'gz',
+  'rar',
+  'tar',
+  'tgz',
+  'xz',
+  'zip',
+]
+
+[decoy_extensions]
+title = 'Decoy extensions (double-extension disguise)'
+description = 'Extensions a user trusts; one of these before the real extension is a disguise.'
+type = "words"
+values = [
+  'csv',
+  'doc',
+  'docx',
+  'gif',
+  'htm',
+  'html',
+  'jpeg',
+  'jpg',
+  'mp3',
+  'mp4',
+  'pdf',
+  'png',
+  'ppt',
+  'pptx',
+  'rtf',
+  'txt',
+  'wav',
+  'xls',
+  'xlsx',
+]
+
+[risky_content_types]
+title = 'Risky content types (by file signature)'
+description = 'File signature types that are risky deliveries whatever the extension says.'
+type = "words"
+values = [
+  'cab',
+  'chm',
+  'elf',
+  'iso',
+  'lnk',
+  'macho',
+  'ole',
+  'pe',
+  'vhd',
+  'vhdx',
+]
+
+[smuggled_content_types]
+title = 'Content types smuggled as images'
+description = 'Cache smuggling (L2-NEW-1): a response typed image/* whose body is one of these file types. The browser caches it silently; a later File Explorer step reads it back.'
+type = "words"
+values = [
+  '7z',
+  'cab',
+  'ole',
+  'pe',
+  'rar',
+  'zip',
+]
+
+[archive_password_on_page]
+title = 'Archive password shown on the page'
+description = 'An archive password printed on the page (password: 1234, Arabic كلمة المرور). Group 2 is the password.'
+type = "regex"
+flags = 'i'
+pattern = '''(password|pass|pwd|كلمة\s*(?:ال)?مرور)\s*[:：=]?\s*[`'\"]?([^\s`'\"<>]{3,24})'''

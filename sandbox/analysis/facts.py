@@ -15,6 +15,7 @@ from html import unescape
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from sandbox import detection as S
 from sandbox.analysis.domains import (
     BrandRef,
     brand_owner,
@@ -29,42 +30,17 @@ from sandbox.analysis.domains import (
 )
 from sandbox.runner.page_scripts import is_harness_code
 
-EXECUTABLE_EXTENSIONS = {
-    "exe",
-    "dll",
-    "scr",
-    "msi",
-    "msix",
-    "com",
-    "bat",
-    "cmd",
-    "ps1",
-    "vbs",
-    "vbe",
-    "js",
-    "jse",
-    "wsf",
-    "hta",
-    "lnk",
-    "iso",
-    "img",
-    "vhd",
-    "vhdx",
-    "jar",
-    "apk",
-    "dmg",
-    "pkg",
-    "appx",
-    "msp",
-    "cpl",
-    "reg",
-    "url",
-    "one",
-}
-ARCHIVE_EXTENSIONS = {"zip", "rar", "7z", "gz", "tgz", "tar", "cab", "ace", "arj", "xz", "bz2"}
-# Extensions a user trusts; one of these before the real extension is a disguise.
-_DECOY_EXTENSIONS = {"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "jpg",
-                     "jpeg", "png", "gif", "csv", "htm", "html", "mp3", "mp4", "wav"}  # fmt: skip
+# Detection strings (keyword patterns, host lists, file types, points) live in
+# sandbox/detection/defaults/*.toml and are edited in Admin > Detection strings; each
+# S.bind() line below names the entry a global follows. See sandbox/detection.
+
+EXECUTABLE_EXTENSIONS = S.bind(
+    globals(), "EXECUTABLE_EXTENSIONS", "downloads.executable_extensions", S.as_set
+)
+ARCHIVE_EXTENSIONS = S.bind(
+    globals(), "ARCHIVE_EXTENSIONS", "downloads.archive_extensions", S.as_set
+)
+_DECOY_EXTENSIONS = S.bind(globals(), "_DECOY_EXTENSIONS", "downloads.decoy_extensions", S.as_set)
 _MAGIC = {
     b"MZ": "pe",
     b"\x7fELF": "elf",
@@ -79,94 +55,30 @@ _MAGIC = {
     b"conectix": "vhd",
     b"vhdxfile": "vhdx",
 }
-# Content-based types that are risky deliveries regardless of extension.
-_RISKY_MAGIC = {"pe", "elf", "macho", "lnk", "iso", "cab", "chm", "vhd", "vhdx", "ole"}
-_COMMAND = re.compile(
-    r"\b(powershell|pwsh|cmd(\.exe)?\s*/[ck]|mshta|rundll32|regsvr32|bitsadmin|certutil|wscript|"
-    r"cscript|curl\s+|wget\s+|iex\b|invoke-(expression|webrequest)|msiexec|start-process|"
-    r"bash\s+-c|osascript|finger(\.exe)?\s+\S+@|conhost(\.exe)?\s|forfiles|for\s+/f\b)|"
-    r"%comspec%|\|\s*cmd(\.exe)?\b",
-    re.I,
-)
+_RISKY_MAGIC = S.bind(globals(), "_RISKY_MAGIC", "downloads.risky_content_types", S.as_set)
+_COMMAND = S.bind(globals(), "_COMMAND", "clickfix.shell_command")
 # cmd ignores ^ escapes and empty "" pairs inside a word, so f^^i^^n^^g^^e^^r and
 # p""owershell both run; patterns match the text with them removed.
 _CMD_NOISE = re.compile(r'\^|(?<=\w)""(?=\w)')
-# Traits of a ClickFix payload rather than a command a docs page lets you copy: a
-# download cradle, an encoded or hidden PowerShell, mshta of a URL, or the trailing
-# "# I am not a robot" comment that hides the command in the Run dialog.
-#
-# Fetch-then-run cradles (download a script and pipe it to an interpreter) are also how
-# real package managers install (Homebrew, uv, Bun, Scoop, Chocolatey, rustup), so on
-# their own they are ambiguous: a cradle whose every source is a known installer is not
-# ClickFix (R-01). The source is judged, not the page, so a compromised allowlisted site
-# pushing a cradle from its own host still counts.
-_CLICKFIX_FETCH_RUN = [
-    re.compile(
-        r"\b(iwr|irm|invoke-webrequest|invoke-restmethod|downloadstring|downloadfile|"
-        r"net\.webclient|start-bitstransfer)\b.{0,300}(\biex\b|invoke-expression|\|\s*iex)",
-        re.I | re.S,
-    ),
-    re.compile(r"(\biex\b|invoke-expression)\s*\(?\s*\(?\s*(iwr|irm|new-object|\[)", re.I),
-    re.compile(r"\b(curl|wget)\b[^|\n]{0,300}\|\s*(ba|z)?sh\b", re.I),
-    re.compile(r"\$\(\s*(curl|wget)\b", re.I),
-]
-# Traits no installer uses: always ClickFix, whatever the source.
-_CLICKFIX_UNAMBIGUOUS = [
-    re.compile(r"\s-(e|ec|enc|encodedcommand)\s+[A-Za-z0-9+/=]{40,}", re.I),
-    re.compile(r"\s-w(indowstyle)?\s+(h|hidden|1)\b", re.I),
-    re.compile(r"\bmshta(\.exe)?\s+[\"']?(https?:|\\\\|vbscript:|javascript:)", re.I),
-    re.compile(r"base64\s+(-d|--decode)[^|\n]{0,80}\|\s*(ba|z)?sh\b", re.I),
-    re.compile(r"(#|\brem\b|::).{0,80}\b(robot|captcha|verif\w*|human|cloudflare|ray id)", re.I),
-    # finger.exe as a download cradle: finger user@host prints attacker-served text.
-    re.compile(r"\bfinger(\.exe)?\s+\S+@\S+", re.I),
-    # for /f ... in ('<command>') do %x runs whatever the inner command prints.
-    re.compile(r"\bfor\s+/f\b.{0,200}\bin\s*\(\s*'.{0,300}'\s*\)\s*do\s+%%?\w", re.I | re.S),
-    # cmd started minimised or via %COMSPEC% so no window flashes up.
-    re.compile(r"\bstart\s+(\"[^\"]*\"\s+)?/min\b", re.I),
-    re.compile(r"%comspec%\s*/[ck]\b", re.I),
-]
-# DNS-retrieval cradle (DE-CFX-009): nslookup / Resolve-DnsName whose answer is run as
-# the next stage. The execution sink is required: a plain lookup, or one filtered with
-# findstr, is a troubleshooting snippet.
-_DNS_CRADLE = re.compile(
-    r"\b(nslookup|resolve-dnsname)\b.{0,300}?"
-    r"(\|\s*(iex|invoke-expression|cmd|powershell)\b|\biex\b|invoke-expression"
-    r"|\bdo\s+(call\s+)?%%?\w)",
-    re.I | re.S,
+_CLICKFIX_FETCH_RUN = S.bind(globals(), "_CLICKFIX_FETCH_RUN", "clickfix.fetch_and_run", S.patterns)
+_CLICKFIX_UNAMBIGUOUS = S.bind(
+    globals(), "_CLICKFIX_UNAMBIGUOUS", "clickfix.unambiguous_traits", S.patterns
 )
-_CLICKFIX_UNAMBIGUOUS.append(_DNS_CRADLE)
-# CrashFix (DE-CFX-010) copies finger.exe under another name (ct.exe) to dodge
-# command-line rules on "finger", then pipes <name>.exe user@host into cmd.
-_CLICKFIX_UNAMBIGUOUS += [
-    re.compile(r"\bcopy\b[^&|\n]{0,160}\bfinger(\.exe)?\b[^&|\n]{0,160}\\\w+\.exe\b", re.I),
-    re.compile(r"\b(?!finger\b)\w{1,12}\.exe\s+[\w.-]+@[\w.-]+\s*\|\s*cmd\b", re.I),
-]
-_CLICKFIX = _CLICKFIX_FETCH_RUN + _CLICKFIX_UNAMBIGUOUS
+_DNS_CRADLE = S.bind(globals(), "_DNS_CRADLE", "clickfix.dns_cradle")
 _DNS_CRADLE_ARGS = re.compile(r"\b(?:nslookup|resolve-dnsname)\b([^|\n;&)]*)", re.I)
 _DNS_VALUE_FLAGS = {"-type", "-server", "-dnsonly"}  # flags whose value is the next token
 _IPV4 = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 _DNS_NAME = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,63}", re.I)
-# Where real install one-liners fetch from (R-01): host -> allowed path prefixes, or
-# None for any path on that host. Analyst-curated module data, shaped so it can become a
-# feed. raw.githubusercontent.com serves anything, so only named installer repos count.
-INSTALLER_SOURCES: dict[str, tuple[str, ...] | None] = {
-    "brew.sh": None,
-    "astral.sh": None,
-    "bun.sh": None,
-    "get.scoop.sh": None,
-    "community.chocolatey.org": ("/install.ps1",),
-    "chocolatey.org": ("/install.ps1",),
-    "sh.rustup.rs": None,
-    "win.rustup.rs": None,
-    "deno.land": ("/install.sh", "/install.ps1", "/x/install/"),
-    "get.docker.com": None,
-    "get.pnpm.io": None,
-    "install.python-poetry.org": None,
-    "pyenv.run": None,
-    "raw.githubusercontent.com": (
-        "/Homebrew/install/", "/nvm-sh/nvm/", "/ohmyzsh/ohmyzsh/", "/pyenv/pyenv-installer/",
-    ),
-}  # fmt: skip
+
+
+def _installer_sources(table: dict[str, tuple[str, ...]]) -> dict[str, tuple[str, ...] | None]:
+    """Host -> allowed path prefixes; an empty list means any path on that host."""
+    return {host.lower(): (tuple(p) or None) for host, p in table.items()}
+
+
+INSTALLER_SOURCES = S.bind(
+    globals(), "INSTALLER_SOURCES", "clickfix.installer_sources", _installer_sources
+)
 # Whole URL tokens (parsed with urlsplit, not a host regex): with a scheme, or the bare
 # argument of a fetch verb.
 _CRADLE_SOURCE = re.compile(
@@ -211,57 +123,16 @@ def _cradle_sources(plain: str) -> str:
     return verdict
 
 
-# Separate test on the raw text: a one-line command padded with a long run of spaces or
-# dashes, which pushes the real command out of view in the Run dialog and leaves only a
-# decoy ("P_u_s_h t_h_e E_n_t_e_r k_e_y", "I am not a robot") visible.
-_PADDED_DECOY = re.compile(r"^[^\n]*\S([ \t]{12,}|[-_=]{10,})[^\n]*[A-Za-z][^\n]*$")
-# Heavy caret escaping inside a word (f^^i^^n^^g^^e^^r): no copyable docs command does this.
-_CARET_OBFUSCATION = re.compile(r"(\w\^+){3,}\w")
-_RUN_DIALOG = re.compile(
-    r"(win(dows)?(\s*(key|logo))?\s*\+\s*r\b|⊞|press\s+(and\s+hold\s+)?(the\s+)?windows\s+"
-    r"(key|button)|"
-    r"open\s+(the\s+)?(run\s+dialog|terminal|powershell|windows\s+terminal)|"
-    r"powershell\s*\(\s*admin\s*\)|win\s*\+\s*x|cmd\s*\+\s*space|command\s*\+\s*space|"
-    r"ctrl\s*\+\s*l\b|explorer('s)?\s+address\s+bar|file\s+explorer)",
-    re.I,
-)
-_PASTE = re.compile(r"(ctrl|cmd|⌘)\s*\+\s*v\b|\bpaste\b|لصق", re.I)
-# Why a page says you must pay: the smishing pretexts behind most card-harvesting pages
-# (parcel redelivery and customs fees, traffic fines, tolls), in English and Arabic.
-_PAYMENT_PRETEXT = re.compile(
-    r"\b(re-?deliver(y|ed)?|delivery (fee|charge)|shipping (fee|charge)|customs (fee|duty|"
-    r"charges?|clearance)|(package|parcel|shipment) (is |has been )?(on hold|held|pending|"
-    r"suspended|returned)|unpaid (toll|fine|invoice|fee)|traffic (violation|fine)s?|"
-    r"outstanding (fine|balance|payment)|toll (payment|due|balance)|pay (the |a )?(small )?"
-    r"(fee|fine)|address (incomplete|incorrect))\b"
-    r"|رسوم (التوصيل|الشحن|التخزين|جمركية|الجمارك|إعادة التوصيل|اعادة التوصيل)|شحنتك|طردك"
-    r"|(الشحنة|الطرد|طلبك) (معلق|معلقة|متوقف|متوقفة)|مخالف(ة|ات) مروري(ة|ه)"
-    r"|سداد (المخالفة|المخالفات|الرسوم|الغرامة)|دفع (الرسوم|المخالفة|الغرامة)|عنوان غير مكتمل",
-    re.I,
-)
-# Page titles that turn a brand mention into a lure.
-_TITLE_LURE = re.compile(
-    r"\b(log ?in|sign ?in|wallet|verify|verification|account|support|secure|recovery|restore|"
-    r"unlock|update|connect|official|claim|refund|payment)\b"
-    r"|تسجيل الدخول|الدخول|تحقق|توثيق|حسابك|تحديث|استرداد|سداد",
-    re.I,
-)
+_PADDED_DECOY = S.bind(globals(), "_PADDED_DECOY", "clickfix.padded_decoy")
+_CARET_OBFUSCATION = S.bind(globals(), "_CARET_OBFUSCATION", "clickfix.caret_obfuscation")
+_RUN_DIALOG = S.bind(globals(), "_RUN_DIALOG", "clickfix.run_dialog")
+_PASTE = S.bind(globals(), "_PASTE", "clickfix.paste")
+_PAYMENT_PRETEXT = S.bind(globals(), "_PAYMENT_PRETEXT", "lures.payment_pretext")
+_TITLE_LURE = S.bind(globals(), "_TITLE_LURE", "lures.title_lure")
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,24}\b")
-_OBFUSCATION_SIGNALS = [
-    (
-        "eval_decode",
-        re.compile(
-            r"eval\s*\(\s*(atob|unescape|decodeURIComponent|String\.fromCharCode)\s*\(", re.I
-        ),
-        2,
-    ),
-    ("function_decode", re.compile(r"new\s+Function\s*\(\s*(atob|unescape)", re.I), 2),
-    ("packer", re.compile(r"eval\(function\(p,a,c,k,e,[rd]\)", re.I), 3),
-    ("document_write_unescape", re.compile(r"document\.write\s*\(\s*unescape\s*\(", re.I), 2),
-    ("fromcharcode_array", re.compile(r"fromCharCode\s*\((\s*\d+\s*,){20,}", re.I), 1),
-    ("long_base64", re.compile(r"[A-Za-z0-9+/]{2000,}={0,2}"), 1),
-    ("hex_escapes", re.compile(r"(\\x[0-9a-f]{2}){200,}", re.I), 1),
-]
+_OBFUSCATION_SIGNALS = S.bind(
+    globals(), "_OBFUSCATION_SIGNALS", "scripts.obfuscation_signals", S.scored_patterns
+)
 
 
 @dataclass
@@ -333,7 +204,7 @@ def contacted_hosts(data: CaptureData) -> list[str]:
     return sorted(h for h in hosts if h)
 
 
-_OBFUSCATOR_IO = re.compile(r"\b_0x[a-f0-9]{4,6}\b", re.I)
+_OBFUSCATOR_IO = S.bind(globals(), "_OBFUSCATOR_IO", "scripts.obfuscator_io_names")
 
 
 def chain_hosts(data: CaptureData) -> list[str]:
@@ -481,9 +352,7 @@ def _downloads(data: CaptureData) -> dict[str, Any]:
     }
 
 
-# Cache smuggling (L2-NEW-1): a response typed image/* whose body is an archive or
-# executable. The browser caches it silently; a later File Explorer step reads it back.
-_SMUGGLE_MAGIC = {"zip", "rar", "7z", "pe", "cab", "ole"}
+_SMUGGLE_MAGIC = S.bind(globals(), "_SMUGGLE_MAGIC", "downloads.smuggled_content_types", S.as_set)
 
 
 def _mislabeled_images(data: CaptureData) -> list[dict[str, Any]]:
@@ -512,9 +381,7 @@ def _mislabeled_images(data: CaptureData) -> list[dict[str, Any]]:
     return out
 
 
-_ARCHIVE_PASSWORD = re.compile(
-    r"(?i)(password|pass|pwd|كلمة\s*(?:ال)?مرور)\s*[:：=]?\s*[`'\"]?([^\s`'\"<>]{3,24})",
-)
+_ARCHIVE_PASSWORD = S.bind(globals(), "_ARCHIVE_PASSWORD", "downloads.archive_password_on_page")
 
 
 # How far into a (decompressed) tar the download listing reads.
@@ -606,6 +473,7 @@ def _clickfix_traits(text: str) -> str | None:
         or _PADDED_DECOY.search(text.strip())
         or _is_filefix(text)
         or any(p.search(plain) for p in _CLICKFIX_UNAMBIGUOUS)
+        or _DNS_CRADLE.search(plain)
         or any(p.search(plain) for p in _MAC_CLICKFIX)
     ):
         return "unambiguous"
@@ -705,23 +573,10 @@ def _clipboard(data: CaptureData) -> dict[str, Any]:
     }
 
 
-_SUPPORT_PHONE = re.compile(r"(?:\+?\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}\b")
-_SUPPORT_SCARE = re.compile(
-    r"(?i)(microsoft|windows|defender|apple|support|virus|infected|blocked|trojan|"
-    r"spyware|call (us|now|immediately)|do not (restart|shut)|technical support)",
-)
-# "Copy the URL from the address bar and paste it here": the hand-back step of an
-# authorization-code paste-back (ConsentFix / AuthCodeFix, DE-M365-013).
-_PASTE_BACK = re.compile(
-    r"(?i)\b(paste|drag(\s+and\s+drop)?|drop)\b.{0,60}\b(url|link|address(\s+bar)?|"
-    r"authori[sz]ation\s+code|code)\b.{0,40}\b(here|below|back|into|in\s+the\s+(box|field))\b"
-    r"|\bcopy\b.{0,40}\b(url|link|address(\s+bar)?)\b.{0,80}\b(paste|here|below|back)\b",
-)
-_NOTIFY_BAIT = re.compile(
-    r"(?i)(click|press|tap)\s*(the\s*)?[\"'“]?allow[\"'”]?\s*(to|button|if|below)"
-    r"|allow notifications to (continue|verify|watch|download|proceed)"
-    r"|click allow.{0,30}(robot|human|verify)",
-)
+_SUPPORT_PHONE = S.bind(globals(), "_SUPPORT_PHONE", "lures.tech_support_phone")
+_SUPPORT_SCARE = S.bind(globals(), "_SUPPORT_SCARE", "lures.tech_support_scare")
+_PASTE_BACK = S.bind(globals(), "_PASTE_BACK", "lures.paste_back")
+_NOTIFY_BAIT = S.bind(globals(), "_NOTIFY_BAIT", "lures.allow_notifications_bait")
 
 
 def _lure(data: CaptureData) -> dict[str, Any]:
@@ -789,10 +644,7 @@ def _has_text_box(frame: dict[str, Any]) -> bool:
     )
 
 
-# L2-NEW-5: Apps Script web apps run attacker code under a Google host, so brand
-# ownership and a google.com allowlist would vouch for them. Each /macros/s/<id>/exec
-# deployment (and its script.googleusercontent.com sandbox frame) is judged on its own.
-_APPS_SCRIPT_EXEC = re.compile(r"^(/a/[^/]+)?/macros/s/[^/]+/exec\b")
+_APPS_SCRIPT_EXEC = S.bind(globals(), "_APPS_SCRIPT_EXEC", "microsoft.apps_script_exec")
 
 
 def _apps_script(data: CaptureData) -> dict[str, Any]:
@@ -939,32 +791,16 @@ def _suspicious_hidden(frame: dict[str, Any], data: CaptureData) -> list[str]:
     return out
 
 
-_LOGIN_FIELD = re.compile(r"e-?mail|login|user|account|loginfmt|identifier|phone", re.I)
-_SIGN_IN = re.compile(
-    r"\b(sign[\s-]?in|log[\s-]?in|log[\s-]?on|verify your (identity|account|email)|"
-    r"enter (your )?(password|email)|account (verification|suspended|locked))\b",
-    re.I,
-)
-_NEWSLETTER = re.compile(r"\b(subscribe|newsletter|unsubscribe|mailing list)\b", re.I)
+_LOGIN_FIELD = S.bind(globals(), "_LOGIN_FIELD", "forms.login_field")
+_SIGN_IN = S.bind(globals(), "_SIGN_IN", "forms.sign_in_wording")
+_NEWSLETTER = S.bind(globals(), "_NEWSLETTER", "forms.newsletter_wording")
 
 
-_CARD_FIELD = re.compile(
-    r"card.?(num|no)|cc.?(num|no)|credit.?card|debit.?card|\bpan\b|cvv|cvc|csc|"
-    r"security.?code|exp(iry|iration)?.?(date|month|year|mm|yy)|card.?holder|holder.?name",
-    re.I,
-)
-_OTP_FIELD = re.compile(
-    r"\botp\b|one.?time|verification.?code|verify.?code|sms.?code|auth.?code|\bpin\b|pincode|"
-    r"passcode|security.?pin|activation.?code|رمز",
-    re.I,
-)
-_SEED_TEXT = re.compile(
-    r"(seed|recovery|secret|mnemonic|backup|wallet) (phrase|words)|\b(12|24)[- ]word|"
-    r"private key|عبارة الاسترداد|الكلمات السرية",
-    re.I,
-)
+_CARD_FIELD = S.bind(globals(), "_CARD_FIELD", "forms.card_field")
+_OTP_FIELD = S.bind(globals(), "_OTP_FIELD", "forms.otp_field")
+_SEED_TEXT = S.bind(globals(), "_SEED_TEXT", "forms.seed_phrase_wording")
 _TEXT_INPUTS = ("text", "", "search", "tel")
-PROMPT_POINTS = {"password": 30, "payment": 30, "seed": 30, "otp": 25, "username": 15}
+PROMPT_POINTS = S.bind(globals(), "PROMPT_POINTS", "forms.prompt_points", dict)
 
 
 def _prompt_kinds(frame: dict[str, Any]) -> set[str]:
@@ -1167,14 +1003,7 @@ def _hosting_brand_label(data: CaptureData) -> dict[str, Any] | None:
     return None
 
 
-# Favicon services a webmail kit uses to show the icon of the victim's own mail domain,
-# so one page passes for every provider (LR1-04).
-_FAVICON_SERVICE = re.compile(
-    r"^https?://(?:www\.google\.com/s2/favicons\?(?:[^#]*&)?domain(?:_url)?="
-    r"|t\d\.gstatic\.com/faviconV2\?(?:[^#]*&)?url=|icons\.duckduckgo\.com/ip3/"
-    r"|logo\.clearbit\.com/|icon\.horse/icon/)([^&?#]+)",
-    re.I,
-)
+_FAVICON_SERVICE = S.bind(globals(), "_FAVICON_SERVICE", "exfiltration.favicon_service")
 
 
 def _favicon_lookups(data: CaptureData, reqs: list[dict[str, Any]]) -> list[str]:
@@ -1194,148 +1023,37 @@ def _favicon_lookups(data: CaptureData, reqs: list[dict[str, Any]]) -> list[str]
 
 # --- HAR access (pure over the stored HAR) --------------------------------------------
 
-_JSONRPC_METHODS = {"eth_call", "eth_getstorageat", "eth_gettransactionbyhash", "eth_getcode"}
+_JSONRPC_METHODS = S.bind(globals(), "_JSONRPC_METHODS", "web3.jsonrpc_methods", S.as_set)
 _ETH_ADDRESS = re.compile(r"\b0x[0-9a-fA-F]{40}\b")
-# Published malicious EtherHiding contract / deployer addresses (analyst-curated local
-# feed; extend over time). Matched case-insensitively.
-KNOWN_WEB3_ADDRESSES = {
-    "0x8eac3198dd72f3e07108c4c7cff43108ad48a71c",
-    "0xa1decfb75c8c0ca28c10517ce56b710baf727d2e",
-    "0xd71f4cdc84420d2bd07f50787b4f998b4c2d5290",
-}
-_TELEGRAM_BOT = re.compile(
-    r"^/bot(\d{5,})(?::[A-Za-z0-9_-]{30,})?/"
-    r"(sendMessage|sendDocument|sendPhoto|sendMediaGroup|getUpdates|getMe)",
-    re.I,
+KNOWN_WEB3_ADDRESSES = S.bind(
+    globals(), "KNOWN_WEB3_ADDRESSES", "web3.known_bad_addresses", S.as_set
 )
-_DISCORD_WEBHOOK = re.compile(r"^/api/webhooks/(\d{15,22})/[A-Za-z0-9_.-]{20,}", re.I)
-_DISCORD_HOSTS = {"discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com"}
-# Form-backend / no-code collector services a phishing page with no backend posts to
-# (analyst-curated; tune on local data).
-FORM_COLLECTORS = {
-    "formspree.io", "getform.io", "formsubmit.co", "api.web3forms.com", "submit-form.com",
-    "formcarry.com", "api.emailjs.com", "sheetdb.io", "hooks.zapier.com", "webhook.site",
-    "api.jsonbin.io",
-}  # fmt: skip
-# Client-side IP / ASN / geo lookup services used to geofence and spot sandboxes.
-IP_LOOKUP_HOSTS = {
-    "api.ipapi.is", "ipapi.co", "ip-api.com", "ipinfo.io", "ipwho.is", "get.geojs.io",
-    "api.ipify.org", "api.bigdatacloud.net", "ip-info.ff.avast.com", "ipgeolocation.io",
-    "freeipapi.com", "extreme-ip-lookup.com", "ip.sb", "ifconfig.me", "api.db-ip.com",
-    "wtfismyip.com",
-}  # fmt: skip
-# Block-explorer APIs a page can read a dead-drop transaction or token note from
-# (DE-W3B-003, EtherHiding variants querying Ethplorer's free key).
-EXPLORER_API_HOSTS = {
-    "api.ethplorer.io", "api.binplorer.com", "api.blockchair.com", "api.blockcypher.com",
-    "api.etherscan.io", "api.bscscan.com", "api.polygonscan.com", "api.tronscan.org",
-}  # fmt: skip
-# Identity-provider CDNs that serve sign-in branding assets.
-_IDP_CDN = re.compile(
-    r"(^|\.)(aadcdn\.msftauth\.net|aadcdn\.msauth\.net|logincdn\.msauth\.net"
-    r"|[a-z0-9-]+\.oktacdn\.com)$",
-    re.I,
+_TELEGRAM_BOT = S.bind(globals(), "_TELEGRAM_BOT", "exfiltration.telegram_bot")
+_DISCORD_WEBHOOK = S.bind(globals(), "_DISCORD_WEBHOOK", "exfiltration.discord_webhook")
+_DISCORD_HOSTS = S.bind(globals(), "_DISCORD_HOSTS", "exfiltration.discord_hosts", S.as_set)
+FORM_COLLECTORS = S.bind(globals(), "FORM_COLLECTORS", "exfiltration.form_collectors", S.as_set)
+IP_LOOKUP_HOSTS = S.bind(globals(), "IP_LOOKUP_HOSTS", "exfiltration.ip_lookup_hosts", S.as_set)
+EXPLORER_API_HOSTS = S.bind(globals(), "EXPLORER_API_HOSTS", "web3.explorer_api_hosts", S.as_set)
+_IDP_CDN = S.bind(globals(), "_IDP_CDN", "microsoft.idp_cdn")
+MS_ESTS_COOKIES = S.bind(globals(), "MS_ESTS_COOKIES", "microsoft.ests_cookies", S.as_set)
+FIRST_PARTY_MS_APP_IDS = S.bind(
+    globals(), "FIRST_PARTY_MS_APP_IDS", "microsoft.first_party_app_ids", S.as_set
 )
-# Microsoft Entra / ESTS session cookie names an AiTM proxy relays.
-MS_ESTS_COOKIES = {
-    "estsauth", "estsauthpersistent", "estsauthlight", "buid", "fpc", "x-ms-gateway-slice",
-}  # fmt: skip
-# Microsoft first-party OAuth app client ids (a small, common subset; extend as data).
-FIRST_PARTY_MS_APP_IDS = {
-    "29d9ed98-a469-4536-ade2-f981bc1d605e",  # Microsoft Authentication Broker
-    "d3590ed6-52b3-4102-aeff-aad2292ab01c",  # Microsoft Office
-    "1950a258-227b-4e31-a9cf-717495945fc2",  # Azure PowerShell
-    "04b07795-8ddb-461a-bbee-02f9e1bf7b46",  # Azure CLI
-    "14d82eec-204b-4c2f-b7e8-296a70dab67e",  # Microsoft Graph Command Line Tools
-    "de8bc8b5-d9f9-48b1-a8ad-b748da725064",  # Graph Explorer
-    # Microsoft Graph's *resource* app id: never a client_id, kept only so a request
-    # naming it is not mistaken for a third-party app.
-    "00000003-0000-0000-c000-000000000000",
-}
-# Tenant-side check for analysts: a first-party app's service principal is owned by
-# Microsoft's tenant f8cdef31-a31e-4b4a-93e4-5f571e91255a.
-_HIGH_RISK_SCOPES = {
-    "mail.readwrite", "mail.read", "mail.send", "files.readwrite.all", "files.read.all",
-    "sites.readwrite.all", "chat.read", "user.readwrite.all", "directory.readwrite.all",
-    "full_access_as_user", "ews.accessasuser.all",
-}  # fmt: skip
-_MS_AUTH_HOSTS = {"login.microsoftonline.com", "login.microsoft.com", "login.live.com"}
-_MS_AUTH_PATH = re.compile(
-    r"/(common|organizations|consumers|[0-9a-f-]{36}|[a-z0-9.-]+\.onmicrosoft\.com)/"
-    r"(oauth2/(v2\.0/)?authorize|login|getcredentialtype|reprocess|sas/|kmsi|oauth2/deviceauth)"
-    r"|/(ppsecure/post\.srf|login\.srf)",
-    re.I,
-)
-_OAUTH_ERROR = re.compile(
-    r"error=(interaction_required|access_denied|consent_required|login_required)", re.I
-)
-# Microsoft sign-in structural markers (survive text obfuscation).
-_MS_MARKERS = [
-    (
-        "ests_config",
-        re.compile(
-            r"\$Config\s*=.{0,4000}(urlGetCredentialType|sCanaryTokenName|urlMsaSignUp|sCtx)", re.S
-        ),
-    ),
-    ("input_i0116", re.compile(r"\bi011[68]\b")),
-    ("si_button", re.compile(r"\bidSIButton9\b")),
-    ("aadcdn_asset", re.compile(r"aadcdn\.ms(ft)?auth\.net", re.I)),
-    ("ms_login_host", re.compile(r"login\.microsoftonline\.com", re.I)),
-    ("ms_title", re.compile(r"Sign in to your account", re.I)),
-]
-_IPFS_URL = re.compile(
-    r"^https?://[^/]+/ip[fn]s/(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{50,})"
-    r"|^https?://(b[a-z2-7]{50,}|k51[a-z0-9]{50,})\.ip[fn]s\.",
-    re.I,
-)
-# Fake verification / CAPTCHA UI (page context for a ClickFix clipboard command). R-10:
-# the brand words alone (Cloudflare, reCAPTCHA, Ray ID, "security check") are printed by
-# every site behind a real challenge or CDN, so they are evidence only, never the
-# trigger. The trigger is verification wording; lure.fake_captcha additionally needs a
-# copy/paste or press-keys instruction in the same frame.
-_VERIFY_WORDING = re.compile(
-    r"(?i)verify (that )?(you are|you'?re) (a )?human|i'?m not a robot|i am not a robot"
-    r"|verification (id|hash|code|steps?)|prove (that )?you'?re (a )?human"
-    r"|human verification|complete (the )?verification",
-)
-_CAPTCHA_BRAND = re.compile(r"(?i)security check|ray id|recaptcha|cloudflare|turnstile")
-_KEY_INSTRUCTION = re.compile(
-    r"(?i)\bpress\s+(and\s+hold\s+)?(the\s+)?(win(dows)?|ctrl|cmd|command|⌘|enter|"
-    r"keys?)\b|\bcopy\s+(the\s+)?(code|command|text|verification)",
-)
-# Real challenge resources: their presence lowers, not suppresses, the rule.
-_GENUINE_CHALLENGE = re.compile(
-    r"challenges\.cloudflare\.com/turnstile|/cdn-cgi/challenge-platform"
-    r"|www\.google\.com/recaptcha/|www\.recaptcha\.net/recaptcha/|hcaptcha\.com",
-    re.I,
-)
-# Fake browser / software update overlay text.
-_FAKE_UPDATE = re.compile(
-    r"(?i)(update|install) (google )?chrome"
-    r"|(chrome|edge|firefox|safari|browser) (is )?(out of date|outdated|update (required|availab"
-    r"le))"
-    r"|your browser (version )?is (out of date|not supported)",
-)
-_BROWSER_VENDORS = ("google.com", "microsoft.com", "apple.com", "mozilla.org", "opera.com",
-                    "brave.com", "browser-update.org")  # fmt: skip
-# FileFix: a shell command padded with a long whitespace run then a '#' commenting out a
-# decoy Windows file path, so only the path shows in Explorer's address bar.
-_FILEFIX = re.compile(
-    r"(?i)^\s*(powershell|pwsh|cmd|mshta|conhost|curl|rundll32|msiexec)\b.*"
-    r"([ \t  ]{8,}|\^+)#\s*[A-Za-z]:\\.*\.(docx?|pdf|xlsx?|txt|rtf)\s*$",
-    re.S,
-)
-# macOS / Linux terminal ClickFix traits beyond the Windows set in _CLICKFIX.
-_MAC_CLICKFIX = [
-    re.compile(r"\bosascript\b", re.I),
-    re.compile(r"\bxattr\s+-[cdr]\b.{0,80}(chmod\s+\+x|\./)", re.I | re.S),
-    re.compile(r"\bdscl\s+\.\s+-authonly\b", re.I),
-    re.compile(r"\bbase64\s+(-d|--decode|-D)\b[^|\n]{0,80}\|\s*(ba|z)?sh\b", re.I),
-    re.compile(r"\becho\s+[A-Za-z0-9+/=]{40,}\s*\|\s*base64\b", re.I),
-]
-_TERMINAL_CTX = re.compile(
-    r"(?i)(open|launch) terminal|command\s*\+\s*(space|v)|complete .{0,40}in terminal",
-)
+_HIGH_RISK_SCOPES = S.bind(globals(), "_HIGH_RISK_SCOPES", "microsoft.high_risk_scopes", S.as_set)
+_MS_AUTH_HOSTS = S.bind(globals(), "_MS_AUTH_HOSTS", "microsoft.auth_hosts", S.as_set)
+_MS_AUTH_PATH = S.bind(globals(), "_MS_AUTH_PATH", "microsoft.auth_path")
+_OAUTH_ERROR = S.bind(globals(), "_OAUTH_ERROR", "microsoft.oauth_error")
+_MS_MARKERS = S.bind(globals(), "_MS_MARKERS", "microsoft.login_page_markers", S.named_patterns)
+_IPFS_URL = S.bind(globals(), "_IPFS_URL", "web3.ipfs_url")
+_VERIFY_WORDING = S.bind(globals(), "_VERIFY_WORDING", "clickfix.verify_wording")
+_CAPTCHA_BRAND = S.bind(globals(), "_CAPTCHA_BRAND", "clickfix.captcha_brand")
+_KEY_INSTRUCTION = S.bind(globals(), "_KEY_INSTRUCTION", "clickfix.key_instruction")
+_GENUINE_CHALLENGE = S.bind(globals(), "_GENUINE_CHALLENGE", "clickfix.genuine_challenge")
+_FAKE_UPDATE = S.bind(globals(), "_FAKE_UPDATE", "clickfix.fake_browser_update")
+_BROWSER_VENDORS = S.bind(globals(), "_BROWSER_VENDORS", "clickfix.browser_vendors")
+_FILEFIX = S.bind(globals(), "_FILEFIX", "clickfix.filefix")
+_MAC_CLICKFIX = S.bind(globals(), "_MAC_CLICKFIX", "clickfix.mac_linux_traits", S.patterns)
+_TERMINAL_CTX = S.bind(globals(), "_TERMINAL_CTX", "clickfix.terminal_context")
 
 
 def _har_requests(data: CaptureData) -> list[dict[str, Any]]:
@@ -1407,15 +1125,10 @@ def _exfil(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-_NUMERIC_PHP = re.compile(r"/\d{5,6}\.php$")
+_NUMERIC_PHP = S.bind(globals(), "_NUMERIC_PHP", "exfiltration.numeric_php")
 
 
-# L2-NEW-4 browser-in-the-browser: a sign-in URL drawn as element text (a fake address
-# bar), not as a link href, on a page that also has a live password input.
-_FAKE_ADDRESS_BAR = re.compile(
-    r"(?i)>\s*(?:\U0001F512\s*)?(https://(?:login\.microsoftonline\.com|login\.live\.com"
-    r"|login\.microsoft\.com|accounts\.google\.com|appleid\.apple\.com)/[^<\s]{0,300})\s*<"
-)
+_FAKE_ADDRESS_BAR = S.bind(globals(), "_FAKE_ADDRESS_BAR", "microsoft.fake_address_bar")
 _PASSWORD_INPUT = re.compile(r"(?i)<input\b[^>]*\btype\s*=\s*['\"]?password")
 
 
@@ -1545,12 +1258,7 @@ def _idp(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
-# An Entra authorize URL written into a page (link, inline script, window.open target).
-_AUTHORIZE_IN_TEXT = re.compile(
-    r"https:(?://|\\/\\/)login\.microsoft(?:online)?\.com(?:/|\\/)[^\s\"'<>]{0,200}?"
-    r"oauth2(?:/|\\/)(?:v2\.0(?:/|\\/))?authorize\?[^\s\"'<>]{1,2000}",
-    re.I,
-)
+_AUTHORIZE_IN_TEXT = S.bind(globals(), "_AUTHORIZE_IN_TEXT", "microsoft.authorize_url_in_page")
 
 
 def _url_sources(
@@ -1602,27 +1310,10 @@ def _url_sources(
     return out
 
 
-# Microsoft device-code sign-in entry points (DE-M365-004).
-_DEVICE_LOGIN = re.compile(
-    r"https?:(?://|\\/\\/)(?:www\.)?(?:microsoft\.com|aka\.ms)(?:/|\\/)devicelogin\b"
-    r"|https?:(?://|\\/\\/)login\.microsoft(?:online)?\.com(?:/|\\/)[^\s\"'<>]{0,80}?"
-    r"oauth2(?:/|\\/)deviceauth\b",
-    re.I,
-)
-_CODE_WORDING = re.compile(
-    r"(?i)\b(enter|use|type|input|copy)\s+(this|the|your|following)?\s*(one-?time\s+)?code\b"
-    r"|\b(device|authentication|sign-?in|verification)\s+code\b",
-)
-# A displayed device code (case-sensitive): 8-9 upper-case letters/digits, optional
-# dash, with at least one digit and one letter.
-_DEVICE_CODE_TOKEN = re.compile(
-    r"\b(?=[A-Z0-9-]*\d)(?=[A-Z0-9-]*[A-Z])[A-Z0-9]{4}-?[A-Z0-9]{4,5}\b"
-)
-_SHARE_PRETEXT = re.compile(
-    r"(?i)\bshared\s+(a\s+|the\s+)?(document|file|folder)\b|\bonedrive\b|\bsharepoint\b"
-    r"|\bview\s+(the\s+)?(document|file)\b|\bsecure\s+(document|message)\b|\be-?fax\b"
-    r"|\bvoice\s?mail\b",
-)
+_DEVICE_LOGIN = S.bind(globals(), "_DEVICE_LOGIN", "microsoft.device_login")
+_CODE_WORDING = S.bind(globals(), "_CODE_WORDING", "microsoft.code_wording")
+_DEVICE_CODE_TOKEN = S.bind(globals(), "_DEVICE_CODE_TOKEN", "microsoft.device_code_token")
+_SHARE_PRETEXT = S.bind(globals(), "_SHARE_PRETEXT", "lures.share_pretext")
 
 
 def _device_code_handoff(
@@ -1856,19 +1547,12 @@ def _web3(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
-_WALLET_CONNECTOR_LIBS = {"walletconnect", "web3modal", "wagmi", "rainbowkit"}
-_WALLET_LIBS = _WALLET_CONNECTOR_LIBS | {"web3", "ethers"}
-_DRAINER_WORDING = re.compile(
-    r"(?i)\bairdrop\b|\bclaim\s+(your\s+)?(free\s+)?(tokens?|rewards?|allocation|nfts?)\b"
-    r"|\b(verify|validate|synchroni[sz]e|rectify|migrate)\s+(your\s+)?wallet\b"
-    r"|\bwallet\s+(verification|validation|synchroni[sz]ation)\b",
+_WALLET_CONNECTOR_LIBS = S.bind(
+    globals(), "_WALLET_CONNECTOR_LIBS", "web3.wallet_connector_libraries", S.as_set
 )
-# A page that offers to connect a wallet is a dApp (or a drainer lure, DE-W3B-006), not
-# an EtherHiding loader on an unrelated site.
-_DAPP_UI = re.compile(
-    r"(?i)\bconnect(\s+(your|a))?\s+wallet\b|\bwalletconnect\b"
-    r"|\bconnect\s+(to\s+)?(metamask|phantom|coinbase\s+wallet)\b",
-)
+_WALLET_LIBS = S.bind(globals(), "_WALLET_LIBS", "web3.wallet_libraries", S.as_set)
+_DRAINER_WORDING = S.bind(globals(), "_DRAINER_WORDING", "web3.drainer_wording")
+_DAPP_UI = S.bind(globals(), "_DAPP_UI", "web3.dapp_ui")
 
 
 def _web3_derived(
@@ -1968,45 +1652,16 @@ def _ip_lookups(reqs: list[dict[str, Any]]) -> list[str]:
     return sorted({r["host"] for r in reqs if r["host"] in IP_LOOKUP_HOSTS})
 
 
-# Browser-based local port scanning: a page opens WebSockets, fetches or images, or
-# WebRTC TURN/STUN servers, against many ports on 127.0.0.1 or the LAN to see what is
-# listening (remote-access tools in particular). Anti-fraud scripts (ThreatMetrix, as
-# on eBay) do it to spot remote-controlled sessions; scam and recon pages do it too.
-# The SSRF guard blocks every attempt, which leaves it in result["blocked"]; TURN/STUN
-# servers never pass the request filter, so the page hook records them (result["webrtc"]).
-_REMOTE_ACCESS_PORTS = {
-    22: "ssh",
-    23: "telnet",
-    3389: "rdp",
-    4899: "radmin",
-    5650: "remote-utilities",
-    5800: "vnc",
-    5900: "vnc",
-    5901: "vnc",
-    5902: "vnc",
-    5903: "vnc",
-    5931: "ammyy",
-    5938: "teamviewer",
-    5939: "teamviewer",
-    6129: "dameware",
-    6568: "anydesk",
-    7070: "anydesk",
-}
-# Desktop apps whose own sites look for their local helper on a fixed port range.
-_LOCAL_APP_PORTS = {"discord-rpc": range(6463, 6473)}
-# Anti-fraud device profiling that scans local ports by design. ThreatMetrix is often
-# served from a first-party CNAME, so its /fp/ tag paths count as well as its own host.
-_FRAUD_VENDOR_SCRIPTS = {
-    "threatmetrix": re.compile(
-        r"(?i)^https?://[^/]*online-metrix\.net/|/fp/(?:tags|check|clear|ls_fp)\.js|"
-        r"[?&]org_id=[^&]+&(?:[^&]+&)*session_id="
-    ),
-}
-# The ports each profiler is known to probe (ThreatMetrix: loopback WebSockets).
-_FRAUD_VENDOR_PORTS = {
-    "threatmetrix": {3389, 5279, 5900, 5901, 5902, 5903, 5931, 5938, 5939, 5944, 5950,
-                     6039, 6040, 7070, 63333},
-}  # fmt: skip
+_REMOTE_ACCESS_PORTS = S.bind(
+    globals(), "_REMOTE_ACCESS_PORTS", "network.remote_access_ports", S.int_keys
+)
+_LOCAL_APP_PORTS = S.bind(globals(), "_LOCAL_APP_PORTS", "network.local_app_ports", S.table_of_sets)
+_FRAUD_VENDOR_SCRIPTS = S.bind(
+    globals(), "_FRAUD_VENDOR_SCRIPTS", "network.fraud_vendor_scripts", dict
+)
+_FRAUD_VENDOR_PORTS = S.bind(
+    globals(), "_FRAUD_VENDOR_PORTS", "network.fraud_vendor_ports", S.table_of_sets
+)
 
 
 def _fraud_vendor(urls: list[str]) -> str | None:
@@ -2109,10 +1764,7 @@ def _final_ipfs(final_url: str | None) -> dict[str, str] | None:
     return {"url": final_url} if final_url and _IPFS_URL.search(final_url) else None
 
 
-# Cloudflare's block page for a hostname it has confirmed as phishing or malware. The
-# bypass form on the site's own /cdn-cgi/ path is the marker; the wording alone is what
-# an article about these warnings would contain (LR1-05).
-_ABUSE_WARNING = re.compile(r"(?i)\bsuspected\s+(phishing|malware)\b")
+_ABUSE_WARNING = S.bind(globals(), "_ABUSE_WARNING", "lures.abuse_warning")
 
 
 def _abuse_interstitial(data: CaptureData, final_host: str) -> dict[str, str] | None:
@@ -2152,12 +1804,7 @@ def _fake_captcha(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, An
     }
 
 
-# CrashFix / fake crash-repair popup (DE-CFX-010): "browser stopped abnormally / security
-# issues detected", then a "repair" command to paste.
-_CRASH_REPAIR = re.compile(
-    r"(?i)\bbrowser (has )?(stopped|crashed)\b|stopped abnormally|security issues? detected"
-    r"|\brepair (your )?(browser|chrome|edge)\b|\bbrowser (repair|recovery) (tool|command)\b",
-)
+_CRASH_REPAIR = S.bind(globals(), "_CRASH_REPAIR", "clickfix.crash_repair")
 
 
 def _crash_repair(data: CaptureData) -> list[str]:
@@ -2171,14 +1818,8 @@ def _crash_repair(data: CaptureData) -> list[str]:
     return sorted(set(out))[:10]
 
 
-# L2-NEW-3: a full-screen fake OS update (JackFix): update-in-progress wording and a
-# progress percentage on the same non-vendor page.
-_FAKE_OS_UPDATE = re.compile(
-    r"(?i)\b(working on|installing|configuring)\s+(windows\s+)?updates?\b"
-    r"|\bdo\s+not\s+(turn\s+off|switch\s+off|shut\s+down|restart)\s+(your\s+)?(computer|pc|device)\b"
-    r"|\bcritical\s+(security\s+)?updates?\b|\bwindows\s+update\b",
-)
-_PROGRESS_PERCENT = re.compile(r"\b\d{1,3}\s?%(\s*complete)?")
+_FAKE_OS_UPDATE = S.bind(globals(), "_FAKE_OS_UPDATE", "clickfix.fake_os_update")
+_PROGRESS_PERCENT = S.bind(globals(), "_PROGRESS_PERCENT", "clickfix.progress_percent")
 
 
 def _fake_os_update(data: CaptureData) -> list[str]:
@@ -2203,39 +1844,10 @@ def _fake_update(data: CaptureData) -> list[str]:
     return sorted(set(out))[:10]
 
 
-_LIBRARY_PATTERNS = [
-    ("jquery", re.compile(r"/jquery[/-]v?(\d+\.\d+\.\d+)", re.I)),
-    ("crypto-js", re.compile(r"crypto-js[@/](\d+\.\d+\.\d+)", re.I)),
-    ("randexp", re.compile(r"randexp[@/](\d+\.\d+\.\d+)", re.I)),
-    ("socket.io", re.compile(r"socket\.io[@/](\d+\.\d+\.\d+)", re.I)),
-    # Wallet-connector UI kits (a dApp, not a dead-drop loader); before web3/ethers, since
-    # they bundle those names in their paths.
-    ("walletconnect", re.compile(r"walletconnect[^/]*[@/]v?(\d+\.\d+\.\d+)?", re.I)),
-    ("web3modal", re.compile(r"web3modal[@/]v?(\d+\.\d+\.\d+)?", re.I)),
-    ("wagmi", re.compile(r"/wagmi[@/]v?(\d+\.\d+\.\d+)?", re.I)),
-    ("rainbowkit", re.compile(r"rainbow-me/rainbowkit[@/]v?(\d+\.\d+\.\d+)?", re.I)),
-    ("web3", re.compile(r"/web3(?:\.min)?\.js|web3[@/](\d+\.\d+\.\d+)", re.I)),
-    ("ethers", re.compile(r"ethers[@/.-]?v?(\d+\.\d+\.\d+)?", re.I)),
-]
-# Decoy destinations a cloaking page bounces to after a failed sandbox / bot check.
-_DECOY_HOST = re.compile(
-    r"(^|\.)(google\.[a-z.]+|wikibooks\.org|wikipedia\.org|ebay\.com|booking\.com|"
-    r"office\.com|microsoft\.com)$",
-    re.I,
-)
-# Trusted redirector / open-redirect wrappers abused to launder a lure URL.
-_TRUSTED_REDIRECTOR = re.compile(
-    r"google\.[a-z.]+/(amp/s/|url\?|aclk)|googleadservices\.com/pagead/aclk|youtube\.com/redirect"
-    r"|l\.facebook\.com/l\.php|/t\.co/|bit\.ly/|tinyurl\.com/|is\.gd/|serving-sys\.com"
-    r"|safelinks\.protection\.outlook\.com|urldefense\.com|mimecastprotect\.com",
-    re.I,
-)
-# CAPTCHA / antibot challenge resources, and their result-field names.
-_CHALLENGE = re.compile(
-    r"challenges\.cloudflare\.com/turnstile|/cdn-cgi/challenge-platform|www\.google\.com/recaptcha"
-    r"|www\.recaptcha\.net/recaptcha|hcaptcha\.com|cf-turnstile-response|g-recaptcha-response",
-    re.I,
-)
+_LIBRARY_PATTERNS = S.bind(globals(), "_LIBRARY_PATTERNS", "scripts.libraries", S.named_patterns)
+_DECOY_HOST = S.bind(globals(), "_DECOY_HOST", "network.cloaking_decoy_hosts")
+_TRUSTED_REDIRECTOR = S.bind(globals(), "_TRUSTED_REDIRECTOR", "network.trusted_redirectors")
+_CHALLENGE = S.bind(globals(), "_CHALLENGE", "network.antibot_challenge")
 
 
 def _requests_summary(data: CaptureData) -> dict[str, Any]:
@@ -2248,11 +1860,7 @@ def _requests_summary(data: CaptureData) -> dict[str, Any]:
 
 
 _SCRIPT_POST_TYPES = ("fetch", "xhr", "ping", "websocket")
-# A request body carrying a credential field (form-encoded or JSON key).
-_CREDENTIAL_BODY = re.compile(
-    r"(?i)(^|[&{,\s\"'])(pw|pass(word|wd)?|pwd|passcode|passwd|loginfmt|credential|secret)"
-    r"[\"']?\s*[:=]",
-)
+_CREDENTIAL_BODY = S.bind(globals(), "_CREDENTIAL_BODY", "forms.credential_body")
 
 
 _B64_TOKEN = re.compile(r"[A-Za-z0-9+/_-]{16,}={0,2}")
@@ -2374,12 +1982,8 @@ def _entropy(s: str) -> float:
     return round(-sum(n / len(s) * math.log2(n / len(s)) for n in counts.values()), 2)
 
 
-# Google Tag Manager compiles custom-JS variables and custom-HTML tags through eval; the
-# compiled code calls google_tag_manager["rm"]["<container>"](n). Only readable tag code
-# is let off: a sample that also carries a long encoded run, \x escapes or obfuscator.io
-# names still counts, so the marker cannot be used as a wrapper for packed code (LR2-01).
-_TAG_MANAGER_EVAL = re.compile(r"""google_tag_manager\[\s*["']rm["']\s*\]\s*\[\s*["']\d+["']""")
-_PACKED_RUN = re.compile(r"[A-Za-z0-9+/=]{200,}|(?:\\x[0-9a-f]{2}){40,}", re.I)
+_TAG_MANAGER_EVAL = S.bind(globals(), "_TAG_MANAGER_EVAL", "scripts.tag_manager_eval")
+_PACKED_RUN = S.bind(globals(), "_PACKED_RUN", "scripts.packed_run")
 
 
 def _tag_manager_code(code: str) -> bool:
@@ -2435,17 +2039,10 @@ def _jsapi_facts(data: CaptureData) -> dict[str, Any]:
     }
 
 
-# L2-NEW-6: a page that opens Windows search (search-ms:) or a WebDAV share on a remote
-# host, so Explorer shows the attacker's files as if they were local. The route layer
-# blocks non-http(s) schemes, so the attempt lands in `blocked`; links, meta refresh and
-# the HTML are read too. Plain "search:" needs a query/location to tell it from a label.
-_PROTO_INLINE = re.compile(r"(?i)\b(?:search-ms|ms-search):[^\s\"'<>]{1,1000}")
-_WEBDAV_UNC = re.compile(r"(?i)\\\\([a-z0-9.-]+)@ssl\\davwwwroot|//([a-z0-9.-]+)@ssl/davwwwroot")
-_PROTO_LOCATION = re.compile(r"(?i)location:\s*(?:\\\\|//|https?://)?([a-z0-9.-]+\.[a-z]{2,})")
-_DOC_PRETEXT = re.compile(
-    r"(?i)\b(invoice|remittance|purchase\s+order|payment\s+advice|statement|receipt|"
-    r"contract|scanned\s+document|your\s+(document|file)s?)\b"
-)
+_PROTO_INLINE = S.bind(globals(), "_PROTO_INLINE", "network.search_ms_link")
+_WEBDAV_UNC = S.bind(globals(), "_WEBDAV_UNC", "network.webdav_unc")
+_PROTO_LOCATION = S.bind(globals(), "_PROTO_LOCATION", "network.search_location")
+_DOC_PRETEXT = S.bind(globals(), "_DOC_PRETEXT", "lures.document_pretext")
 
 
 def _protocol_target(raw: str) -> bool:
