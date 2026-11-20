@@ -40,7 +40,7 @@ async function feeds() {
   if (!res.ok) { panel.replaceChildren(empty(res.error)); return; }
   panel.replaceChildren(
     el('div', { className: 'row' }, el('h2', { className: 'section-title', textContent: 'Threat feeds' }), btn('Refresh', feeds)),
-    el('p', { className: 'small muted', textContent: 'A run that fails or would drop more than 90% of rows is rejected and the previous data stays active. Check each feed\'s terms before enabling it in production.' }),
+    el('p', { className: 'small muted', textContent: 'The sandbox rejects a run that fails or would drop more than 90% of rows. The previous data then stays active. Check each feed\'s terms before enabling it in production.' }),
     table(['Feed', 'Kind', 'Last success', 'Rows', 'Active', 'Last run', 'Licence', ''], res.data.map((f) => {
       const run = f.last_run;
       const toggle = btn(f.enabled ? 'Disable' : 'Enable', () => act(Api.patch(`/v1/feeds/${f.id}`, { enabled: !f.enabled }), null, feeds));
@@ -132,8 +132,8 @@ function ruleEditor(existing) {
       el('input', { name: 'description', placeholder: 'Description', size: 40, value: r ? r.description : '' })),
     el('textarea', { name: 'body', className: 'code-input', value: r ? r.body : sample }),
     el('p', { className: 'small muted', textContent: r
-      ? (r.source === 'builtin' ? 'Editing a built-in rule: the edit is kept across Sandboxer updates until you use "Revert to built-in". Test before saving; saving builds a new bundle.' : 'Test before saving; saving builds a new bundle.')
-      : 'Behaviour rules read the facts stored with each analysis (see a report\'s "facts" in its JSON export). Test before saving: new rules are saved disabled.' }),
+      ? (r.source === 'builtin' ? 'You are editing a built-in rule. Sandboxer updates keep the edit until you click "Revert to built-in". Test the rule before you save it. When you save the rule, Sandboxer builds a new bundle.' : 'Test the rule before you save it. When you save the rule, Sandboxer builds a new bundle.')
+      : 'Behaviour rules read the facts stored with each analysis (see a report\'s "facts" in its JSON export). Test a rule before you save it. A new rule is disabled when you save it.' }),
     el('div', { className: 'footer-actions' },
       btn('Test against recent analyses', () => testRule(form, r)),
       el('button', { className: 'copy-btn', textContent: r ? 'Save' : 'Save as disabled' }), btn('Back', r ? () => viewRule(r.id) : rules)),
@@ -391,7 +391,7 @@ async function indicators() {
   panel.replaceChildren(
     el('h2', { className: 'section-title', textContent: 'Indicator lookup' }), lookup, lookupOut,
     el('h2', { className: 'section-title', textContent: 'Local suppressions' }),
-    el('p', { className: 'small muted', textContent: 'Suppressed indicators are excluded from matching and survive feed updates.' }), suppress,
+    el('p', { className: 'small muted', textContent: 'Matching ignores suppressed indicators. A suppression survives feed updates.' }), suppress,
     sup.ok && sup.data.length ? table(['Type', 'Value', 'Reason', 'By', ''], sup.data.map((s) => el('tr', {},
       el('td', { textContent: s.type }), el('td', { className: 'monospace small', textContent: s.value }), el('td', { className: 'small', textContent: s.reason }),
       el('td', { className: 'small', textContent: `${s.by} · ${Api.fmtTime(s.at)}` }),
@@ -419,7 +419,7 @@ async function brands() {
     act(Api.put('/v1/brands', { name: f.name, keywords: split(f.keywords), domains: split(f.domains) }), 'Saved', brands);
   });
   panel.replaceChildren(
-    el('h2', { className: 'section-title', textContent: 'Brands' }), el('p', { className: 'small muted', textContent: 'A page that shows a brand and asks for credentials, but is not on one of its domains, is flagged as impersonation. Domains cover subdomains; a bare label (google) is a brand TLD; label.* covers country domains.' }), form,
+    el('h2', { className: 'section-title', textContent: 'Brands' }), el('p', { className: 'small muted', textContent: 'A page that shows a brand and asks for credentials, but is not on one of its domains, counts as impersonation. Domains cover subdomains. A bare label (google) is a brand TLD. label.* covers country domains.' }), form,
     table(['Brand', 'Keywords', 'Legitimate domains', ''], res.data.map((b) => el('tr', {},
       el('td', { textContent: b.name }), el('td', { className: 'small', textContent: b.keywords.join(', ') }),
       el('td', { className: 'small monospace', textContent: b.domains.join(', ') }),
@@ -442,7 +442,7 @@ async function clients() {
   const showSecret = (data) => {
     if (!data || (!data.token && !data.webhook_secret)) return;
     secretOut.replaceChildren(el('div', { className: 'secret-box small' },
-      el('strong', { textContent: 'Copy now; this is shown once. ' }),
+      el('strong', { textContent: 'Copy it now. The page shows it only once. ' }),
       data.token ? el('div', {}, 'Token: ', el('code', { textContent: data.token })) : null,
       data.webhook_secret ? el('div', {}, 'Webhook secret: ', el('code', { textContent: data.webhook_secret })) : null));
   };
@@ -477,7 +477,7 @@ async function config() {
   const { values, defaults } = res.data;
   panel.replaceChildren(
     el('h2', { className: 'section-title', textContent: 'Runtime configuration' }),
-    el('p', { className: 'small muted', textContent: 'Changes take effect immediately everywhere and are audited. Values are JSON.' }),
+    el('p', { className: 'small muted', textContent: 'Changes take effect immediately everywhere, and the audit log records them. Values are JSON.' }),
     table(['Setting', 'Value', 'Default', ''], Object.keys(defaults).sort().map((key) => {
       const input = el('input', { value: JSON.stringify(values[key]), size: 40, className: 'monospace' });
       return el('tr', {},
@@ -502,7 +502,7 @@ async function audit(filters = {}) {
     el('button', { className: 'copy-btn', textContent: 'Filter' }));
   form.addEventListener('submit', (e) => { e.preventDefault(); audit(Object.fromEntries(new FormData(form))); });
   panel.replaceChildren(
-    el('h2', { className: 'section-title', textContent: 'Audit log' }), el('p', { className: 'small muted', textContent: 'Append-only: every change and every sensitive action is recorded here.' }), form,
+    el('h2', { className: 'section-title', textContent: 'Audit log' }), el('p', { className: 'small muted', textContent: 'Append-only: this log records every change and every sensitive action.' }), form,
     res.ok ? table(['Time', 'Actor', 'Action', 'Target', 'Source', 'Detail'], res.data.map((a) => el('tr', {},
       el('td', { className: 'small', textContent: Api.fmtTime(a.ts) }), el('td', { className: 'small', textContent: a.actor }),
       el('td', { className: 'monospace small', textContent: a.action }),

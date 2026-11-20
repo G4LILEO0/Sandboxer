@@ -144,8 +144,8 @@ async def _guard_drop(db, feed: Feed, count: int) -> None:
         raise _Rejected("The update contained no usable rows")
     if feed.last_row_count and count < feed.last_row_count * (1 - max_drop):
         raise _Rejected(
-            f"The update has {count} rows, down from {feed.last_row_count}; "
-            f"more than {int(max_drop * 100)}% dropped, keeping the previous data"
+            f"The update has {count} rows, down from {feed.last_row_count}. More than "
+            f"{int(max_drop * 100)}% of rows dropped, so the feed keeps the previous data"
         )
 
 

@@ -92,9 +92,9 @@ async def callback(
     try:
         st = tokens.verify(secret, "oidc_state", state)
     except tokens.TokenError as exc:
-        raise HTTPException(400, "Sign-in state is invalid or expired; try again") from exc
+        raise HTTPException(400, "Sign-in state is invalid or expired. Try again") from exc
     if not hmac.compare_digest(request.cookies.get(_NONCE_COOKIE, ""), str(st.get("n", ""))):
-        raise HTTPException(400, "Sign-in was not started in this browser; try again")
+        raise HTTPException(400, "Sign-in did not start in this browser. Try again")
     http = request.app.state.http
     meta = await oidc.discovery(http, settings)
     form = {

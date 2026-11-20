@@ -31,14 +31,14 @@
       <div class="page-head">
         <div>
           <h1 class="page-title">Look up indicators</h1>
-          <p class="lede">Paste IPs, domains, URLs or file hashes, one per line or comma-separated. Defanged input works. URLs VirusTotal has never seen are submitted to it for scanning.</p>
+          <p class="lede">Paste IPs, domains, URLs or file hashes, one per line or comma-separated. Defanged input works. The lookup sends URLs that VirusTotal has never seen to VirusTotal for a scan.</p>
         </div>
       </div>
 
       <section class="panel intake">
         <label class="visually-hidden" for="ioc-input">Indicators to look up</label>
         <textarea id="ioc-input" placeholder="185.220.101.4&#10;hxxps://login-secure[.]example/verify&#10;44d88612fea8a8f36de82e1278abb02f"></textarea>
-        <div id="chips" class="chips" aria-label="Detected types (change one if it was detected wrongly)"></div>
+        <div id="chips" class="chips" aria-label="Detected types (change a type if it is wrong)"></div>
         <div class="intake-actions">
           <button id="analyze-btn" class="btn" type="button">Look up</button>
           <span class="hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
@@ -92,7 +92,7 @@
 
       <form id="sandbox-form" class="panel intake">
         <label class="visually-hidden" for="sandbox-urls">URLs to detonate</label>
-        <textarea id="sandbox-urls" placeholder="One URL per line. Defanged input works; internal addresses are refused." required></textarea>
+        <textarea id="sandbox-urls" placeholder="One URL per line. Defanged input works. The sandbox refuses internal addresses." required></textarea>
         <div class="run-options">
           <div class="field"><span>Mode</span>
             <div class="segmented" role="radiogroup" aria-label="Mode">

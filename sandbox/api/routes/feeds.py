@@ -427,5 +427,5 @@ async def upsert_brand(
 async def attack_technique(technique_id: str, principal: FeedsReader, db: Db) -> dict[str, Any]:
     t = await db.get(AttackTechnique, technique_id.upper())
     if t is None:
-        raise _error(404, "not_found", "Unknown technique (has the ATT&CK feed run?)")
+        raise _error(404, "not_found", "Unknown technique. Check that the ATT&CK feed ran")
     return {"id": t.id, "name": t.name, "tactics": t.tactics, "url": t.url}

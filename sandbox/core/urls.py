@@ -70,7 +70,7 @@ def normalise_url(raw: str, max_length: int = 2048) -> NormalisedURL:
     else:
         scheme, rest = "http", value
     if scheme not in ALLOWED_SCHEMES:
-        raise InvalidURL(f"Scheme '{scheme}' is not allowed; only http and https")
+        raise InvalidURL(f"Scheme '{scheme}' is not allowed. Use http or https")
     # Browsers accept any number of slashes after the scheme for http(s).
     try:
         parts = urlsplit(f"{scheme}://{rest.lstrip('/')}")
@@ -83,7 +83,9 @@ def normalise_url(raw: str, max_length: int = 2048) -> NormalisedURL:
 
     warnings = []
     if userinfo:
-        warnings.append("URL contains credentials; the browser will connect to the host after '@'")
+        warnings.append(
+            "The URL contains credentials. The browser will connect to the host after '@'"
+        )
     is_punycode = any(label.startswith("xn--") for label in host.split("."))
     if is_punycode:
         warnings.append(f"Internationalised host, displayed as '{_display_host(host)}'")
