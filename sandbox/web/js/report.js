@@ -581,6 +581,10 @@ function summarise(e) {
     case 'clipboard_out': return `${p.by} copied ${p.chars} chars out of the session${p.status === 'failed' ? ` (failed: ${p.error})` : ''}: ${p.preview || ''}`;
     case 'page_error': return p.message;
     case 'navigation_error': return p.error;
+    case 'antibot_challenge': return `${p.provider} ${p.check === 'blocked' ? 'block page' : 'bot check'} on ${p.url}${p.ray_id ? ` (Ray ID ${p.ray_id})` : ''}`;
+    case 'antibot_click': return `ticked the Turnstile box (${p.url})`;
+    case 'antibot_cleared': return `bot check passed after ${Math.round(p.waited_ms / 1000)} s, now on ${p.url}`;
+    case 'antibot_unpassed': return `${p.provider} ${p.check === 'blocked' ? 'blocked the browser' : 'bot check not passed'}${p.waited_ms ? ` after ${Math.round(p.waited_ms / 1000)} s` : ''}: ${p.url}`;
     default: return JSON.stringify(p).slice(0, 200);
   }
 }

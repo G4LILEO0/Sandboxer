@@ -9,6 +9,7 @@ test credentials do not end up in the timeline.
 iframes and a text excerpt from each frame.
 """
 
+import json
 import re
 
 BINDING = "__sandboxReport"
@@ -53,16 +54,47 @@ INIT_SCRIPT = r"""
   });
 
   // Keep hooks stealthy: a wrapped function must still report native source and keep its
-  // name, or kits that read fn.toString() detect instrumentation.
+  // name, or kits and bot checks that read fn.toString() detect instrumentation. The
+  // source is answered by one patched Function.prototype.toString (itself reported as
+  // native), so neither fn.toString() nor Function.prototype.toString.call(fn) gives the
+  // wrapper away and no wrapper carries an own toString property.
+  const nativeSource = new WeakMap();
+  try {
+    const FTS = Function.prototype.toString;
+    const patched = {
+      toString() { return nativeSource.has(this) ? nativeSource.get(this) : FTS.call(this); },
+    }.toString;
+    nativeSource.set(patched, 'function toString() { [native code] }');
+    Object.defineProperty(Function.prototype, 'toString', {
+      value: patched, writable: true, configurable: true, enumerable: false,
+    });
+  } catch (e) {}
   const nativeize = (wrapper, name) => {
     try {
       Object.defineProperty(wrapper, 'name', { value: name, configurable: true });
-      Object.defineProperty(wrapper, 'toString', {
-        value: () => 'function ' + name + '() { [native code] }', configurable: true,
-      });
+      nativeSource.set(wrapper, 'function ' + name + '() { [native code] }');
     } catch (e) {}
     return wrapper;
   };
+  // navigator.platform for the profile, as a getter on Navigator.prototype like the real
+  // one (an own property on navigator is a well-known automation tell).
+  try {
+    const platform = /*PLATFORM*/'';
+    if (platform) {
+      const d = Object.getOwnPropertyDescriptor(Navigator.prototype, 'platform');
+      Object.defineProperty(Navigator.prototype, 'platform', {
+        configurable: true, enumerable: d ? d.enumerable : true,
+        get: nativeize({ get platform() { return platform; } }.__lookupGetter__('platform'), 'get platform'),
+      });
+    }
+  } catch (e) {}
+  // Harness globals stay (Playwright looks its bindings up by name) but drop out of
+  // Object.keys(window) / for-in, which is how page scripts enumerate for them.
+  for (const k of ['__sandboxReport', '__playwright__binding__', '__pwInitScripts', '__pwWebSocketBinding', '__pwWebSocketDispatch']) {
+    try {
+      if (k in window) Object.defineProperty(window, k, { enumerable: false });
+    } catch (e) {}
+  }
 
   // Clipboard writes (ClickFix and similar "paste this command" lures).
   try {
@@ -255,6 +287,12 @@ INIT_SCRIPT = r"""
 })();
 """
 
+
+def init_script(platform: str = "") -> str:
+    """``INIT_SCRIPT`` with the profile's navigator.platform (empty keeps the real one)."""
+    return INIT_SCRIPT.replace("/*PLATFORM*/''", json.dumps(platform), 1)
+
+
 # Fake EIP-1193 wallet (DE-W3B-005/006). Injected only when `fake_wallet` is enabled. It
 # holds no keys and never touches a network: it answers account reads with a fixed dummy
 # address and logs then rejects (code 4001) every signing/sending request, so a drainer's
@@ -348,7 +386,9 @@ COLLECT_SCRIPT = r"""
 # page's eval, which the exec hook wraps.
 _PW_HARNESS = re.compile(
     r"\s*(\(\(\)\s*=>\s*\{\s*globalThis\.__pwInitScripts\s*="
-    r"|globalThis\.__pwWebSocketDispatch\(\{\"id\":\"[0-9a-f]{64}\")"
+    r"|globalThis\.__pwWebSocketDispatch\(\{\"id\":\"[0-9a-f]{64}\""
+    # Playwright handing an exposed binding's return value back (every report call).
+    r"|\(function deliverResult\(arg\) \{)"
 )
 
 
