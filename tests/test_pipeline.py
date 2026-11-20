@@ -9,6 +9,7 @@ restricted visibility, feeds and metrics.
 
 import asyncio
 import io
+import json
 import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -873,3 +874,54 @@ async def test_suricata_that_cannot_run_is_a_note(env, monkeypatch):
         "Suricata failed: could not run" in n and "No such image" in n
         for n in report["summary"]["notes"]
     )
+
+
+async def test_suricata_also_scans_https_rebuilt_from_the_har(env, monkeypatch):
+    """HTTPS in the HAR goes to Suricata as a second, plaintext pcap, and alerts on it are
+    marked as decrypted HTTPS in the report."""
+    import sandbox.analysis.suricata as suricata
+    from sandbox.analysis.har_pcap import SYNTHETIC_CLIENT_IP
+
+    client, ctx, worker, backend = env
+    snapshot = backend.snapshot
+
+    async def snapshot_with_https(handle, dest):
+        snap = await snapshot(handle, dest)
+        (snap.root / "capture.pcap").write_bytes(b"\xd4\xc3\xb2\xa1")
+        har_path = snap.root / "network.har"
+        har = json.loads(har_path.read_text(encoding="utf-8"))
+        entry = json.loads(json.dumps(har["log"]["entries"][0]))
+        entry["request"]["url"] = "https://secure.example.test/gate.php"
+        har["log"]["entries"].append(entry)
+        har_path.write_text(json.dumps(har), encoding="utf-8")
+        return Snapshot(snap.root, [*snap.files, "capture.pcap"])
+
+    seen = {}
+
+    async def fake_run(ctx_, image, rules, pcaps):
+        seen["pcaps"] = [(p.name, p.read_bytes()) for p in pcaps]
+        eve = {
+            "event_type": "alert",
+            "src_ip": SYNTHETIC_CLIENT_IP,
+            "src_port": 49152,
+            "dest_ip": "172.19.0.2",
+            "dest_port": 80,
+            "proto": "TCP",
+            "http": {"hostname": "secure.example.test", "url": "/gate.php"},
+            "alert": {"signature_id": 9100001, "signature": "ET TEST gate", "severity": 1},
+        }
+        return True, json.dumps(eve)
+
+    monkeypatch.setattr(backend, "snapshot", snapshot_with_https)
+    monkeypatch.setattr(ctx.settings, "suricata_image", "test/suricata:0")
+    monkeypatch.setattr(suricata, "run_suricata", fake_run)
+    created = await _submit(client)
+    await _drain(worker)
+
+    names = [name for name, _ in seen["pcaps"]]
+    assert names == ["capture.pcap", "https.pcap"], names
+    assert b"GET /gate.php HTTP/1.1\r\nHost: secure.example.test" in seen["pcaps"][1][1]
+    report = (await client.get(f"/v1/analyses/{created['id']}/report", headers=ALICE)).json()
+    alerts = report["network"]["suricata_alerts"]
+    assert alerts[0]["flows"][0]["decrypted_https"] is True
+    assert alerts[0]["flows"][0]["url"] == "https://secure.example.test/gate.php"

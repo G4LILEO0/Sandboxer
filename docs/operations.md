@@ -41,7 +41,7 @@ Analysts copy text into a session (for example new URLs to visit) and copy text 
 | session containers | Internet only, enforced by `egress-guard`. Started from `sandbox-session:latest`, removed after every session |
 | `egress-guard` | The Docker host's network namespace and `NET_ADMIN`; nothing else. Without it, the worker refuses to start sessions |
 | pcap sidecar | Shares one session's network namespace; only capability is `NET_RAW` |
-| Suricata (optional) | `SANDBOX_SURICATA_IMAGE`, for example `jasonish/suricata:7.0`. Without it, pcaps are stored but not scanned, and Suricata rules in bundles are published unvalidated (the bundle says so) |
+| Suricata (optional) | `SANDBOX_SURICATA_IMAGE`, for example `jasonish/suricata:7.0`. Without it, pcaps are stored but not scanned, and Suricata rules in bundles are published unvalidated (the bundle says so). HTTPS requests from the HAR are also scanned as plaintext unless `SANDBOX_SURICATA_DECRYPTED_HTTPS=false` (see detection-rules.md) |
 
 Several API instances and workers can run against one database: workers claim work with `SKIP LOCKED` under an advisory lock and keep a heartbeat. A worker that dies has its running sessions re-adopted, or failed cleanly, by the next worker.
 
