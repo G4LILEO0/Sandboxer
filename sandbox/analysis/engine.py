@@ -458,7 +458,7 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
         bundle = LoadedBundle(bundle_row, store)
         notes = []
         if bundle_row is None:
-            notes.append("No active rule bundle; only feed matches were evaluated")
+            notes.append("No rule bundle is active. The analysis checked only feed matches")
         rules_by_id = {r.id: r for r in await db.scalars(select(Rule).where(Rule.engine == "yara"))}
         yara_hits = (
             _yara_scan(

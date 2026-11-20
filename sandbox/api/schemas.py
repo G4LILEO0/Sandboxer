@@ -29,7 +29,7 @@ class RunOptions(BaseModel):
     @classmethod
     def _known_profile(cls, value: str) -> str:
         if value not in PROFILES:
-            raise ValueError(f"Unknown profile; choose one of {', '.join(PROFILES)}")
+            raise ValueError(f"Unknown profile. Choose one of {', '.join(PROFILES)}")
         return value
 
 

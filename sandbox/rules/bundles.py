@@ -162,7 +162,7 @@ async def validate_suricata(ctx, rules_text: str) -> str | None:
 async def activate_bundle(db, bundle_id: str, actor: str) -> RuleBundle:
     bundle = await db.get(RuleBundle, bundle_id)
     if bundle is None or bundle.status != "ready":
-        raise ValueError("Only a ready bundle can be activated")
+        raise ValueError("You can activate only a ready bundle")
     await db.execute(update(RuleBundle).where(RuleBundle.active).values(active=False))
     await db.flush()
     bundle.active = True

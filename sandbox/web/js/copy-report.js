@@ -281,7 +281,7 @@ function mountTemplateEditor(root) {
   const saveBtn = h('button', { type: 'button', className: 'copy-btn', textContent: 'Save as preset', onclick: () => {
     const name = (prompt('Preset name') || '').trim();
     if (!name) return;
-    if (!CopyTemplate.savePreset(name)) alert('That name is taken by a built-in preset.');
+    if (!CopyTemplate.savePreset(name)) alert('A built-in preset already uses that name.');
   } });
   const delBtn = h('button', { type: 'button', className: 'copy-btn danger', textContent: 'Delete preset', onclick: () => {
     if (presetSel.value && CopyTemplate.isCustom(presetSel.value)) CopyTemplate.deletePreset(presetSel.value);

@@ -82,7 +82,7 @@ function analyzeChain(hops) {
 
   const last = hops[hops.length - 1];
   if (last && last.script_redirect && !last.location) {
-    warnings.push({ level: 'info', code: 'script_redirect', message: 'The last page looks like it redirects with JavaScript, which this walk does not run: detonate it in the sandbox to see the final destination' });
+    warnings.push({ level: 'info', code: 'script_redirect', message: 'The last page looks like it redirects with JavaScript, and this walk does not run JavaScript. Detonate it in the sandbox to see the final destination' });
   }
   // A page with both a meta refresh and redirect script is a cloaking pattern: the
   // walker (no JavaScript) gets the decoy meta target, a real browser runs the script
@@ -90,7 +90,7 @@ function analyzeChain(hops) {
   // walker, twimch.com for the analyst).
   hops.forEach((h, i) => {
     if (h.script_redirect && h.via === 'meta-refresh') {
-      warnings.push({ level: 'warn', code: 'script_and_meta_redirect', message: `Hop ${i + 1} has a meta refresh and a redirect script: a real browser may go somewhere other than the walk shows. Detonate it to see where a browser lands` });
+      warnings.push({ level: 'warn', code: 'script_and_meta_redirect', message: `Hop ${i + 1} has a meta refresh and a redirect script. A real browser may go somewhere other than the walk shows. Detonate it to see where a browser lands` });
     }
   });
 
@@ -148,7 +148,7 @@ async function checkReputationDrift(hops, reputationLookup) {
       return {
         level: 'warn',
         code: 'reputation_drift',
-        message: `Reputation degrades along the chain: ${first.hostname} (${firstVerdict || 'unknown'}) -> ${last.hostname} (${lastVerdict || 'unknown'}) — possible malicious redirect (link text/initial domain may not match true destination)`,
+        message: `Reputation degrades along the chain: ${first.hostname} (${firstVerdict || 'unknown'}) -> ${last.hostname} (${lastVerdict || 'unknown'}). This is possibly a malicious redirect. The link text or initial domain may not match the true destination`,
       };
     }
   } catch (e) { /* best-effort only */ }

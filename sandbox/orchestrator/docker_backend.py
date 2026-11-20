@@ -121,7 +121,7 @@ class DockerBackend:
             self._egress_ok_until = time.monotonic() + s.egress_probe_ttl_s
             return
         message = (
-            "Egress isolation check failed; sessions could reach "
+            "Egress isolation check failed. Sessions could reach "
             f"{', '.join(leaks)}. Start the egress-guard service (docker compose up -d "
             "egress-guard) or see docs/operations.md."
         )

@@ -288,7 +288,7 @@ async def _clipboard_session(db, principal: Principal, session_id: str, key: str
         raise _error(409, "not_interactive", "Clipboard needs a running interactive session")
     config = await get_all(db)
     if not config[key]:
-        raise _error(403, "clipboard_disabled", f"An admin has turned off {key}")
+        raise _error(403, "clipboard_disabled", f"An admin disabled {key}")
     return session, analysis, config
 
 

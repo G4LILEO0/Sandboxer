@@ -236,7 +236,9 @@ async def update_rule(
     if body.body is not None:
         if rule.source != "local":
             raise _error(
-                409, "upstream_rule", "Upstream rules change through their feed; disable instead"
+                409,
+                "upstream_rule",
+                "Upstream rules change through their feed. Disable the rule instead",
             )
         error = _validate(rule.engine, body.body)
         if error:
