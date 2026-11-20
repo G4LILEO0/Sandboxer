@@ -128,14 +128,34 @@ async function runUrlSpecificAnalysis(norm, targetUrl) {
   return unwrapped.unwrapped;
 }
 
-async function analyzeOne(det, { force = false } = {}) {
-  // Safety net: private/reserved IPs never leave the browser. No cache
-  // lookup, no rate-limiter slot, no vendor call — just an immediate,
-  // clearly-labeled result.
+// Sandboxer's own record first: feed indicators and IoCs collected by past analyses.
+// URLs are checked in their unwrapped form, the same target the vendors get.
+async function lookupLocal(det) {
+  const target = det.type === 'url' ? window.unwrapUrl.unwrapURL(det.value).unwrapped : det.value;
+  return window.localClient.localLookup(det.type, target);
+}
+
+// onLocal(norm) is called with the local-only result as soon as it is in, so the card
+// shows what Sandboxer knows while VirusTotal and AbuseIPDB are still being asked.
+async function analyzeOne(det, { force = false, onLocal = null } = {}) {
+  if (det.type === 'unknown') {
+    const norm = window.normalize.normalizeResult(det);
+    norm._errors.push('Could not auto-detect IoC type — use the override dropdown to pick one before analyzing.');
+    return { norm, cached: false };
+  }
+
+  // 1. Collected IoCs. Never cached in the browser: it is one local query and a feed run
+  // or a new analysis can change the answer at any time.
+  const localRes = await lookupLocal(det);
+  const withLocal = (norm) => window.normalize.mergeLocalData(norm, localRes);
+
+  // Safety net: private/reserved IPs never leave the browser for a vendor. No cache
+  // lookup, no rate-limiter slot, no vendor call — just an immediate, clearly-labeled
+  // result, with whatever Sandboxer itself has seen of the address.
   if (det.type === 'ip') {
     const privateInfo = window.detector.isPrivateIP(det.value);
     if (privateInfo) {
-      const norm = window.normalize.normalizeResult(det);
+      const norm = withLocal(window.normalize.normalizeResult(det));
       norm.verdict = 'private';
       norm.network.is_private = true;
       norm.network.private_reason = privateInfo.reason;
@@ -144,12 +164,13 @@ async function analyzeOne(det, { force = false } = {}) {
     }
   }
 
+  // 2. Vendor enrichment.
   const cacheKey = `${det.type}:${det.value}`;
 
   if (!force) {
     const cached = window.Cache.get(cacheKey);
     if (cached) {
-      const norm = window.normalize.normalizeResult(det);
+      const norm = withLocal(window.normalize.normalizeResult(det));
       if (cached.urls) norm.urls = cached.urls;
       window.normalize.mergeVendorData(norm, 'vt', cached.vt || null);
       if (cached.abuseipdb) window.normalize.mergeVendorData(norm, 'abuseipdb', cached.abuseipdb);
@@ -159,14 +180,14 @@ async function analyzeOne(det, { force = false } = {}) {
     }
   }
 
-  if (det.type === 'unknown') {
-    const norm = window.normalize.normalizeResult(det);
-    norm._errors.push('Could not auto-detect IoC type — use the override dropdown to pick one before analyzing.');
-    return { norm, cached: false };
+  if (onLocal) {
+    const early = withLocal(window.normalize.normalizeResult(det));
+    window.normalize.computeVerdict(early);
+    onLocal(early);
   }
 
   let lookupTarget = det.value;
-  const norm = window.normalize.normalizeResult(det);
+  const norm = withLocal(window.normalize.normalizeResult(det));
 
   if (det.type === 'url') {
     lookupTarget = await runUrlSpecificAnalysis(norm, det.value);
@@ -323,7 +344,12 @@ async function analyzeBatch(detected) {
   await Promise.all(slots.map(async (slot) => {
     async function runAndRender(force) {
       try {
-        const { norm, cached } = await analyzeOne(slot.group.det, { force });
+        const onLocal = (early) => {
+          const interim = window.render.renderCard(early, { pending: true, duplicateCount: slot.group.count });
+          slot.node.replaceWith(interim);
+          slot.node = interim;
+        };
+        const { norm, cached } = await analyzeOne(slot.group.det, { force, onLocal });
         const card = window.render.renderCard(norm, {
           cached,
           duplicateCount: slot.group.count,

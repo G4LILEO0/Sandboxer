@@ -68,6 +68,15 @@ const FIELDS = [
   { id: 'first_seen', label: 'First seen', group: 'Indicator', value: (n) => n.first_seen },
   { id: 'last_seen', label: 'Last seen', group: 'Indicator', value: (n) => n.last_seen },
 
+  { id: 'local_summary', label: 'Sandboxer', group: 'Sandboxer', value: (n) => (n.local ? window.localClient.LOCAL_SUMMARY_LABELS[n.local.summary] || n.local.summary : null) },
+  { id: 'local_feeds', label: 'Threat feeds', group: 'Sandboxer', value: (n) => (n.local && n.local.live_feeds.length ? [...new Set(n.local.live_feeds.map((f) => (f.match === 'exact' ? f.feed : `${f.feed} (${f.match})`)))].join(', ') : null) },
+  { id: 'local_sightings', label: 'Past analyses', group: 'Sandboxer', value: (n) => {
+    const s = n.local && n.local.sightings;
+    if (!s || !s.total) return null;
+    const counts = Object.entries(s.by_verdict || {}).filter(([, c]) => c > 0).map(([v, c]) => `${c} ${v === 'none' ? 'pending' : v}`).join(', ');
+    return `${s.total}${counts ? ` (${counts})` : ''}`;
+  } },
+
   { id: 'vt_detections', label: 'VT detections', group: 'VirusTotal', value: (n) => (vendorData(n) && n.score_summary.vt_total_engines ? `${n.score_summary.vt_malicious || 0}/${n.score_summary.vt_total_engines} engines flagged` : null) },
   { id: 'vt_suspicious', label: 'VT suspicious', group: 'VirusTotal', value: (n) => (has(n.score_summary.vt_suspicious) ? String(n.score_summary.vt_suspicious) : null) },
   { id: 'vt_reputation', label: 'VT reputation', group: 'VirusTotal', value: (n) => (has(n.score_summary.vt_reputation) ? String(n.score_summary.vt_reputation) : null) },
@@ -130,7 +139,7 @@ const FORMATS = {
 };
 
 const BUILTIN_PRESETS = {
-  Summary: { fields: ['ioc', 'type', 'verdict', 'vt_detections', 'abuse_score', 'infra', 'country', 'asn', 'unwrapped_url', 'landing_url', 'vt_link', 'abuse_link'], format: 'lines', includeEmpty: false },
+  Summary: { fields: ['ioc', 'type', 'verdict', 'local_summary', 'local_feeds', 'vt_detections', 'abuse_score', 'infra', 'country', 'asn', 'unwrapped_url', 'landing_url', 'vt_link', 'abuse_link'], format: 'lines', includeEmpty: false },
   Triage: { fields: ['verdict', 'ioc', 'usage_type', 'asn', 'abuse_categories'], format: 'inline', includeEmpty: false },
   'IP reputation': { fields: ['ioc', 'verdict', 'abuse_score', 'abuse_reports', 'abuse_categories', 'usage_type', 'isp', 'asn', 'country', 'infra', 'abuse_link'], format: 'lines', includeEmpty: false },
   'Spreadsheet row': { fields: ['ioc', 'type', 'verdict', 'vt_detections', 'abuse_score', 'country', 'infra', 'vt_link'], format: 'values', includeEmpty: true },

@@ -33,6 +33,7 @@ function normalizeResult(detected) {
     related: {},
     urls: {},
     vendor_links: {},
+    local: null,  // /v1/intel/local: feeds and past analyses, checked first
     raw: {},
     warnings: [],
     _errors: [],
@@ -219,6 +220,31 @@ function computeInfrastructureFlag(norm) {
   return norm;
 }
 
+// Sandboxer's own record of the IoC, looked up before the vendors.
+function mergeLocalData(norm, res) {
+  norm.raw = norm.raw || {};
+  norm.raw.sandboxer = res;
+  if (!res || !res.ok) {
+    if (res && res.error) norm._errors.push(`Sandboxer: ${res.error}`);
+    norm.local = null;
+    return norm;
+  }
+  const d = res.data || {};
+  const feeds = d.feeds || [];
+  const live = feeds.filter((f) => f.active && !f.suppressed);
+  norm.local = {
+    summary: d.summary || 'unknown',
+    value: d.value,
+    feeds,
+    live_feeds: live,
+    suppressed: d.suppressed || null,
+    allowlisted: d.allowlisted || null,
+    sightings: d.sightings || null,
+  };
+  for (const f of live) norm.tags = [...new Set([...norm.tags, ...(f.tags || [])])];
+  return norm;
+}
+
 function computeVerdict(norm) {
   const vtMal = norm.score_summary.vt_malicious || 0;
   const vtSusp = norm.score_summary.vt_suspicious || 0;
@@ -227,14 +253,18 @@ function computeVerdict(norm) {
   const hasMaliciousWarning = urlWarnings.some((w) => w.level === 'malicious');
   const hasWarnWarning = urlWarnings.some((w) => w.level === 'warn');
 
+  const local = (norm.local && norm.local.summary) || 'unknown';
+  const localBad = local === 'listed';
+  const localSusp = local === 'related_malicious' || local === 'related_suspicious';
   // "Clean" needs VirusTotal to have answered with a report. A failed call (no key,
   // quota, outage) or "not found" used to fall through to clean, because the raw
   // error object counted as data.
   const vtAnswered = !!(norm.raw.vt && norm.raw.vt.ok);
 
-  if (vtMal > 3 || abuseScore > 75 || hasMaliciousWarning) norm.verdict = 'malicious';
+  if (vtMal > 3 || abuseScore > 75 || hasMaliciousWarning || localBad) norm.verdict = 'malicious';
   // One engine out of ~90 saying "suspicious" (8.8.8.8 has one) is noise on its own.
-  else if (vtMal > 0 || vtSusp > 1 || abuseScore > 10 || hasWarnWarning) norm.verdict = 'suspicious';
+  else if (vtMal > 0 || vtSusp > 1 || abuseScore > 10 || hasWarnWarning || localSusp) norm.verdict = 'suspicious';
+  // No VirusTotal report and Sandboxer has nothing against it: not enough to call it clean.
   else if (!vtAnswered) norm.verdict = 'unknown';
   else norm.verdict = 'clean';
 
@@ -244,6 +274,7 @@ function computeVerdict(norm) {
 window.normalize = {
   normalizeResult,
   mergeVendorData,
+  mergeLocalData,
   computeInfrastructureFlag,
   computeVerdict,
   ABUSEIPDB_CATEGORIES,

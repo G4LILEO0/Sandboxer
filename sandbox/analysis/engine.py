@@ -478,18 +478,29 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
 
         suricata_alerts: list[dict] = []
         pcap = (by_kind.get("pcap") or [None])[0]
-        if ctx.settings.suricata_image and pcap and bundle.suricata_path:
+        if ctx.settings.suricata_image and bundle.suricata_path and (pcap or har_entries):
+            from sandbox.analysis.har_pcap import write_https_pcap
             from sandbox.analysis.suricata import parse_alerts, run_suricata
 
             # Suricata is optional: a Docker error (missing image, daemon down) is a note
             # on the report, not a failed analysis.
             try:
-                ok, output = await run_suricata(
-                    ctx,
-                    ctx.settings.suricata_image,
-                    bundle.suricata_path,
-                    store.path(pcap.object_key),
-                )
+                with tempfile.TemporaryDirectory(prefix="sbx-https-") as tmp:
+                    pcaps = [store.path(pcap.object_key)] if pcap else []
+                    # The session pcap has HTTPS only as ciphertext; the HAR has it in
+                    # plaintext, so HTTP rules can match HTTPS requests too.
+                    decrypted = Path(tmp) / "https.pcap"
+                    if ctx.settings.suricata_decrypted_https and write_https_pcap(
+                        har_entries, decrypted
+                    ):
+                        pcaps.append(decrypted)
+                    ok, output = (
+                        await run_suricata(
+                            ctx, ctx.settings.suricata_image, bundle.suricata_path, pcaps
+                        )
+                        if pcaps
+                        else (True, "")
+                    )
             except Exception as exc:
                 log.warning(
                     "suricata could not run", extra={"analysis_id": analysis.id}, exc_info=True

@@ -126,6 +126,9 @@ class Settings(BaseSettings):
 
     # Suricata over session pcaps (ANA-2). Empty disables it.
     suricata_image: str | None = None
+    # Also run Suricata over the HTTPS requests in the HAR, rebuilt as plaintext HTTP
+    # (sandbox/analysis/har_pcap.py), so HTTP rules match HTTPS traffic.
+    suricata_decrypted_https: bool = True
 
     # RDAP lookups for domain registration age (CAP-8); empty disables.
     rdap_base_url: str | None = "https://rdap.org"
