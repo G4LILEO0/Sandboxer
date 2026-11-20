@@ -1,8 +1,9 @@
 """Built-in rules, weights, brands and feeds, seeded into Postgres on first start.
 
 Everything here is ordinary data once seeded: admins can disable or re-weight it.
-Seeding adds what is missing and refreshes the bodies of built-in rules (which admins
-cannot edit, only disable), so rule fixes reach existing installations. Built-in brand
+Seeding adds what is missing and refreshes the bodies of built-in rules, so rule fixes
+reach existing installations; a body a detection engineer edited in Admin is kept until
+they revert it. Built-in brand
 domains are merged into existing brand rows; nothing an admin set is removed.
 """
 
@@ -1753,11 +1754,21 @@ DEFAULT_BRANDS = [
     ),
 ]
 
+
 # FED-1 feeds. Check each feed's current terms and key requirements before enabling in
 # production. abuse.ch exports need a free Auth-Key in the URL ({key}), taken from the
 # feed or from SANDBOX_ABUSECH_AUTH_KEY.
 # Default URLs abuse.ch retired (410 Gone); the seed moves feeds still on them to the
 # current default, leaving URLs an engineer changed alone.
+def builtin_body(engine: str, name: str) -> str | None:
+    """The body a built-in rule ships with (what "Revert to built-in" restores)."""
+    if engine == "behaviour":
+        return next((r["body"] for r in BEHAVIOUR_RULES if r["name"] == name), None)
+    if engine == "yara" and name in BUILTIN_YARA:
+        return BUILTIN_YARA[name].strip()
+    return None
+
+
 RETIRED_FEED_URLS = {
     "urlhaus": "https://urlhaus.abuse.ch/downloads/csv_recent/",
     "threatfox": "https://threatfox.abuse.ch/export/json/recent/",

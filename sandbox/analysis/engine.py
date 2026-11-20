@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import select, text, update
 
+from sandbox import detection
 from sandbox.analysis.dom import parse_dom
 from sandbox.analysis.domains import (
     BrandRef,
@@ -367,6 +368,8 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
         if analysis is None:
             return None
         config = await get_all(db)
+        # Detection strings edited in Admin since the last analysis take effect here.
+        strings_version = await detection.refresh(db)
         artifacts = list(
             await db.scalars(
                 select(Artifact).where(
@@ -598,6 +601,7 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
             "dns": result.get("hosts", {}),
             "domain_ages": data.domain_ages,
             "notes": ev.notes,
+            "detection_strings": strings_version,
         }
         row = AnalysisVersion(
             id=new_id("av"),

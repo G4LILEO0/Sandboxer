@@ -1,0 +1,209 @@
+# Hosting and domains: detection strings read by the fact builders.
+# Shipped defaults. Change them in Admin > Detection strings (stored as an
+# override, audited, revertible); edit this file only to change what ships.
+# Regex syntax is Python re. flags: i = ignore case, s = dot matches newline,
+# m = multi-line, x = verbose.
+
+title = 'Hosting and domains'
+
+[free_hosting]
+title = 'Free hosting and site-builder platforms'
+description = 'Free hosting, site builders, tunnels, IPFS gateways and dynamic DNS: anyone can publish a page under these in minutes, and phishing kits do. Each entry covers its subdomains, and each tenant (kit.pages.dev) is its own site for allowlisting. Order matters: the first entry that matches is reported.'
+type = "words"
+values = [
+  '000webhostapp.com',
+  'appspot.com',
+  'azurefd.net',
+  'azurestaticapps.net',
+  'azurewebsites.net',
+  'blob.core.windows.net',
+  'web.core.windows.net',
+  'blogspot.com',
+  'bubbleapps.io',
+  'carrd.co',
+  'cf-ipfs.com',
+  'codeberg.page',
+  'ddns.net',
+  'docs.google.com',
+  'duckdns.org',
+  'dweb.link',
+  'firebaseapp.com',
+  'firebasestorage.googleapis.com',
+  'fleek.co',
+  'framer.app',
+  'framer.website',
+  'gitbook.io',
+  'github.io',
+  'gitlab.io',
+  'glitch.me',
+  'godaddysites.com',
+  'herokuapp.com',
+  'hopto.org',
+  'ipfs.io',
+  'jimdosite.com',
+  'loca.lt',
+  'mystrikingly.com',
+  'netlify.app',
+  'ngrok-free.app',
+  'ngrok.io',
+  'notion.site',
+  'onrender.com',
+  'pages.dev',
+  'r2.dev',
+  'replit.app',
+  'repl.co',
+  'sites.google.com',
+  'site123.me',
+  'square.site',
+  'storage.googleapis.com',
+  'surge.sh',
+  'telegra.ph',
+  'tiiny.site',
+  'trycloudflare.com',
+  'typedream.app',
+  'vercel.app',
+  'web.app',
+  'webflow.io',
+  'webnode.page',
+  'weebly.com',
+  'weeblysite.com',
+  'wixsite.com',
+  'wixstudio.io',
+  'wordpress.com',
+  'workers.dev',
+  'yolasite.com',
+  'zapto.org',
+  # Abused storage / dev / serverless hosting (DE-PHI-008).
+  'storage.dev',
+  'amplifyapp.com',
+  'fly.dev',
+  'ondigitalocean.app',
+  'up.railway.app',
+  'railway.app',
+  'on.aws',
+  'lambda-url.on.aws',
+  'azurestaticapps.net',
+  's3.amazonaws.com',
+  # AI website builders / preview hosts (DE-PHI-013). v0 publishes to *.vercel.app;
+  # bolt.new itself is the editor, its sites go to bolt.host.
+  'lovable.app',
+  'lovableproject.com',
+  'v0.dev',
+  'v0.app',
+  'base44.app',
+  'bolt.host',
+  # Free site-builder tenants seen hosting brand logins in live round 1 (LR1-03).
+  'flazio.online',
+]
+
+[abused_cctlds]
+title = 'Abused country-code TLDs'
+description = 'Free or cheap ccTLDs heavily used for abuse; "brand.*" never covers these.'
+type = "words"
+values = [
+  'cc',
+  'cf',
+  'ga',
+  'gq',
+  'ml',
+  'pw',
+  'su',
+  'tk',
+  'ws',
+]
+
+[government_suffix_parts]
+title = 'Government suffix parts'
+description = 'Public suffix parts that mark a real government (gov.sa, gov.uk, .gov, go.jp, gob.mx).'
+type = "words"
+values = [
+  'go',
+  'gob',
+  'gouv',
+  'gov',
+  'govt',
+  'gub',
+  'guv',
+  'gv',
+  'mil',
+]
+
+[government_token]
+title = 'Government-looking host label'
+description = 'A host label that dresses up as government (gov, govsa, ksagov ...). Matched against each label of hosts outside a government suffix.'
+type = "regex"
+flags = ''
+pattern = '^(gov|govt|gouv|gob|government)(sa|ksa|uk|us|ae|qa|kw|bh|om|eg|jo|au|ca|in|ma)?$|^(sa|ksa|uk|us|ae|qa|kw|bh|om|eg)(gov|govt)$'
+
+[government_infrastructure]
+title = 'Government cloud infrastructure'
+description = 'Legitimate non-government hosts that carry a "gov" label (government cloud regions).'
+type = "words"
+values = [
+  'amazonaws.com',
+  'azure.us',
+  'microsoft.us',
+  'usgovcloudapi.net',
+  'office365.us',
+]
+
+[acronym_context]
+title = 'Words that put an acronym brand in context'
+description = 'Words that put a short acronym brand (DHL, UPS) in a delivery or sign-in context in a lookalike host.'
+type = "words"
+values = [
+  'account',
+  'customs',
+  'delivery',
+  'fee',
+  'login',
+  'package',
+  'parcel',
+  'pay',
+  'payment',
+  'redelivery',
+  'secure',
+  'shipment',
+  'shipping',
+  'signin',
+  'track',
+  'tracking',
+  'update',
+  'verify',
+]
+
+[generic_brand_labels]
+title = 'Generic brand-domain labels'
+description = 'Brand-domain labels that are ordinary words or infrastructure names. They still catch homoglyphs (0ffice.com) but not typo or combo matches, which would flag outlook.example.com (self-hosted webmail), offices.com or static.com.'
+type = "words"
+values = [
+  'alahli',
+  'android',
+  'apple',
+  'azure',
+  'blogger',
+  'chase',
+  'chrome',
+  'exodus',
+  'fbcdn',
+  'googleusercontent',
+  'gstatic',
+  'ledger',
+  'licdn',
+  'live',
+  'messenger',
+  'meta',
+  'msauth',
+  'msftauth',
+  'nflxext',
+  'noon',
+  'office',
+  'outlook',
+  'phantom',
+  'sadad',
+  'steam',
+  'threads',
+  'trust',
+  'windows',
+  'zain',
+]

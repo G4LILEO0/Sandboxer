@@ -384,6 +384,9 @@ class Rule(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Who last edited the body of a built-in rule in Admin. While set, seeding leaves the
+    # body alone; "Revert to built-in" clears it and restores the shipped body.
+    modified_by: Mapped[str | None] = mapped_column(Text)
 
 
 class RuleOverride(Base):
@@ -435,6 +438,19 @@ class ScoringConfig(Base):
     cap: Mapped[int | None] = mapped_column(Integer)
     active_from: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_by: Mapped[str | None] = mapped_column(Text)
+
+
+class DetectionOverride(Base):
+    """An edited detection string (sandbox.detection): the value replaces the shipped
+    default of entry ``key`` until it is deleted (Admin > Detection strings)."""
+
+    __tablename__ = "detection_overrides"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    note: Mapped[str] = mapped_column(Text, server_default="")
+    updated_by: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 # --- Analysis results (ANA, REP) --------------------------------------------------------

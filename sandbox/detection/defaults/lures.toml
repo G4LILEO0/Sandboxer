@@ -1,0 +1,70 @@
+# Lure wording: detection strings read by the fact builders.
+# Shipped defaults. Change them in Admin > Detection strings (stored as an
+# override, audited, revertible); edit this file only to change what ships.
+# Regex syntax is Python re. flags: i = ignore case, s = dot matches newline,
+# m = multi-line, x = verbose.
+
+title = 'Lure wording'
+
+[payment_pretext]
+title = 'Payment pretexts (English and Arabic)'
+description = 'Why a page says you must pay: the smishing pretexts behind most card-harvesting pages (parcel redelivery and customs fees, traffic fines, tolls), in English and Arabic.'
+type = "regex"
+flags = 'i'
+pattern = '\b(re-?deliver(y|ed)?|delivery (fee|charge)|shipping (fee|charge)|customs (fee|duty|charges?|clearance)|(package|parcel|shipment) (is |has been )?(on hold|held|pending|suspended|returned)|unpaid (toll|fine|invoice|fee)|traffic (violation|fine)s?|outstanding (fine|balance|payment)|toll (payment|due|balance)|pay (the |a )?(small )?(fee|fine)|address (incomplete|incorrect))\b|رسوم (التوصيل|الشحن|التخزين|جمركية|الجمارك|إعادة التوصيل|اعادة التوصيل)|شحنتك|طردك|(الشحنة|الطرد|طلبك) (معلق|معلقة|متوقف|متوقفة)|مخالف(ة|ات) مروري(ة|ه)|سداد (المخالفة|المخالفات|الرسوم|الغرامة)|دفع (الرسوم|المخالفة|الغرامة)|عنوان غير مكتمل'
+
+[title_lure]
+title = 'Lure words in page titles'
+description = 'Page titles that turn a brand mention into a lure.'
+type = "regex"
+flags = 'i'
+pattern = '\b(log ?in|sign ?in|wallet|verify|verification|account|support|secure|recovery|restore|unlock|update|connect|official|claim|refund|payment)\b|تسجيل الدخول|الدخول|تحقق|توثيق|حسابك|تحديث|استرداد|سداد'
+
+[tech_support_scare]
+title = 'Tech-support scare wording'
+description = 'Tech-support scare wording. Phone numbers on such a page feed lure.tech_support_phone.'
+type = "regex"
+flags = 'i'
+pattern = '(microsoft|windows|defender|apple|support|virus|infected|blocked|trojan|spyware|call (us|now|immediately)|do not (restart|shut)|technical support)'
+
+[tech_support_phone]
+title = 'Phone number'
+description = 'A phone number (North American style, optional country code).'
+type = "regex"
+flags = ''
+pattern = '(?:\+?\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}\b'
+
+[paste_back]
+title = 'Paste the URL back (ConsentFix)'
+description = '"Copy the URL from the address bar and paste it here": the hand-back step of an authorization-code paste-back (ConsentFix / AuthCodeFix, DE-M365-013).'
+type = "regex"
+flags = 'i'
+pattern = '\b(paste|drag(\s+and\s+drop)?|drop)\b.{0,60}\b(url|link|address(\s+bar)?|authori[sz]ation\s+code|code)\b.{0,40}\b(here|below|back|into|in\s+the\s+(box|field))\b|\bcopy\b.{0,40}\b(url|link|address(\s+bar)?)\b.{0,80}\b(paste|here|below|back)\b'
+
+[allow_notifications_bait]
+title = 'Allow notifications bait'
+description = 'Bait to click Allow on the notification prompt (click allow to continue, if you are not a robot).'
+type = "regex"
+flags = 'i'
+pattern = '''(click|press|tap)\s*(the\s*)?[\"'“]?allow[\"'”]?\s*(to|button|if|below)|allow notifications to (continue|verify|watch|download|proceed)|click allow.{0,30}(robot|human|verify)'''
+
+[share_pretext]
+title = 'Shared document pretext'
+description = 'Shared-document pretexts (shared a file, OneDrive, SharePoint, e-fax, voicemail) that come with device-code phishing.'
+type = "regex"
+flags = 'i'
+pattern = '\bshared\s+(a\s+|the\s+)?(document|file|folder)\b|\bonedrive\b|\bsharepoint\b|\bview\s+(the\s+)?(document|file)\b|\bsecure\s+(document|message)\b|\be-?fax\b|\bvoice\s?mail\b'
+
+[document_pretext]
+title = 'Document pretext (search-ms / WebDAV)'
+description = 'Document pretexts (invoice, remittance, purchase order ...) on search-ms / WebDAV lures.'
+type = "regex"
+flags = 'i'
+pattern = '\b(invoice|remittance|purchase\s+order|payment\s+advice|statement|receipt|contract|scanned\s+document|your\s+(document|file)s?)\b'
+
+[abuse_warning]
+title = 'Cloudflare suspected phishing warning'
+description = '''Cloudflare's block page for a hostname it has confirmed as phishing or malware. The bypass form on the site's own /cdn-cgi/ path is the marker; the wording alone is what an article about these warnings would contain (LR1-05).'''
+type = "regex"
+flags = 'i'
+pattern = '\bsuspected\s+(phishing|malware)\b'

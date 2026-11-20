@@ -8,11 +8,26 @@ Every rule, whatever the engine, is a row in the Postgres `rules` table (`engine
 
 | Source | Where it comes from | Can you edit the body? |
 | --- | --- | --- |
-| `builtin` | [`sandbox/rules/defaults.py`](../sandbox/rules/defaults.py) (`BEHAVIOUR_RULES`, `BUILTIN_YARA`), seeded by [`sandbox/seed.py`](../sandbox/seed.py) on every start | Only in code. Seeding refreshes changed bodies; local disables and weights survive |
+| `builtin` | [`sandbox/rules/defaults.py`](../sandbox/rules/defaults.py) (`BEHAVIOUR_RULES`, `BUILTIN_YARA`), seeded by [`sandbox/seed.py`](../sandbox/seed.py) on every start | Yes: Admin > Detection rules > View > Edit (`PATCH /v1/rules/{id}`). The edit is kept across upgrades until **Revert to built-in** (`POST /v1/rules/{id}/revert`). Unedited bodies are refreshed by seeding; local disables and weights always survive |
 | `local` | Admin, or `POST /v1/rules` | Yes, with `PATCH /v1/rules/{id}` |
 | feed (`et_open`, `signature_base`) | Rule archives imported by [`sandbox/rules/importer.py`](../sandbox/rules/importer.py) | No. Disable it instead; the disable survives feed updates |
 
 Scoring weights are in `scoring_config` (the scoring section in Admin, `PUT /v1/scoring`). A rule scores its own weight if one is set, or else the `severity:<level>` weight. Brands are in the `brands` table (the brands section in Admin, `PUT /v1/brands`).
+
+## Detection strings
+
+The facts that behaviour rules read are built from **detection strings**: keyword patterns, host lists, file types, ports and points (ClickFix command traits, Run-dialog and fake-CAPTCHA wording, payment pretexts, Microsoft sign-in markers, device-code wording, free hosting platforms, form collectors, IP-lookup services, wallet-drainer wording, and so on). They are not in Python code. They ship in [`sandbox/detection/defaults/*.toml`](../sandbox/detection/defaults/), one file per area, each entry with a title and a description, and a detection engineer changes them in **Admin > Detection strings**:
+
+1. Find the entry (search by title, key or value; **Edited only** shows local changes).
+2. Edit it. Lists are one entry per line; patterns are Python regular expressions with checkboxes for the flags; pattern lists and tables have one row per item.
+3. Paste a real lure, command or URL into **Try it** and press **Try the edited value**: it shows what the edited value matches, before anything is saved.
+4. **Save**, with a note saying why. The value is validated first (a pattern that does not compile, a port that is not a number or an empty list is refused with the reason), stored in `detection_overrides`, and recorded in the audit log and **Change history**.
+5. Every analysis from then on uses it, in the API and the worker; **re-analyse** a case to apply it there. Each analysis version stores the `detection_strings` version it used.
+6. **Revert to shipped** deletes the override; the shipped value applies again, including later shipped changes to it. Saving a value equal to the shipped one also reverts.
+
+API: `GET /v1/detection-strings`, `GET|PUT|DELETE /v1/detection-strings/{key}`, `POST /v1/detection-strings/{key}/try`, `GET /v1/detection-strings-history`. Writes need the detection engineer role.
+
+To change what ships, edit the TOML file and add a test. The code reads an entry through a line such as `_RUN_DIALOG = S.bind(globals(), "_RUN_DIALOG", "clickfix.run_dialog")` in `facts.py` or `domains.py`; a test fails if an entry is not read anywhere.
 
 ## Workflow for a new rule
 
@@ -159,7 +174,7 @@ Brand domain entries take three forms (validated by `normalise_brand_domain`):
 
 If a brand's own site is flagged, the fix is almost always a missing domain on that brand, not a rule change.
 
-**Free hosting platforms** (`FREE_HOSTING` in `sandbox/analysis/domains.py`) are treated per tenant. `kit.pages.dev` is its own site: the allowlist entry for `pages.dev` does not cover it, and a page on a brand's own platform (`blob.core.windows.net`, `sites.google.com`) is not owned by that brand.
+**Free hosting platforms** (Admin > Detection strings > Free hosting and site-builder platforms, `hosting.free_hosting`) are treated per tenant. `kit.pages.dev` is its own site: the allowlist entry for `pages.dev` does not cover it, and a page on a brand's own platform (`blob.core.windows.net`, `sites.google.com`) is not owned by that brand.
 
 **Saudi government brands** each own all of `gov.sa`, which only government bodies can register, so one government site mentioning Absher or Nafath is never flagged. Arabic keywords match whole words; avoid single everyday words (`سبل`, `نفاذ`, `نسك`) and use the service's full name instead. The `.sa` and `.com.sa` domains in the built-in list should be confirmed by your team before production, because a wrong domain there creates a blind spot.
 

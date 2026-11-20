@@ -1,0 +1,68 @@
+# Forms and credential prompts: detection strings read by the fact builders.
+# Shipped defaults. Change them in Admin > Detection strings (stored as an
+# override, audited, revertible); edit this file only to change what ships.
+# Regex syntax is Python re. flags: i = ignore case, s = dot matches newline,
+# m = multi-line, x = verbose.
+
+title = 'Forms and credential prompts'
+
+[login_field]
+title = 'Login field names'
+description = 'Field names that make a form field an email or username field.'
+type = "regex"
+flags = 'i'
+pattern = 'e-?mail|login|user|account|loginfmt|identifier|phone'
+
+[sign_in_wording]
+title = 'Sign-in wording'
+description = 'Sign-in wording in a page title or opening text. An email field only counts as a sign-in prompt on such a page.'
+type = "regex"
+flags = 'i'
+pattern = '\b(sign[\s-]?in|log[\s-]?in|log[\s-]?on|verify your (identity|account|email)|enter (your )?(password|email)|account (verification|suspended|locked))\b'
+
+[newsletter_wording]
+title = 'Newsletter wording'
+description = 'Newsletter wording: an email field on such a page is a subscription box, not a sign-in.'
+type = "regex"
+flags = 'i'
+pattern = '\b(subscribe|newsletter|unsubscribe|mailing list)\b'
+
+[card_field]
+title = 'Payment card field names'
+description = 'Field names of payment card details (number, CVV, expiry, holder). A card number with a CVV or expiry is a payment prompt.'
+type = "regex"
+flags = 'i'
+pattern = 'card.?(num|no)|cc.?(num|no)|credit.?card|debit.?card|\bpan\b|cvv|cvc|csc|security.?code|exp(iry|iration)?.?(date|month|year|mm|yy)|card.?holder|holder.?name'
+
+[otp_field]
+title = 'One-time code field names'
+description = 'Field names of one-time codes (OTP, SMS code, PIN, Arabic رمز).'
+type = "regex"
+flags = 'i'
+pattern = '\botp\b|one.?time|verification.?code|verify.?code|sms.?code|auth.?code|\bpin\b|pincode|passcode|security.?pin|activation.?code|رمز'
+
+[seed_phrase_wording]
+title = 'Wallet recovery phrase wording'
+description = 'Wallet recovery phrase wording (seed phrase, 12-word, private key, Arabic عبارة الاسترداد).'
+type = "regex"
+flags = 'i'
+pattern = '(seed|recovery|secret|mnemonic|backup|wallet) (phrase|words)|\b(12|24)[- ]word|private key|عبارة الاسترداد|الكلمات السرية'
+
+[prompt_points]
+title = 'Brand confidence points per prompt'
+description = 'Brand-impersonation confidence points for what a page asks for. The strongest prompt on the page is used.'
+type = "table"
+value_type = "int"
+[prompt_points.values]
+password = 30
+payment = 30
+seed = 30
+otp = 25
+username = 15
+
+[credential_body]
+title = 'Credential field in a request body'
+description = 'A request body carrying a credential field (form-encoded or JSON key).'
+type = "regex"
+flags = 'i'
+pattern = '''(^|[&{,\s\"'])(pw|pass(word|wd)?|pwd|passcode|passwd|loginfmt|credential|secret)[\"']?\s*[:=]'''

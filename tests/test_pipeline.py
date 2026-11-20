@@ -20,6 +20,7 @@ import pyzipper
 from pydantic import SecretStr
 from sqlalchemy import select, text, update
 
+from sandbox import detection
 from sandbox.api.deps import get_resolver
 from sandbox.api.main import create_app
 from sandbox.config import Settings
@@ -124,11 +125,12 @@ async def env(database_url, tmp_path):
                 "analysis_tags, iocs, analysis_versions, verdict_overrides, notes, rule_bundles, "
                 "rules, rule_overrides, scoring_config, brands, feeds, feed_runs, indicators, "
                 "indicator_sources, indicator_suppressions, allowlist_domains, api_clients, "
-                "rate_counters, runtime_config CASCADE"
+                "rate_counters, runtime_config, detection_overrides CASCADE"
             )
         )
         await ensure_defaults(db)
         await db.commit()
+    detection.reset()
     bundle = await build_bundle(ctx)
     assert bundle.status == "ready", bundle.error
     app = create_app(settings)
@@ -925,3 +927,122 @@ async def test_suricata_also_scans_https_rebuilt_from_the_har(env, monkeypatch):
     alerts = report["network"]["suricata_alerts"]
     assert alerts[0]["flows"][0]["decrypted_https"] is True
     assert alerts[0]["flows"][0]["url"] == "https://secure.example.test/gate.php"
+
+
+async def test_detection_strings_edit_try_and_revert(env):
+    """A detection engineer edits a list in Admin: it is validated, audited, used by the
+    next re-analysis, and reverting brings the shipped value back."""
+    client, ctx, worker, _ = env
+    created = await _submit(client)
+    await _drain(worker)
+    aid = created["id"]
+    report = (await client.get(f"/v1/analyses/{aid}/report", headers=ALICE)).json()
+    final_host = report["facts"]["final"]["host"]
+    assert final_host and report["facts"]["final"]["free_hosting"] is None
+
+    listed = (await client.get("/v1/detection-strings", headers=ENGINEER)).json()
+    assert listed["overridden"] == 0 and len(listed["groups"]) >= 8
+    key = "hosting.free_hosting"
+    entry = (await client.get(f"/v1/detection-strings/{key}", headers=ENGINEER)).json()
+    assert entry["type"] == "words" and not entry["overridden"]
+    value = {"values": [*entry["default"]["values"], final_host]}
+
+    denied = await client.put(f"/v1/detection-strings/{key}", json={"value": value}, headers=ALICE)
+    assert denied.status_code == 403
+    bad = await client.put(
+        "/v1/detection-strings/clickfix.run_dialog",
+        json={"value": {"pattern": "(oops", "flags": "i"}},
+        headers=ENGINEER,
+    )
+    assert bad.status_code == 422 and "regular expression" in bad.json()["detail"]
+
+    tried = await client.post(
+        f"/v1/detection-strings/{key}/try",
+        json={"value": value, "sample": f"{final_host}\nother.example"},
+        headers=ENGINEER,
+    )
+    assert tried.json() == {"matched": True, "listed": [final_host]}
+    pattern_try = await client.post(
+        "/v1/detection-strings/clickfix.run_dialog/try",
+        json={"sample": "Press Win + R, then paste"},
+        headers=ENGINEER,
+    )
+    assert pattern_try.json()["matched"] is True
+
+    saved = await client.put(
+        f"/v1/detection-strings/{key}",
+        json={"value": value, "note": "kit posts to it"},
+        headers=ENGINEER,
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["overridden"] and saved.json()["updated_by"] == "eng@example.org"
+
+    await client.post(f"/v1/analyses/{aid}/reanalyse", headers=ALICE)
+    await _drain(worker)
+    report = (await client.get(f"/v1/analyses/{aid}/report", headers=ALICE)).json()
+    assert report["facts"]["final"]["free_hosting"] == final_host
+
+    history = (await client.get("/v1/detection-strings-history", headers=ENGINEER)).json()
+    assert history[0]["key"] == key and history[0]["note"] == "kit posts to it"
+
+    reverted = await client.delete(f"/v1/detection-strings/{key}", headers=ENGINEER)
+    assert reverted.json()["overridden"] is False
+    assert final_host not in detection.get(key)
+    audit = (await client.get("/v1/admin/audit", params={"target": key}, headers=ADMIN)).json()
+    assert {"detection_string.update", "detection_string.revert"} <= {a["action"] for a in audit}
+
+
+async def test_detection_strings_from_another_process_reach_the_worker(env):
+    """The API and the worker are separate processes: the worker picks up an override
+    stored by the API before its next analysis."""
+    from sandbox.db.models import DetectionOverride
+
+    _, ctx, _, _ = env
+    async with ctx.sessionmaker() as db:
+        db.add(
+            DetectionOverride(
+                key="hosting.free_hosting", value={"values": ["only.example"]}, updated_by="x"
+            )
+        )
+        await db.commit()
+        assert detection.get("hosting.free_hosting") != ("only.example",)
+        await detection.refresh(db)
+        assert detection.get("hosting.free_hosting") == ("only.example",)
+        await db.execute(text("DELETE FROM detection_overrides"))
+        await db.commit()
+        await detection.refresh(db)
+        assert "pages.dev" in detection.get("hosting.free_hosting")
+
+
+async def test_builtin_rule_edit_survives_seeding_until_reverted(env):
+    """The Tycoon 2FA YARA rule (and every other built-in) can be tuned in Admin."""
+    from sandbox.db.models import Rule
+
+    client, ctx, _, _ = env
+    rules = (await client.get("/v1/rules", params={"q": "tycoon2fa_web"}, headers=ENGINEER)).json()[
+        "items"
+    ]
+    rule = next(r for r in rules if r["name"] == "tycoon2fa_web")
+    assert rule["editable"] and rule["modified_by"] is None
+    body = (await client.get(f"/v1/rules/{rule['id']}", headers=ENGINEER)).json()["body"]
+    edited = body.replace("condition:", "condition:\n        filesize < 20MB and", 1)
+    assert edited != body
+
+    bad = await client.patch(
+        f"/v1/rules/{rule['id']}", json={"body": "rule x { condition: nope }"}, headers=ENGINEER
+    )
+    assert bad.status_code == 422
+    saved = await client.patch(f"/v1/rules/{rule['id']}", json={"body": edited}, headers=ENGINEER)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["modified_by"] == "eng@example.org"
+
+    async with ctx.sessionmaker() as db:
+        await ensure_defaults(db)  # a restart or upgrade
+        await db.commit()
+        row = await db.get(Rule, rule["id"])
+        assert row.body == edited
+
+    reverted = (await client.post(f"/v1/rules/{rule['id']}/revert", headers=ENGINEER)).json()
+    assert reverted["body"] == body and reverted["modified_by"] is None
+    feed_rule = await client.post("/v1/rules/ru_nope/revert", headers=ENGINEER)
+    assert feed_rule.status_code == 404

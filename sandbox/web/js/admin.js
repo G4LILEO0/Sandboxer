@@ -1,10 +1,13 @@
 // admin.js — admin console: feeds (FED-1..6), rules and rule testing (FED-7..10, FED-13),
+// detection strings (sandbox/detection),
 // bundles and scoring (FED-9, ANA-7), suppressions/allowlist (FED-10, FED-11), brands
 // (ANA-5), API clients (API-2/3), runtime config (ADM-4) and the audit log (ADM-2).
 
 const { el } = Api;
 const panel = document.getElementById('panel');
 
+// replaceChildren() renders null as the text "null"; conditional parts may be null.
+function fill(...nodes) { panel.replaceChildren(...nodes.filter((n) => n !== null && n !== undefined && n !== false)); }
 function empty(text) { return el('p', { className: 'small muted', textContent: text }); }
 function table(headers, rows) {
   return el('div', { className: 'table-wrap' }, el('table', { className: 'analyses' },
@@ -85,7 +88,7 @@ async function rules() {
       return el('tr', {},
         el('td', {}, el('strong', { className: 'monospace small', textContent: r.name }), el('div', { className: 'small muted', textContent: r.description || '' }),
           r.error ? el('div', { className: 'error-message small', textContent: r.error.slice(0, 200) }) : null),
-        el('td', { textContent: r.engine }), el('td', { className: 'small', textContent: `${r.source} ${r.version}` }),
+        el('td', { textContent: r.engine }), el('td', { className: 'small', textContent: `${r.source} ${r.version}${r.modified_by ? ' · edited' : ''}`, title: r.modified_by ? `Built-in rule edited by ${r.modified_by}` : '' }),
         el('td', {}, el('span', { className: `sev sev-${r.severity}`, textContent: r.severity })),
         el('td', { className: 'small', textContent: state }),
         el('td', {}, btn('View', () => viewRule(r.id)), r.error ? null : toggle));
@@ -100,43 +103,59 @@ async function viewRule(id) {
   const res = await Api.get(`/v1/rules/${id}`);
   if (!res.ok) { Api.toast(res.error, true); return; }
   const r = res.data;
-  panel.replaceChildren(
-    el('div', { className: 'row' }, el('h2', { className: 'section-title', textContent: r.name }), btn('Back', rules)),
+  const actions = el('div', {},
+    r.editable && r.engine !== 'suricata' ? btn('Edit', () => ruleEditor(r)) : null,
+    r.modified_by ? btn('Revert to built-in', () => { if (confirm(`Put ${r.name} back to the version that ships with Sandboxer?`)) act(Api.post(`/v1/rules/${r.id}/revert`), 'Reverted; a new bundle is building', () => viewRule(r.id)); }) : null,
+    btn('Back', rules));
+  fill(
+    el('div', { className: 'row' }, el('h2', { className: 'section-title', textContent: r.name }), actions),
     el('p', { className: 'small', textContent: `${r.engine} · ${r.source} ${r.version} · ${r.licence} · severity ${r.severity} · tags ${r.tags.join(', ') || '—'} · ATT&CK ${r.attack_ids.join(', ') || '—'}` }),
+    r.modified_by ? el('p', { className: 'small alert', textContent: `Built-in rule edited by ${r.modified_by}. Sandboxer updates no longer change it until you revert it.` }) : null,
+    !r.editable ? el('p', { className: 'small muted', textContent: 'Feed rules change through their feed: disable this one and add a local rule instead.' }) : null,
     r.error ? el('p', { className: 'error-message small', textContent: r.error }) : null,
     el('pre', { className: 'small', textContent: r.body }),
     r.overrides.length ? el('div', {}, el('h3', { className: 'section-title', textContent: 'Local overrides' }),
       ...r.overrides.map((o) => el('div', { className: 'small', textContent: `${o.at} ${o.by}: ${o.reason} ${o.active ? '(active)' : '(lifted)'}` }))) : null);
 }
 
-function ruleEditor() {
+function ruleEditor(existing) {
+  const r = existing && existing.id ? existing : null;
   const sample = JSON.stringify({ condition: { all: [{ fact: 'forms.password_forms', op: 'gt', value: 0 }, { fact: 'domains.youngest_age_days', op: 'lt', value: 7 }] }, evidence: ['forms.cross_domain_credential_forms', 'domains.young'] }, null, 2);
+  const severity = r ? r.severity : 'medium';
   const form = el('form', {},
     el('div', { className: 'filters' },
-      el('select', { name: 'engine' }, ['behaviour', 'yara'].map((v) => el('option', { value: v, textContent: v }))),
-      el('input', { name: 'name', placeholder: 'rule_name', pattern: '[A-Za-z0-9_\\-.:]+', required: true }),
-      el('select', { name: 'severity' }, ['info', 'low', 'medium', 'high', 'critical'].map((v) => el('option', { value: v, textContent: v, selected: v === 'medium' }))),
-      el('input', { name: 'tags', placeholder: 'tags, comma separated' }),
-      el('input', { name: 'attack_ids', placeholder: 'T1566, …' }),
-      el('input', { name: 'description', placeholder: 'Description', size: 40 })),
-    el('textarea', { name: 'body', className: 'code-input', value: sample }),
-    el('p', { className: 'small muted', textContent: 'Behaviour rules read the facts stored with each analysis (see a report\'s "facts" in its JSON export). Test before saving: new rules are saved disabled.' }),
+      el('select', { name: 'engine', disabled: !!r }, ['behaviour', 'yara'].map((v) => el('option', { value: v, textContent: v, selected: r && r.engine === v }))),
+      el('input', { name: 'name', placeholder: 'rule_name', pattern: '[A-Za-z0-9_\\-.:]+', required: true, value: r ? r.name : '', disabled: !!r }),
+      el('select', { name: 'severity' }, ['info', 'low', 'medium', 'high', 'critical'].map((v) => el('option', { value: v, textContent: v, selected: v === severity }))),
+      el('input', { name: 'tags', placeholder: 'tags, comma separated', value: r ? r.tags.join(', ') : '' }),
+      el('input', { name: 'attack_ids', placeholder: 'T1566, …', value: r ? r.attack_ids.join(', ') : '' }),
+      el('input', { name: 'description', placeholder: 'Description', size: 40, value: r ? r.description : '' })),
+    el('textarea', { name: 'body', className: 'code-input', value: r ? r.body : sample }),
+    el('p', { className: 'small muted', textContent: r
+      ? (r.source === 'builtin' ? 'Editing a built-in rule: the edit is kept across Sandboxer updates until you use "Revert to built-in". Test before saving; saving builds a new bundle.' : 'Test before saving; saving builds a new bundle.')
+      : 'Behaviour rules read the facts stored with each analysis (see a report\'s "facts" in its JSON export). Test before saving: new rules are saved disabled.' }),
     el('div', { className: 'footer-actions' },
-      btn('Test against recent analyses', () => testRule(form)),
-      el('button', { className: 'copy-btn', textContent: 'Save as disabled' }), btn('Back', rules)),
+      btn('Test against recent analyses', () => testRule(form, r)),
+      el('button', { className: 'copy-btn', textContent: r ? 'Save' : 'Save as disabled' }), btn('Back', r ? () => viewRule(r.id) : rules)),
     el('div', { id: 'test-out' }));
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(form));
     const split = (s) => s.split(',').map((x) => x.trim()).filter(Boolean);
+    if (r) {
+      const saved = await act(Api.patch(`/v1/rules/${r.id}`, { body: f.body, severity: f.severity, description: f.description, tags: split(f.tags), attack_ids: split(f.attack_ids) }), 'Saved; a new bundle is building');
+      if (saved) viewRule(r.id);
+      return;
+    }
     const saved = await act(Api.post('/v1/rules', { ...f, tags: split(f.tags), attack_ids: split(f.attack_ids), enabled: false }), 'Saved, disabled. Enable it from the rules list.');
     if (saved) rules();
   });
-  panel.replaceChildren(el('h2', { className: 'section-title', textContent: 'New rule' }), form);
+  panel.replaceChildren(el('h2', { className: 'section-title', textContent: r ? `Edit ${r.name}` : 'New rule' }), form);
 }
 
-async function testRule(form) {
+async function testRule(form, existing) {
   const f = Object.fromEntries(new FormData(form));
+  if (existing) f.engine = existing.engine;
   const out = document.getElementById('test-out');
   out.replaceChildren(empty('Testing…'));
   const res = await Api.post('/v1/rules/test', { engine: f.engine, body: f.body, severity: f.severity, limit: 100 });
@@ -150,6 +169,169 @@ async function testRule(form) {
       el('td', {}, el('details', {}, el('summary', { className: 'small', textContent: 'evidence' }), el('pre', { className: 'small', textContent: JSON.stringify(r.evidence, null, 2) }))),
       el('td', {}, Api.verdictBadge(r.verdict), ` ${r.score}`),
       el('td', {}, Api.verdictBadge(r.new_verdict), ` ${r.new_score}`)))));
+}
+
+// --- detection strings ---------------------------------------------------------------
+// The keyword patterns, host lists, file types and points the fact builders match
+// captures against (sandbox/detection). An edit is validated on save, audited, and used
+// by the next analysis or re-analysis; "Revert to shipped" restores the default.
+const stringFilter = { q: '', edited: false };
+const TYPE_LABEL = { regex: 'pattern', regex_list: 'pattern list', words: 'list', numbers: 'numbers', table: 'table' };
+const FLAG_NAMES = { i: 'ignore case', s: 'dot matches newline', m: 'multi-line', x: 'verbose' };
+
+function stringPreview(e) {
+  const v = e.value;
+  if (e.type === 'regex') return v.pattern.length > 140 ? `${v.pattern.slice(0, 140)}…` : v.pattern;
+  if (e.type === 'regex_list') return `${v.items.length} patterns${v.items.some((i) => i.name) ? `: ${v.items.map((i) => i.name).filter(Boolean).slice(0, 6).join(', ')}` : ''}`;
+  if (e.type === 'table') return Object.entries(v.values).slice(0, 6).map(([k, x]) => `${k}: ${Array.isArray(x) ? x.join(' ') : typeof x === 'object' ? '…' : x}`).join(' · ');
+  return `${v.values.length}: ${v.values.slice(0, 8).join(', ')}${v.values.length > 8 ? ', …' : ''}`;
+}
+
+async function strings() {
+  const res = await Api.get('/v1/detection-strings');
+  if (!res.ok) { fill(empty(res.error)); return; }
+  const canEdit = Api.hasRole('detection_engineer');
+  const search = el('input', { type: 'search', placeholder: 'Search titles, keys and values', value: stringFilter.q, size: 34 });
+  const editedOnly = el('input', { type: 'checkbox', checked: stringFilter.edited });
+  const list = el('div');
+  const render = () => {
+    const q = stringFilter.q.toLowerCase();
+    const groups = res.data.groups.map((g) => ({ ...g, entries: g.entries.filter((e) => (!stringFilter.edited || e.overridden)
+      && (!q || `${e.key} ${e.title} ${e.description} ${JSON.stringify(e.value)}`.toLowerCase().includes(q))) })).filter((g) => g.entries.length);
+    list.replaceChildren(...(groups.length ? groups.map((g) => el('div', {},
+      el('h3', { className: 'section-title', textContent: `${g.name} (${g.entries.length})` }),
+      table(['Detection string', 'Value', ''], g.entries.map((e) => el('tr', {},
+        el('td', {}, el('strong', { textContent: e.title }), e.overridden ? el('span', { className: 'small sev sev-medium', textContent: ' edited', title: `by ${e.updated_by} ${Api.fmtTime(e.updated_at)}` }) : null,
+          el('div', { className: 'small muted monospace', textContent: `${e.key} · ${TYPE_LABEL[e.type]}` }),
+          el('div', { className: 'small muted', textContent: e.description }),
+          e.error ? el('div', { className: 'error-message small', textContent: e.error }) : null),
+        el('td', { className: 'monospace small url-cell', textContent: stringPreview(e) }),
+        el('td', {}, btn(canEdit ? 'Edit' : 'View', () => stringEditor(e.key)))))))) : [empty('Nothing matches.')]));
+  };
+  search.addEventListener('input', () => { stringFilter.q = search.value; render(); });
+  editedOnly.addEventListener('change', () => { stringFilter.edited = editedOnly.checked; render(); });
+  fill(
+    el('div', { className: 'row' }, el('h2', { className: 'section-title', textContent: 'Detection strings' }), btn('Change history', stringHistory)),
+    el('p', { className: 'small muted', textContent: `The words, patterns and lists behind the behaviour facts (ClickFix commands, lure wording, Microsoft sign-in markers, free hosting, collectors…). Edits are checked before they are saved, recorded in the audit log, and used from the next analysis; re-analyse a case to apply them to it. ${res.data.overridden} edited · version ${res.data.version}.` }),
+    el('div', { className: 'filters' }, search, el('label', { className: 'small' }, editedOnly, ' Edited only')),
+    list);
+  render();
+}
+
+async function stringHistory() {
+  const res = await Api.get('/v1/detection-strings-history');
+  fill(
+    el('div', { className: 'row' }, el('h2', { className: 'section-title', textContent: 'Detection string changes' }), btn('Back', strings)),
+    res.ok && res.data.length ? table(['When', 'Who', 'Change', 'Detection string', 'Note'], res.data.map((h) => el('tr', {},
+      el('td', { className: 'small', textContent: Api.fmtTime(h.at) }), el('td', { className: 'small', textContent: h.by }),
+      el('td', { className: 'small', textContent: h.action === 'revert' ? 'reverted to shipped' : 'edited' }),
+      el('td', {}, el('a', { href: '#', className: 'monospace small', textContent: h.key, onclick: (ev) => { ev.preventDefault(); stringEditor(h.key); } })),
+      el('td', { className: 'small', textContent: h.note })))) : empty(res.ok ? 'No changes yet.' : res.error));
+}
+
+function flagBoxes(flags, prefix) {
+  return el('span', { className: 'small' }, Object.entries(FLAG_NAMES).map(([f, label]) =>
+    el('label', { title: label, style: 'margin-right:8px' }, el('input', { type: 'checkbox', dataset: { flag: f, group: prefix }, checked: (flags || '').includes(f) }), ` ${label}`)));
+}
+function readFlags(root, prefix) {
+  return [...root.querySelectorAll(`input[data-group="${prefix}"]:checked`)].map((c) => c.dataset.flag).join('');
+}
+
+// One editor per entry type; each returns { node, read } where read() gives the value.
+function regexField(item, prefix) {
+  const pattern = el('textarea', { className: 'code-input monospace', value: item.pattern || '', rows: 3, style: 'min-height:70px' });
+  return { node: el('div', {}, pattern, flagBoxes(item.flags, prefix)), read: (root) => ({ pattern: pattern.value.trim(), flags: readFlags(root, prefix) }) };
+}
+
+function valueEditor(e, value) {
+  if (e.type === 'regex') return regexField(value, 'main');
+  if (e.type === 'words' || e.type === 'numbers') {
+    const area = el('textarea', { className: 'code-input monospace', value: value.values.join('\n') });
+    return { node: el('div', {}, el('p', { className: 'small muted', textContent: 'One entry per line.' }), area),
+      read: () => ({ values: area.value.split('\n').map((x) => x.trim()).filter(Boolean).map((x) => (e.type === 'numbers' ? Number(x) : x)) }) };
+  }
+  if (e.type === 'regex_list') {
+    const named = e.default.items.some((i) => i.name);
+    const scored = e.default.items.some((i) => 'points' in i);
+    const rows = el('div', { className: 'stack' });
+    let n = 0;
+    const addRow = (item) => {
+      const prefix = `item${n += 1}`;
+      const field = regexField(item, prefix);
+      const name = named ? el('input', { value: item.name || '', placeholder: 'name (shown as evidence)', size: 24 }) : null;
+      const points = scored ? el('input', { type: 'number', value: item.points ?? 1, className: 'num', title: 'points' }) : null;
+      const row = el('div', { className: 'card-lite', style: 'border-top:1px solid var(--line);padding-top:8px' },
+        el('div', { className: 'filters' }, name, points, item.note ? el('span', { className: 'small muted', textContent: item.note }) : null, btn('Remove', () => row.remove())), field.node);
+      row.read = () => ({ ...field.read(row), ...(named ? { name: name.value.trim() } : {}), ...(scored ? { points: Number(points.value) } : {}), ...(item.note ? { note: item.note } : {}) });
+      rows.append(row);
+    };
+    value.items.forEach(addRow);
+    return { node: el('div', {}, rows, btn('Add pattern', () => addRow({ pattern: '', flags: 'i' }))),
+      read: () => ({ items: [...rows.children].map((r) => r.read()) }) };
+  }
+  // table: name -> value of value_type
+  const rows = el('div');
+  let n = 0;
+  const addRow = (k, v) => {
+    const prefix = `row${n += 1}`;
+    const key = el('input', { value: k, placeholder: 'name', size: 22 });
+    let read;
+    let input;
+    if (e.value_type === 'regex') { const f = regexField(v || { pattern: '', flags: 'i' }, prefix); input = f.node; read = (row) => f.read(row); }
+    else if (e.value_type === 'str_list' || e.value_type === 'int_list') {
+      input = el('input', { value: (v || []).join(', '), size: 60, placeholder: e.value_type === 'str_list' ? 'comma separated (empty = any)' : 'comma separated numbers' });
+      read = () => input.value.split(',').map((x) => x.trim()).filter(Boolean).map((x) => (e.value_type === 'int_list' ? Number(x) : x));
+    } else {
+      input = el('input', { value: v ?? '', type: e.value_type === 'int' ? 'number' : 'text', size: 30 });
+      read = () => (e.value_type === 'int' ? Number(input.value) : input.value.trim());
+    }
+    const row = el('div', { className: 'filters' }, key, input, btn('Remove', () => row.remove()));
+    row.read = () => [key.value.trim(), read(row)];
+    rows.append(row);
+  };
+  Object.entries(value.values).forEach(([k, v]) => addRow(k, v));
+  return { node: el('div', {}, rows, btn('Add row', () => addRow('', null))),
+    read: () => ({ values: Object.fromEntries([...rows.children].map((r) => r.read()).filter(([k]) => k)) }) };
+}
+
+async function stringEditor(key) {
+  const res = await Api.get(`/v1/detection-strings/${encodeURIComponent(key)}`);
+  if (!res.ok) { Api.toast(res.error, true); return; }
+  const e = res.data;
+  const canEdit = Api.hasRole('detection_engineer');
+  const editor = valueEditor(e, e.value);
+  const note = el('input', { placeholder: 'Why (kept in the change history)', size: 60, value: '' });
+  const sample = el('textarea', { className: 'code-input', rows: 4, style: 'min-height:90px', placeholder: 'Paste a lure, command or URL to check the edited value against' });
+  const tryOut = el('div');
+  const tryIt = async () => {
+    const r = await Api.post(`/v1/detection-strings/${encodeURIComponent(key)}/try`, { value: editor.read(editor.node), sample: sample.value });
+    if (!r.ok) { tryOut.replaceChildren(el('p', { className: 'error-message small', textContent: r.error })); return; }
+    const d = r.data;
+    const lines = d.items ? d.items.filter((i) => i.matches.length).map((i) => `${i.name || `#${i.index}`}: ${i.matches.join(' | ')}`)
+      : d.listed ? d.listed : d.matches;
+    tryOut.replaceChildren(el('p', { className: d.matched ? 'small fresh' : 'small stale', textContent: d.matched ? 'Matches:' : 'No match.' }),
+      lines.length ? el('pre', { className: 'small', textContent: lines.join('\n') }) : null);
+  };
+  const save = async () => {
+    const saved = await act(Api.put(`/v1/detection-strings/${encodeURIComponent(key)}`, { value: editor.read(editor.node), note: note.value }), 'Saved. Analyses from now on use it; re-analyse a case to apply it there.');
+    if (saved) stringEditor(key);
+  };
+  const revert = () => {
+    if (confirm(`Revert "${e.title}" to the value that ships with Sandboxer?`)) act(Api.del(`/v1/detection-strings/${encodeURIComponent(key)}`), 'Reverted to the shipped value', () => stringEditor(key));
+  };
+  fill(
+    el('div', { className: 'row' }, el('h2', { className: 'section-title', textContent: e.title }), btn('Back', strings)),
+    el('p', { className: 'small muted monospace', textContent: `${e.key} · ${e.group} · ${TYPE_LABEL[e.type]}${e.value_type ? ` of ${e.value_type}` : ''}` }),
+    el('p', { className: 'small', textContent: e.description }),
+    e.overridden ? el('p', { className: 'small alert', textContent: `Edited by ${e.updated_by} ${Api.fmtTime(e.updated_at)}${e.note ? `: ${e.note}` : ''}. Sandboxer updates to this entry do not apply until you revert it.` }) : null,
+    e.error ? el('p', { className: 'error-message small', textContent: e.error }) : null,
+    (e.type === 'regex' || e.type === 'regex_list' || e.value_type === 'regex') ? el('p', { className: 'small muted', textContent: 'Patterns are Python regular expressions. Test against real text below before saving.' }) : null,
+    editor.node,
+    canEdit ? el('div', { className: 'filters' }, note) : null,
+    canEdit ? el('div', { className: 'footer-actions' }, btn('Save', save), e.overridden ? btn('Revert to shipped', revert) : null, btn('Back', strings)) : null,
+    el('h3', { className: 'section-title', textContent: 'Try it' }), sample, canEdit ? el('div', {}, btn('Try the edited value', tryIt)) : null, tryOut,
+    e.overridden ? el('details', {}, el('summary', { className: 'small', textContent: 'Shipped value' }), el('pre', { className: 'small', textContent: JSON.stringify(e.default, null, 2) })) : null);
+  if (!canEdit) editor.node.querySelectorAll('input, textarea, button').forEach((n) => { n.disabled = true; });
 }
 
 // --- bundles and scoring -------------------------------------------------------------
@@ -330,7 +512,7 @@ async function audit(filters = {}) {
 }
 
 // --- tabs --------------------------------------------------------------------------
-const views = { feeds, rules, bundles, indicators, brands, clients, config, audit };
+const views = { feeds, rules, strings, bundles, indicators, brands, clients, config, audit };
 function show(name) {
   document.querySelectorAll('#admin-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   panel.replaceChildren(empty('Loading…'));
