@@ -1,0 +1,154 @@
+# Microsoft and OAuth sign-in: detection strings read by the fact builders.
+# Shipped defaults. Change them in Admin > Detection strings (stored as an
+# override, audited, revertible); edit this file only to change what ships.
+# Regex syntax is Python re. flags: i = ignore case, s = dot matches newline,
+# m = multi-line, x = verbose.
+
+title = 'Microsoft and OAuth sign-in'
+
+[idp_cdn]
+title = 'Identity-provider CDNs'
+description = 'Identity-provider CDNs that serve sign-in branding assets.'
+type = "regex"
+flags = 'i'
+pattern = '(^|\.)(aadcdn\.msftauth\.net|aadcdn\.msauth\.net|logincdn\.msauth\.net|[a-z0-9-]+\.oktacdn\.com)$'
+
+[ests_cookies]
+title = 'Entra session cookie names'
+description = 'Microsoft Entra / ESTS session cookie names an AiTM proxy relays.'
+type = "words"
+values = [
+  'buid',
+  'estsauth',
+  'estsauthlight',
+  'estsauthpersistent',
+  'fpc',
+  'x-ms-gateway-slice',
+]
+
+[first_party_app_ids]
+title = 'Microsoft first-party app ids'
+description = "Microsoft first-party OAuth app client ids (a common subset). Tenant-side check for analysts: a first-party app's service principal is owned by Microsoft's tenant f8cdef31-a31e-4b4a-93e4-5f571e91255a."
+type = "words"
+values = [
+  '00000003-0000-0000-c000-000000000000',  # Microsoft Graph resource id (never a client_id; kept so it is not taken for a third-party app)
+  '04b07795-8ddb-461a-bbee-02f9e1bf7b46',  # Azure CLI
+  '14d82eec-204b-4c2f-b7e8-296a70dab67e',  # Microsoft Graph Command Line Tools
+  '1950a258-227b-4e31-a9cf-717495945fc2',  # Azure PowerShell
+  '29d9ed98-a469-4536-ade2-f981bc1d605e',  # Microsoft Authentication Broker
+  'd3590ed6-52b3-4102-aeff-aad2292ab01c',  # Microsoft Office
+  'de8bc8b5-d9f9-48b1-a8ad-b748da725064',  # Graph Explorer
+]
+
+[high_risk_scopes]
+title = 'High-risk OAuth scopes'
+description = 'OAuth scopes that give an app a mailbox, files or the directory. A consent request for these from an app outside the first-party list is high risk.'
+type = "words"
+values = [
+  'chat.read',
+  'directory.readwrite.all',
+  'ews.accessasuser.all',
+  'files.read.all',
+  'files.readwrite.all',
+  'full_access_as_user',
+  'mail.read',
+  'mail.readwrite',
+  'mail.send',
+  'sites.readwrite.all',
+  'user.readwrite.all',
+]
+
+[auth_hosts]
+title = 'Microsoft sign-in hosts'
+description = 'Real Microsoft sign-in hosts.'
+type = "words"
+values = [
+  'login.live.com',
+  'login.microsoft.com',
+  'login.microsoftonline.com',
+]
+
+[auth_path]
+title = 'Microsoft sign-in paths'
+description = 'Microsoft sign-in API paths (authorize, GetCredentialType, KMSI, device auth, post.srf) an AiTM proxy relays from another host.'
+type = "regex"
+flags = 'i'
+pattern = '/(common|organizations|consumers|[0-9a-f-]{36}|[a-z0-9.-]+\.onmicrosoft\.com)/(oauth2/(v2\.0/)?authorize|login|getcredentialtype|reprocess|sas/|kmsi|oauth2/deviceauth)|/(ppsecure/post\.srf|login\.srf)'
+
+[oauth_error]
+title = 'OAuth error codes'
+description = 'OAuth error codes returned to the redirect URI.'
+type = "regex"
+flags = 'i'
+pattern = 'error=(interaction_required|access_denied|consent_required|login_required)'
+
+[login_page_markers]
+title = 'Microsoft sign-in page markers'
+description = 'Microsoft sign-in page structural markers in the raw HTML ($Config, i0116, idSIButton9, aadcdn assets). They survive text obfuscation. Each item needs a name, which is shown as evidence.'
+type = "regex_list"
+[[login_page_markers.items]]
+name = 'ests_config'
+flags = 's'
+pattern = '\$Config\s*=.{0,4000}(urlGetCredentialType|sCanaryTokenName|urlMsaSignUp|sCtx)'
+[[login_page_markers.items]]
+name = 'input_i0116'
+flags = ''
+pattern = '\bi011[68]\b'
+[[login_page_markers.items]]
+name = 'si_button'
+flags = ''
+pattern = '\bidSIButton9\b'
+[[login_page_markers.items]]
+name = 'aadcdn_asset'
+flags = 'i'
+pattern = 'aadcdn\.ms(ft)?auth\.net'
+[[login_page_markers.items]]
+name = 'ms_login_host'
+flags = 'i'
+pattern = 'login\.microsoftonline\.com'
+[[login_page_markers.items]]
+name = 'ms_title'
+flags = 'i'
+pattern = 'Sign in to your account'
+
+[fake_address_bar]
+title = 'Browser-in-the-browser address bar'
+description = 'L2-NEW-4 browser-in-the-browser: a sign-in URL drawn as element text (a fake address bar), not as a link href, on a page that also has a live password input.'
+type = "regex"
+flags = 'i'
+pattern = '>\s*(?:\U0001F512\s*)?(https://(?:login\.microsoftonline\.com|login\.live\.com|login\.microsoft\.com|accounts\.google\.com|appleid\.apple\.com)/[^<\s]{0,300})\s*<'
+
+[authorize_url_in_page]
+title = 'Entra authorize URL in page text'
+description = 'An Entra authorize URL written into a page (link, inline script, window.open target).'
+type = "regex"
+flags = 'i'
+pattern = '''https:(?://|\\/\\/)login\.microsoft(?:online)?\.com(?:/|\\/)[^\s\"'<>]{0,200}?oauth2(?:/|\\/)(?:v2\.0(?:/|\\/))?authorize\?[^\s\"'<>]{1,2000}'''
+
+[device_login]
+title = 'Device-code sign-in entry points'
+description = 'Microsoft device-code sign-in entry points (DE-M365-004).'
+type = "regex"
+flags = 'i'
+pattern = '''https?:(?://|\\/\\/)(?:www\.)?(?:microsoft\.com|aka\.ms)(?:/|\\/)devicelogin\b|https?:(?://|\\/\\/)login\.microsoft(?:online)?\.com(?:/|\\/)[^\s\"'<>]{0,80}?oauth2(?:/|\\/)deviceauth\b|https?:(?://|\\/\\/)login\.microsoft(?:online)?\.com(?:/|\\/)device(?![\w-])'''
+
+[code_wording]
+title = 'Enter-the-code wording'
+description = 'Enter-the-code wording on a device-code phishing page.'
+type = "regex"
+flags = 'i'
+pattern = '\b(enter|use|type|input|copy)\s+(this|the|your|following)?\s*(one-?time\s+)?code\b|\b(device|authentication|sign-?in|verification)\s+code\b'
+
+[device_code_token]
+title = 'Displayed device code'
+description = 'A displayed device code (case-sensitive): 8-9 upper-case letters/digits, optional dash, with at least one digit and one letter.'
+type = "regex"
+flags = ''
+pattern = '\b(?=[A-Z0-9-]*\d)(?=[A-Z0-9-]*[A-Z])[A-Z0-9]{4}-?[A-Z0-9]{4,5}\b'
+
+[apps_script_exec]
+title = 'Google Apps Script web app path'
+description = 'L2-NEW-5: Apps Script web apps run attacker code under a Google host, so brand ownership and a google.com allowlist would vouch for them. Each /macros/s/<id>/exec deployment (and its script.googleusercontent.com sandbox frame) is judged on its own.'
+type = "regex"
+flags = ''
+pattern = '^(/a/[^/]+)?/macros/s/[^/]+/exec\b'

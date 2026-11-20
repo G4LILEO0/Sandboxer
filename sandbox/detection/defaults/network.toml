@@ -1,0 +1,96 @@
+# Network, ports and redirectors: detection strings read by the fact builders.
+# Shipped defaults. Change them in Admin > Detection strings (stored as an
+# override, audited, revertible); edit this file only to change what ships.
+# Regex syntax is Python re. flags: i = ignore case, s = dot matches newline,
+# m = multi-line, x = verbose.
+
+title = 'Network, ports and redirectors'
+
+[remote_access_ports]
+title = 'Remote-access ports'
+description = 'Remote-access tool ports. Browser-based local port scanning opens WebSockets, fetches, images or WebRTC TURN/STUN servers against many ports on 127.0.0.1 or the LAN; probes of these ports are reported by name. Names must be port numbers.'
+type = "table"
+value_type = "str"
+[remote_access_ports.values]
+22 = 'ssh'
+23 = 'telnet'
+3389 = 'rdp'
+4899 = 'radmin'
+5650 = 'remote-utilities'
+5800 = 'vnc'
+5900 = 'vnc'
+5901 = 'vnc'
+5902 = 'vnc'
+5903 = 'vnc'
+5931 = 'ammyy'
+5938 = 'teamviewer'
+5939 = 'teamviewer'
+6129 = 'dameware'
+6568 = 'anydesk'
+7070 = 'anydesk'
+
+[local_app_ports]
+title = 'Local helper app ports'
+description = 'Desktop apps whose own sites look for their local helper on a fixed port range.'
+type = "table"
+value_type = "int_list"
+[local_app_ports.values]
+discord-rpc = [6463, 6464, 6465, 6466, 6467, 6468, 6469, 6470, 6471, 6472]
+
+[fraud_vendor_scripts]
+title = 'Anti-fraud profiler scripts'
+description = 'Anti-fraud device profiling that scans local ports by design. ThreatMetrix is often served from a first-party CNAME, so its /fp/ tag paths count as well as its own host.'
+type = "table"
+value_type = "regex"
+[fraud_vendor_scripts.values]
+threatmetrix = { flags = 'i', pattern = '^https?://[^/]*online-metrix\.net/|/fp/(?:tags|check|clear|ls_fp)\.js|[?&]org_id=[^&]+&(?:[^&]+&)*session_id=' }
+
+[fraud_vendor_ports]
+title = 'Ports anti-fraud profilers probe'
+description = 'The ports each profiler is known to probe (ThreatMetrix: loopback WebSockets).'
+type = "table"
+value_type = "int_list"
+[fraud_vendor_ports.values]
+threatmetrix = [3389, 5279, 5900, 5901, 5902, 5903, 5931, 5938, 5939, 5944, 5950, 6039, 6040, 7070, 63333]
+
+[cloaking_decoy_hosts]
+title = 'Cloaking decoy destinations'
+description = 'Decoy destinations a cloaking page bounces to after a failed sandbox / bot check.'
+type = "regex"
+flags = 'i'
+pattern = '(^|\.)(google\.[a-z.]+|wikibooks\.org|wikipedia\.org|ebay\.com|booking\.com|office\.com|microsoft\.com)$'
+
+[trusted_redirectors]
+title = 'Trusted redirectors / open redirects'
+description = 'Trusted redirector / open-redirect wrappers abused to launder a lure URL.'
+type = "regex"
+flags = 'i'
+pattern = 'google\.[a-z.]+/(amp/s/|url\?|aclk)|googleadservices\.com/pagead/aclk|youtube\.com/redirect|l\.facebook\.com/l\.php|/t\.co/|bit\.ly/|tinyurl\.com/|is\.gd/|serving-sys\.com|safelinks\.protection\.outlook\.com|urldefense\.com|mimecastprotect\.com'
+
+[antibot_challenge]
+title = 'CAPTCHA / antibot challenge resources'
+description = 'CAPTCHA / antibot challenge resources, and their result-field names.'
+type = "regex"
+flags = 'i'
+pattern = 'challenges\.cloudflare\.com/turnstile|/cdn-cgi/challenge-platform|www\.google\.com/recaptcha|www\.recaptcha\.net/recaptcha|hcaptcha\.com|cf-turnstile-response|g-recaptcha-response'
+
+[search_ms_link]
+title = 'search-ms: link'
+description = "L2-NEW-6: a search-ms: / ms-search: link that opens Windows search on a remote share, so Explorer shows the attacker's files as if they were local."
+type = "regex"
+flags = 'i'
+pattern = '''\b(?:search-ms|ms-search):[^\s\"'<>]{1,1000}'''
+
+[webdav_unc]
+title = 'WebDAV UNC path'
+description = 'A WebDAV UNC path (\\host@SSL\DavWWWRoot) to a remote share.'
+type = "regex"
+flags = 'i'
+pattern = '\\\\([a-z0-9.-]+)@ssl\\davwwwroot|//([a-z0-9.-]+)@ssl/davwwwroot'
+
+[search_location]
+title = 'search-ms location host'
+description = 'The host in a search-ms location: argument.'
+type = "regex"
+flags = 'i'
+pattern = 'location:\s*(?:\\\\|//|https?://)?([a-z0-9.-]+\.[a-z]{2,})'
