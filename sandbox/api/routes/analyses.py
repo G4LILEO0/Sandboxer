@@ -282,7 +282,7 @@ async def submit_bulk(
 async def list_analyses(
     principal: Reader,
     db: Db,
-    url: str | None = Query(None, description="Exact URL; normalised before matching"),
+    url: str | None = Query(None, description="Exact URL. The API normalises it before matching"),
     domain: str | None = None,
     verdict: str | None = None,
     tag: str | None = None,

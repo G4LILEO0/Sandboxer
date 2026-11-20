@@ -1106,7 +1106,7 @@ def _brand(data: CaptureData, cross_forms: list[dict[str, Any]]) -> dict[str, An
                 )
             if url in cross_pages:
                 confidence += 10
-                evidence.append("credentials are posted to another site")
+                evidence.append("the page posts credentials to another site")
             if look:
                 confidence += 20
                 evidence.append(f"{host} imitates {look['imitates']} ({look['kind']})")
