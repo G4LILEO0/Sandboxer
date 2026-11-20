@@ -57,8 +57,8 @@ BEHAVIOUR_RULES = [
         "high",
         ["phishing", "credential-harvest"],
         ["T1566.002", "T1056.003"],
-        "A form with a password field submits to a different site than the page (sites of "
-        "one brand, such as live.com and microsoftonline.com, count as the same site).",
+        "A form with a password field submits to a different site than the page. Sites of one "
+        "brand count as the same site (for example live.com and microsoftonline.com).",
         {"fact": "forms.cross_domain_credential", "op": "gt", "value": 0},
         ["forms.cross_domain_credential_forms"],
     ),
@@ -106,10 +106,10 @@ BEHAVIOUR_RULES = [
         "critical",
         ["clickfix"],
         ["T1204.004", "T1059"],
-        "The page put a ClickFix-style command on the clipboard (download cradle, hidden or "
-        "encoded PowerShell, mshta of a URL, a finger.exe or for /f fetch-and-run, caret "
-        "obfuscation, or a fake-CAPTCHA comment or padded decoy), or a command "
-        "together with instructions to paste it into the Run dialog or a terminal.",
+        "The page put a command on the clipboard. The command has a ClickFix trait, or the page "
+        "tells the visitor to paste it into the Run dialog or a terminal. ClickFix traits: a "
+        "download cradle, hidden or encoded PowerShell, mshta of a URL, a finger.exe or for /f "
+        "fetch-and-run, caret obfuscation, or a fake-CAPTCHA comment or padded decoy.",
         _CLICKFIX_LIKE,
         ["clipboard.commands", "lure.run_dialog_pages"],
     ),
@@ -134,8 +134,8 @@ BEHAVIOUR_RULES = [
         "high",
         ["clickfix", "suspicious-clipboard"],
         ["T1204.004"],
-        "The page wrote 40+ characters to the clipboard that match no known command "
-        "pattern, and tells the visitor to paste into Run or a terminal: an obfuscated or "
+        "The page wrote 40+ characters to the clipboard that match no known command pattern. The "
+        "page also tells the visitor to paste into Run or a terminal. This is an obfuscated or "
         "unusual ClickFix payload.",
         _PASTE_LURE_WRITE,
         ["clipboard.write_samples", "lure.run_dialog_pages", "final.url"],
@@ -145,9 +145,9 @@ BEHAVIOUR_RULES = [
         "medium",
         ["suspicious-clipboard"],
         ["T1204.004", "T1115"],
-        "The page wrote non-command text to the clipboard with no user gesture behind it. "
-        "Copy buttons, share links and coupon codes copy on a click; a write nobody asked "
-        "for is how a lure pre-loads what it will tell the visitor to paste.",
+        "The page wrote non-command text to the clipboard with no user gesture behind it. Copy "
+        "buttons, share links and coupon codes copy on a click. A write that nobody asked for is "
+        "how a lure pre-loads what it will tell the visitor to paste.",
         {
             "all": [
                 {"fact": "clipboard.no_gesture_writes", "op": "gt", "value": 0},
@@ -161,9 +161,9 @@ BEHAVIOUR_RULES = [
         "low",
         ["clipboard"],
         ["T1115"],
-        "The page wrote to the clipboard (informational). Copy buttons, share links and "
-        "coupon codes do this on a click; it is listed so that any write, command or not, "
-        "is visible in the report. Does not fire alongside another clipboard rule.",
+        "The page wrote to the clipboard (informational). Copy buttons, share links and coupon "
+        "codes do this on a click. The rule exists so that the report shows every write, command "
+        "or not. It does not fire alongside another clipboard rule.",
         {
             "all": [
                 {"fact": "clipboard.writes", "op": "gt", "value": 0},
@@ -180,8 +180,8 @@ BEHAVIOUR_RULES = [
         "medium",
         ["newly-registered"],
         ["T1583.001"],
-        "The submitted, redirect or final domain was registered less than 30 days ago "
-        "(third-party resources are not counted).",
+        "The submitted, redirect or final domain was registered less than 30 days ago. Third-party "
+        "resources do not count.",
         {"fact": "domains.chain_youngest_age_days", "op": "lt", "value": 30},
         ["domains.young"],
     ),
@@ -259,10 +259,10 @@ BEHAVIOUR_RULES = [
         "high",
         ["phishing", "brand-impersonation", "free-hosting"],
         ["T1583.006", "T1656"],
-        "A page on a free hosting or site-builder platform (pages.dev, typedream.app, "
-        "web.app, blob.core.windows.net, ...) has a brand plus login, wallet, support or "
-        "verification wording in its title: the SEO and smishing landing pages that send "
-        "victims on to a harvester.",
+        "A page on a free hosting or site-builder platform has a brand and login, wallet, support "
+        "or verification wording in its title. Example platforms: pages.dev, typedream.app, "
+        "web.app, blob.core.windows.net. These are the SEO and smishing landing pages that send "
+        "victims to a harvester.",
         {"fact": "brand.free_hosting_lure", "op": "eq", "value": True},
         ["brand"],
     ),
@@ -272,10 +272,10 @@ BEHAVIOUR_RULES = [
         "high",
         ["phishing", "brand-impersonation", "free-hosting"],
         ["T1583.006", "T1656", "T1566.002"],
-        "A page on a free hosting or site-builder platform whose tenant name carries a brand "
-        "(microsoftaccount-kit.<builder>, ledger-live-kit.pages.dev) asks for a password, "
-        "sign-in name, card, code or recovery phrase. The page itself need not name the "
-        "brand; builder forms often have no real password field.",
+        "A page on a free hosting or site-builder platform asks for a password, sign-in name, "
+        "card, code or recovery phrase. Its tenant name carries a brand "
+        "(microsoftaccount-kit.<builder>, ledger-live-kit.pages.dev). The page itself need not "
+        "name the brand. Builder forms often have no real password field.",
         {"fact": "brand.hosting_label", "op": "exists", "value": True},
         ["brand.hosting_label", "final.url"],
     ),
@@ -285,9 +285,9 @@ BEHAVIOUR_RULES = [
         "high",
         ["phishing", "malware-download", "takedown"],
         ["T1583.006"],
-        "The page ended on Cloudflare's 'Suspected Phishing' or 'Suspected Malware' block "
-        "for this hostname: the provider has already confirmed abuse, so the payload is "
-        "not visible but the URL is not clean. Re-run only if the payload is needed.",
+        "The page ended on Cloudflare's 'Suspected Phishing' or 'Suspected Malware' block for this "
+        "hostname. The provider already confirmed abuse. The payload is not visible, but the URL "
+        "is not clean. Run the analysis again only if you need the payload.",
         {"fact": "final.abuse_interstitial", "op": "exists", "value": True},
         ["final.abuse_interstitial", "final.url"],
     ),
@@ -298,9 +298,9 @@ BEHAVIOUR_RULES = [
         ["phishing", "credential-harvest"],
         ["T1566.002", "T1656"],
         "A password page fetches another site's favicon through a favicon service (Google "
-        "s2/faviconV2, DuckDuckGo, Clearbit), the trick webmail kits use to wear the "
-        "victim's own mail-provider icon, and it is on free hosting, a domain under 30 "
-        "days old, calls an IP-lookup service or shows verification wording.",
+        "s2/faviconV2, DuckDuckGo, Clearbit). Webmail kits use this trick to show the victim's own "
+        "mail-provider icon. The page also is on free hosting, is on a domain under 30 days old, "
+        "calls an IP-lookup service or shows verification wording.",
         {
             "all": [
                 {"fact": "forms.password_forms", "op": "gt", "value": 0},
@@ -323,7 +323,7 @@ BEHAVIOUR_RULES = [
         "high",
         ["phishing", "government-impersonation"],
         ["T1583.001", "T1656"],
-        "A domain dresses up as a government site without being under a government suffix "
+        "A domain imitates a government site but is not under a government suffix "
         "(absher-gov-sa.com, moi.gov.sa.verify-id.com, govsa-fines.net).",
         {"fact": "domains.government_lookalike", "op": "gt", "value": 0},
         ["domains.government_lookalikes"],
@@ -333,9 +333,9 @@ BEHAVIOUR_RULES = [
         "high",
         ["phishing", "card-harvest"],
         ["T1566.002", "T1056.003"],
-        "A page asks for card details (number with CVV or expiry) and has another phishing "
-        "trait: a delivery-fee, customs or fine pretext, a lookalike or government-lookalike "
-        "domain, free hosting, or a domain under 30 days old.",
+        "A page asks for card details (number with CVV or expiry) and has another phishing trait. "
+        "The traits are: a delivery-fee, customs or fine pretext, a lookalike or "
+        "government-lookalike domain, free hosting, or a domain under 30 days old.",
         {
             "all": [
                 {"fact": "forms.payment_card_forms", "op": "gt", "value": 0},
@@ -357,9 +357,9 @@ BEHAVIOUR_RULES = [
         "high",
         ["phishing", "otp-harvest"],
         ["T1566.002", "T1111"],
-        "A page asks for a one-time code (SMS, Absher, Nafath or bank OTP) and presents a "
-        "brand, a payment pretext, a lookalike or government-lookalike domain, free hosting, "
-        "or a domain under 30 days old.",
+        "A page asks for a one-time code (SMS, Absher, Nafath or bank OTP). It also shows a brand "
+        "or a payment pretext. Or it is on a lookalike or government-lookalike domain, on free "
+        "hosting, or on a domain under 30 days old.",
         {
             "all": [
                 {"fact": "forms.otp_forms", "op": "gt", "value": 0},
@@ -391,8 +391,8 @@ BEHAVIOUR_RULES = [
         "low",
         ["card-form"],
         [],
-        "A page outside known brands and allowlisted sites asks for card details. On its "
-        "own this is any checkout page; it adds weight to other findings.",
+        "A page outside known brands and allowlisted sites asks for card details. On its own, this "
+        "matches any checkout page. It adds weight to other findings.",
         {"fact": "forms.payment_card_forms", "op": "gt", "value": 0},
         ["forms.sensitive_prompt_pages"],
     ),
@@ -411,11 +411,11 @@ BEHAVIOUR_RULES = [
         "medium",
         ["fingerprinting", "local-port-scan"],
         ["T1046", "T1592.004"],
-        "The page tried several ports on localhost or the LAN (WebSocket, fetch/image or "
-        "WebRTC TURN/STUN), often remote-access ports such as RDP, VNC, SSH or "
-        "TeamViewer: browser-based local port scanning, used to fingerprint visitors or "
-        "spot remote-access tools. Known anti-fraud scripts (ThreatMetrix), a desktop "
-        "app's own helper ports and allowlisted sites are left out.",
+        "The page tried several ports on localhost or the LAN (WebSocket, fetch/image or WebRTC "
+        "TURN/STUN). These are often remote-access ports such as RDP, VNC, SSH or TeamViewer. This "
+        "is browser-based local port scanning, used to fingerprint visitors or detect "
+        "remote-access tools. The rule ignores known anti-fraud scripts (ThreatMetrix), a desktop "
+        "app's own helper ports and allowlisted sites.",
         {
             "all": [
                 {
@@ -456,7 +456,7 @@ BEHAVIOUR_RULES = [
         "low",
         ["insecure-form"],
         [],
-        "A password form is served or submitted over plain http.",
+        "A page serves a password form over plain http, or the form submits over plain http.",
         {"fact": "forms.password_over_http", "op": "gt", "value": 0},
     ),
     # --- exfiltration channels (DE-PHI-001/002) -------------------------------------
@@ -465,8 +465,9 @@ BEHAVIOUR_RULES = [
         "critical",
         ["phishing", "exfil-telegram"],
         ["T1567", "T1102.002", "T1056.003"],
-        "The page called the Telegram Bot API (api.telegram.org/bot<token>/sendMessage or "
-        "similar) from the browser: phishing kits use a Telegram bot as their drop.",
+        "The page called the Telegram Bot API from the browser "
+        "(api.telegram.org/bot<token>/sendMessage or similar). Phishing kits use a Telegram bot as "
+        "their drop.",
         {"fact": "exfil.telegram_count", "op": "gt", "value": 0},
         ["exfil.telegram", "forms.password_forms", "final.url"],
     ),
@@ -507,8 +508,9 @@ BEHAVIOUR_RULES = [
         "critical",
         ["phishing", "aitm"],
         ["T1557", "T1539", "T1566.002"],
-        "Microsoft login endpoints (oauth2/authorize, GetCredentialType, kmsi) are served "
-        "from a non-Microsoft host with ESTS markers or ESTS cookies: an AiTM reverse proxy.",
+        "A non-Microsoft host serves Microsoft login endpoints (oauth2/authorize, "
+        "GetCredentialType, kmsi) with ESTS markers or ESTS cookies. This is an AiTM reverse "
+        "proxy.",
         {"fact": "idp.ms_paths_on_foreign_host", "op": "gt", "value": 0},
         ["idp.ms_foreign_paths", "final.url"],
     ),
@@ -517,8 +519,8 @@ BEHAVIOUR_RULES = [
         "high",
         ["phishing", "redirector-abuse"],
         ["T1566.002", "T1204.001"],
-        "An OAuth authorize request with prompt=none bounced off a real identity provider "
-        "(error=interaction_required/access_denied) to a non-IdP redirect host.",
+        "A real identity provider rejected an OAuth authorize request with prompt=none "
+        "(error=interaction_required/access_denied) and redirected it to a non-IdP host.",
         {
             "all": [
                 {"fact": "redirects.oauth_error_bounce_count", "op": "gt", "value": 0},
@@ -543,13 +545,12 @@ BEHAVIOUR_RULES = [
         "critical",
         ["consent-phishing", "clickfix", "aitm"],
         ["T1528", "T1566.002", "T1204.004"],
-        "A non-Microsoft page surfaces a real Entra authorize URL for a first-party "
-        "(pre-consented) app such as Azure CLI with a localhost redirect_uri, and tells the "
-        "visitor to paste the resulting URL or code back into a box on that page: the "
-        "authorization code is handed to the attacker (ConsentFix / AuthCodeFix). A page "
-        "that only describes the step (a tutorial) gets the medium rule. Tenant check: a "
-        "first-party app's service principal is owned by Microsoft's tenant "
-        "f8cdef31-a31e-4b4a-93e4-5f571e91255a.",
+        "A non-Microsoft page shows a real Entra authorize URL for a first-party (pre-consented) "
+        "app, such as Azure CLI, with a localhost redirect_uri. The page tells the visitor to "
+        "paste the resulting URL or code into a box on that page. The attacker gets the "
+        "authorization code (ConsentFix / AuthCodeFix). A page that only describes the step (a "
+        "tutorial) gets the medium rule. Tenant check: Microsoft's tenant "
+        "f8cdef31-a31e-4b4a-93e4-5f571e91255a owns the service principal of a first-party app.",
         {
             "all": [
                 {"fact": "idp.firstparty_loopback_authorize", "op": "gt", "value": 0},
@@ -563,9 +564,9 @@ BEHAVIOUR_RULES = [
         "medium",
         ["consent-phishing"],
         ["T1528"],
-        "A non-Microsoft, non-allowlisted page surfaces an Entra authorize URL for a "
-        "first-party app with a localhost redirect_uri: the structural half of ConsentFix, "
-        "seen even when the paste-back instruction is not rendered.",
+        "A non-Microsoft, non-allowlisted page shows an Entra authorize URL for a first-party app "
+        "with a localhost redirect_uri. This is the structural half of ConsentFix. The rule fires "
+        "even when the page does not render the paste-back instruction.",
         {"fact": "idp.firstparty_loopback_authorize", "op": "gt", "value": 0},
         ["idp.firstparty_loopback_details", "final.url"],
     ),
@@ -576,9 +577,9 @@ BEHAVIOUR_RULES = [
         ["consent-phishing", "phishing"],
         ["T1566.002", "T1528"],
         "A non-Microsoft page sends the visitor to Microsoft's real device-code sign-in "
-        "(microsoft.com/devicelogin, aka.ms/devicelogin, oauth2/deviceauth) and shows a "
-        "code to enter, or a shared-document pretext with an email-only form: the victim "
-        "authorises the attacker's device on Microsoft itself, so no clone is present.",
+        "(microsoft.com/devicelogin, aka.ms/devicelogin, oauth2/deviceauth). It also shows a code "
+        "to enter, or a shared-document pretext with an email-only form. The victim authorises the "
+        "attacker's device on Microsoft itself, so no clone is present.",
         {
             "all": [
                 {"fact": "idp.device_code_handoff", "op": "gt", "value": 0},
@@ -593,8 +594,8 @@ BEHAVIOUR_RULES = [
         ["consent-phishing"],
         ["T1528"],
         "A non-Microsoft, non-allowlisted page links to, opens or navigates to Microsoft's "
-        "device-code sign-in. On its own this can be an IT help page; with a displayed "
-        "code it is device_code_phishing_lure.",
+        "device-code sign-in. On its own, this can be an IT help page. With a displayed code, it "
+        "is device_code_phishing_lure.",
         {"fact": "idp.device_code_handoff", "op": "gt", "value": 0},
         ["idp.device_code_sources", "final.url"],
     ),
@@ -674,10 +675,10 @@ BEHAVIOUR_RULES = [
         "high",
         ["etherhiding", "web3"],
         ["T1102.001", "T1105", "T1189"],
-        "A page that is not a wallet/web3 app (no wallet UI, no wallet use) read a smart "
-        "contract over JSON-RPC (eth_call / eth_getStorageAt): the EtherHiding dead-drop "
-        "loader pattern. Fires on allowlisted sites too, since EtherHiding runs on "
-        "compromised legitimate ones.",
+        "A page that is not a wallet/web3 app (no wallet UI, no wallet use) read a smart contract "
+        "over JSON-RPC (eth_call / eth_getStorageAt). This is the EtherHiding dead-drop loader "
+        "pattern. The rule fires on allowlisted sites too, because EtherHiding runs on compromised "
+        "legitimate sites.",
         {"fact": "web3.etherhiding_rpc", "op": "eq", "value": True},
         ["web3.rpc_calls", "final.url"],
     ),
@@ -687,11 +688,11 @@ BEHAVIOUR_RULES = [
         "critical",
         ["etherhiding", "web3", "obfuscation"],
         ["T1102.001", "T1027", "T1059.007"],
-        "A page read a smart contract whose answer was a kilobyte-sized string, and that "
-        "string (or its base64 layer) became eval/Function code: the contract is the "
-        "next-stage script store (ClearFake / EtherHiding). Without the direct link it "
-        "needs 1 KB+ of code-only exec (innerHTML/document.write do not count), and on an "
-        "allowlisted site a fake update/CAPTCHA lure.",
+        "A page read a smart contract, the answer was a kilobyte-sized string, and that string (or "
+        "its base64 layer) became eval/Function code. The contract is the next-stage script store "
+        "(ClearFake / EtherHiding). Without the direct link, the rule needs 1 KB+ of code-only "
+        "exec (innerHTML/document.write do not count). In that case, an allowlisted site also "
+        "needs a fake update/CAPTCHA lure.",
         {"fact": "web3.rpc_result_executed", "op": "eq", "value": True},
         ["web3.rpc_calls", "web3.rpc_large_string_results", "js.code_exec_max_len", "final.url"],
     ),
@@ -753,10 +754,10 @@ BEHAVIOUR_RULES = [
         "high",
         ["clickfix"],
         ["T1204.004", "T1059.001"],
-        "A fake verification page tells the visitor to open Run or a terminal (Win+R, "
-        "Win+X) and paste. Kits write the command only after the checkbox click, so an "
-        "automated run sees the steps but no clipboard write; hidden steps count. A real "
-        "challenge page never asks for either.",
+        "A fake verification page tells the visitor to open Run or a terminal (Win+R, Win+X) and "
+        "paste. Kits write the command only after the checkbox click, so an automated run sees the "
+        "steps but no clipboard write. Hidden steps count. A real challenge page never asks for "
+        "either.",
         {
             "all": [
                 {"fact": "lure.fake_captcha", "op": "eq", "value": True},
@@ -770,8 +771,8 @@ BEHAVIOUR_RULES = [
         "critical",
         ["clickfix", "filefix"],
         ["T1204.004", "T1059.001"],
-        "The clipboard holds a shell command padded and then commented out with a decoy "
-        "Windows file path (FileFix: the victim pastes it into Explorer's address bar).",
+        "The clipboard holds a shell command, then padding, then a comment with a decoy Windows "
+        "file path (FileFix). The victim pastes it into Explorer's address bar.",
         {"fact": "clipboard.path_disguised", "op": "gt", "value": 0},
         ["clipboard.commands", "final.url"],
     ),
@@ -781,9 +782,9 @@ BEHAVIOUR_RULES = [
         "medium",
         ["clickfix"],
         ["T1204.004", "T1070"],
-        "The page wrote a shell-like command to the clipboard with no user gesture, or "
-        "overwrote/blanked a command it had written: ClickFix kits do both, copy buttons "
-        "on documentation pages do neither.",
+        "The page wrote a shell-like command to the clipboard with no user gesture, or overwrote "
+        "or blanked a command it wrote earlier. ClickFix kits do both. Copy buttons on "
+        "documentation pages do neither.",
         {
             "any": [
                 {"fact": "clipboard.no_gesture_commands", "op": "gt", "value": 0},
@@ -799,8 +800,8 @@ BEHAVIOUR_RULES = [
         ["web3", "etherhiding", "dead-drop"],
         ["T1102.001"],
         "A non-allowlisted page with no wallet UI reads a block-explorer API (Ethplorer, "
-        "Blockchair, Etherscan...): EtherHiding variants fetch their next stage from a "
-        "transaction or token note this way.",
+        "Blockchair, Etherscan...). EtherHiding variants use this to fetch their next stage from a "
+        "transaction or token note.",
         {"fact": "web3.explorer_dead_drop", "op": "eq", "value": True},
         ["web3.explorer_api_hosts", "final.url"],
     ),
@@ -831,9 +832,9 @@ BEHAVIOUR_RULES = [
         "medium",
         ["phishing", "trusted-cloud"],
         ["T1583.006", "T1566.002"],
-        "A Google Apps Script web app (script.google.com/macros/s/.../exec) asks for a "
-        "password, card or code, or posts what was typed: anyone can deploy one, so the "
-        "Google host vouches for nothing.",
+        "A Google Apps Script web app (script.google.com/macros/s/.../exec) asks for a password, "
+        "card or code, or posts what the visitor typed. Anyone can deploy one, so the Google host "
+        "vouches for nothing.",
         {"fact": "forms.apps_script_credential", "op": "gt", "value": 0},
         ["forms.apps_script_credential_pages", "forms.script_posted_targets"],
     ),
@@ -843,9 +844,9 @@ BEHAVIOUR_RULES = [
         "high",
         ["phishing", "exfil", "credential-harvest"],
         ["T1567", "T1056.003"],
-        "A page that asks for a password, card, one-time code or recovery phrase POSTs "
-        "to a form-backend or webhook service (Formspree, EmailJS, webhook.site...): a "
-        "kit with no backend of its own. Contact forms there ask for none of these.",
+        "A page that asks for a password, card, one-time code or recovery phrase POSTs to a "
+        "form-backend or webhook service (Formspree, EmailJS, webhook.site...). This is a kit with "
+        "no backend of its own. Contact forms on these services ask for none of these.",
         {
             "all": [
                 {"fact": "exfil.form_collector_count", "op": "gt", "value": 0},
@@ -867,9 +868,9 @@ BEHAVIOUR_RULES = [
         "high",
         ["phishing", "bitb", "aitm"],
         ["T1566.002", "T1036"],
-        "A page draws a real sign-in URL (login.microsoftonline.com, accounts.google.com...) "
-        "as element text, a fake address bar, and has a live password input: a "
-        "browser-in-the-browser popup (Sneaky2FA). Real pages put URLs in href.",
+        "A page draws a real sign-in URL as element text in a fake address bar "
+        "(login.microsoftonline.com, accounts.google.com...). It also has a live password input. "
+        "This is a browser-in-the-browser popup (Sneaky2FA). Real pages put URLs in href.",
         {"fact": "idp.fake_address_bar", "op": "gt", "value": 0},
         ["idp.fake_address_bar_details", "final.url"],
     ),
@@ -917,9 +918,9 @@ BEHAVIOUR_RULES = [
         "high",
         ["aitm", "phaas", "microsoft"],
         ["T1557", "T1566.002", "T1027"],
-        "Four Salty2FA traits together: a Microsoft sign-in clone, a Turnstile-style gate, "
-        "DevTools shortcuts blocked, and a POST to a /<5-6 digits>.php endpoint on a host "
-        "no brand owns.",
+        "The page has four Salty2FA traits together: a Microsoft sign-in clone, a Turnstile-style "
+        "gate, blocked DevTools shortcuts, and a POST to a /<5-6 digits>.php endpoint on a host "
+        "that no brand owns.",
         {
             "all": [
                 {"fact": "idp.ms_clone_pages", "op": "gt", "value": 0},
@@ -1011,9 +1012,9 @@ BEHAVIOUR_RULES = [
         "high",
         ["protocol-handler", "webdav", "malware-download"],
         ["T1204.001", "T1221"],
-        "The page opens Windows search (search-ms:) or a WebDAV share with a document "
-        "pretext, a renamed results view (displayname) or a tunnel host: Explorer shows "
-        "the attacker's remote files as if they were the visitor's own.",
+        "The page opens Windows search (search-ms:) or a WebDAV share. It also has a document "
+        "pretext, a renamed results view (displayname) or a tunnel host. Explorer then shows the "
+        "attacker's remote files as if they were the visitor's own.",
         {
             "all": [
                 {"fact": "navigation.protocol_handler_attempts", "op": "gt", "value": 0},
@@ -1037,8 +1038,8 @@ BEHAVIOUR_RULES = [
         "medium",
         ["protocol-handler"],
         ["T1204.001"],
-        "A non-allowlisted page tries to open Windows search (search-ms:) or a WebDAV "
-        "share; ordinary web pages do not invoke Explorer.",
+        "A non-allowlisted page tries to open Windows search (search-ms:) or a WebDAV share. "
+        "Ordinary web pages do not open Explorer.",
         {"fact": "navigation.protocol_handler_attempts", "op": "gt", "value": 0},
         ["navigation.protocol_handler_targets", "final.url"],
     ),
@@ -1048,9 +1049,9 @@ BEHAVIOUR_RULES = [
         "high",
         ["filefix", "cache-smuggling", "malware-download"],
         ["T1027.006", "T1204.004", "T1564"],
-        "A response served as an image is really an archive or executable, and the page "
-        "gives FileFix/ClickFix steps: the browser cached a payload with no download "
-        "prompt for a later File Explorer or Run step to pick up.",
+        "A response served as an image is really an archive or executable, and the page gives "
+        "FileFix/ClickFix steps. The browser cached a payload with no download prompt, for a later "
+        "File Explorer or Run step to use.",
         {
             "all": [
                 {"fact": "downloads.mislabeled_image", "op": "gt", "value": 0},
@@ -1104,10 +1105,9 @@ BEHAVIOUR_RULES = [
         "high",
         ["clickfix", "crashfix"],
         ["T1176.001", "T1204.004"],
-        "A non-vendor page shows a fake browser-crash / 'security issues detected' repair "
-        "popup and writes a command to the clipboard or tells the visitor to paste one "
-        "into Run (CrashFix / KongTuke, often after a malicious extension freezes the "
-        "browser).",
+        "A non-vendor page shows a fake browser-crash / 'security issues detected' repair popup. "
+        "It also writes a command to the clipboard or tells the visitor to paste one into Run. "
+        "This is CrashFix / KongTuke, often after a malicious extension freezes the browser.",
         {
             "all": [
                 {"fact": "lure.crash_repair_pages", "op": "exists", "value": True},
@@ -1127,9 +1127,9 @@ BEHAVIOUR_RULES = [
         "high",
         ["clickfix", "fake-update", "jackfix"],
         ["T1204.004", "T1036", "T1059"],
-        "A non-vendor page goes full screen with fake 'installing updates... 37%' OS "
-        "update text and blocks DevTools/keys or stages a clipboard command (JackFix): "
-        "the set-up for paste-and-run steps.",
+        "A non-vendor page goes full screen with fake 'installing updates... 37%' OS update text "
+        "and blocks DevTools/keys or stages a clipboard command (JackFix). This prepares the "
+        "visitor for paste-and-run steps.",
         {
             "all": [
                 {"fact": "lure.fake_os_update_pages", "op": "exists", "value": True},
@@ -1162,7 +1162,7 @@ BEHAVIOUR_RULES = [
         "high",
         ["phishing"],
         ["T1566.002", "T1583.006"],
-        "The final page is served from an IPFS gateway and asks for credentials.",
+        "The final page comes from an IPFS gateway and asks for credentials.",
         {
             "all": [
                 {"fact": "final.ipfs", "op": "exists", "value": True},
@@ -1206,9 +1206,9 @@ BEHAVIOUR_RULES = [
         "high",
         ["aitm", "exfil"],
         ["T1557", "T1056.003"],
-        "A brand credential-prompt page opened a WebSocket, or a Socket.IO long-polling "
-        "channel, to a host it does not own: the real-time relay AiTM kits (Mamba/Tycoon) "
-        "use to pass typed credentials on.",
+        "A brand credential-prompt page opened a WebSocket, or a Socket.IO long-polling channel, "
+        "to a host it does not own. AiTM kits (Mamba/Tycoon) use this real-time channel to relay "
+        "typed credentials.",
         {
             "all": [
                 {
@@ -1233,10 +1233,10 @@ BEHAVIOUR_RULES = [
         "high",
         ["phishing", "credential-harvest"],
         ["T1056.003", "T1041"],
-        "A page with a password field and no real form action posted (fetch/XHR/beacon) to "
-        "another site, and either the body carries a credential field or the page is a "
-        "brand credential prompt / Microsoft clone: the script-posted credential path that "
-        "form-action rules miss.",
+        "A page with a password field and no real form action posted (fetch/XHR/beacon) to another "
+        "site. Either the body carries a credential field, or the page is a brand credential "
+        "prompt / Microsoft clone. This is the script-posted credential path that form-action "
+        "rules miss.",
         {
             "any": [
                 {"fact": "forms.script_posted_credentials", "op": "gt", "value": 0},
@@ -1309,8 +1309,8 @@ BEHAVIOUR_RULES = [
         "high",
         ["malware-download", "defense-evasion"],
         ["T1027.013", "T1204.002"],
-        "A downloaded archive is encrypted and the page prints the password: the pattern "
-        "that stops SEGs and browsers scanning the contents.",
+        "A downloaded archive is encrypted and the page prints the password. This pattern stops "
+        "SEGs and browsers from scanning the contents.",
         {
             "all": [
                 {"fact": "downloads.archive_encrypted", "op": "gt", "value": 0},
@@ -1394,9 +1394,8 @@ BEHAVIOUR_RULES = [
         "medium",
         ["redirector-abuse", "phishing"],
         ["T1566.002", "T1204.001"],
-        "A trusted redirector / open redirect (Google AMP, ad click, Safe Links, a URL "
-        "shortener) was in the chain and the run also tripped a phishing/ClickFix/download "
-        "signal.",
+        "The chain included a trusted redirector or open redirect (Google AMP, ad click, Safe "
+        "Links, a URL shortener). The run also tripped a phishing, ClickFix or download signal.",
         {
             "all": [
                 {"fact": "network.trusted_redirectors", "op": "exists", "value": True},

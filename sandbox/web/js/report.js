@@ -175,7 +175,7 @@ async function sessionAction(path, method = 'POST') {
   const res = method === 'DELETE' ? await Api.del(`/v1/sessions/${s.id}`) : await Api.post(`/v1/sessions/${s.id}/${path}`);
   if (!res.ok) { Api.toast(res.error, true); return; }
   Object.assign(state.detail.session, res.data);
-  if (method === 'DELETE') Api.toast('Ending the session. Captures are saved and the analysis starts.');
+  if (method === 'DELETE') Api.toast('Ending the session. The sandbox saves the captures and starts the analysis.');
   renderLive();
 }
 
@@ -317,7 +317,7 @@ function showCopiedOut(text, selection) {
   section('clip-out').value = text;
   section('clip-out-actions').hidden = !text;
   if (!text) Api.toast('The session clipboard is empty: copy or highlight something in the session first');
-  else if (selection === 'primary') Api.toast('Clipboard was empty; showing the highlighted text');
+  else if (selection === 'primary') Api.toast('The clipboard was empty. Showing the highlighted text');
   clip.urls = urlsIn(text);
   section('clip-analyze-all').hidden = clip.urls.length < 2;
   section('clip-analyze-all').textContent = `Analyze all ${clip.urls.length}`;
@@ -462,7 +462,7 @@ async function showEvidence(h) {
         el('td', { className: 'monospace small evidence-actual', textContent: c.missing ? '(missing)' : fmtValue(c.actual) }),
         el('td', {}, el('span', { className: `pass ${c.passed ? 'pass-yes' : 'pass-no'}`, textContent: c.passed ? 'pass' : 'fail' }))))));
   } else if (h.engine === 'behaviour' && !ev.rule_found) {
-    parts.push(empty('The rule no longer exists; showing the facts recorded when it fired.'));
+    parts.push(empty('The rule no longer exists. Showing the facts recorded when it fired.'));
   }
   if (ev.rule_source) parts.push(details('YARA rule source', ev.rule_source));
   parts.push(el('h3', { className: 'section-title', textContent: `Matched content (${ev.samples.length})` }),
@@ -499,7 +499,7 @@ function sampleBlock(s) {
     });
     extra.push(toggle);
   }
-  if (s.truncated) extra.push(el('span', { className: 'small muted', textContent: `Cut at ${Math.round(s.content.length / 1024)} KB; open the file for the rest.` }));
+  if (s.truncated) extra.push(el('span', { className: 'small muted', textContent: `Cut at ${Math.round(s.content.length / 1024)} KB. Open the file for the rest.` }));
   const copy = el('button', { className: 'copy-btn', textContent: 'Copy', onclick: async () => { const ok = await copyLocal(s.content); Api.toast(ok ? 'Copied' : 'Copy failed', !ok); } });
   return el('div', { className: 'evidence-sample' },
     el('div', { className: 'evidence-sample-head' }, el('strong', { className: 'small', textContent: s.label }), el('span', { className: 'small muted', textContent: meta })),
@@ -548,7 +548,7 @@ function renderDownloads() {
 }
 
 async function downloadQuarantined(a) {
-  const reason = prompt(`"${a.name}" was captured from a possibly malicious site. It will be delivered as an AES-encrypted zip and the download is logged.\n\nReason:`);
+  const reason = prompt(`"${a.name}" came from a possibly malicious site. You get it as an AES-encrypted zip, and the audit log records the download.\n\nReason:`);
   if (!reason || reason.trim().length < 3) return;
   const res = await Api.get(`/v1/artifacts/${a.id}/download?confirm=true&reason=${encodeURIComponent(reason)}`);
   if (!res.ok) { Api.toast(res.error, true); return; }
@@ -807,7 +807,7 @@ document.addEventListener('click', (e) => { const m = section('export-menu'); if
 section('btn-reanalyse').addEventListener('click', async () => {
   const res = await Api.post(`/v1/analyses/${encodeURIComponent(analysisId)}/reanalyse`);
   if (!res.ok) { Api.toast(res.error, true); return; }
-  Api.toast('Re-analysis queued; a new version will appear shortly.');
+  Api.toast('Re-analysis queued. A new version will appear shortly.');
   const current = state.detail.version;
   const wait = async () => {
     const d = await Api.get(`/v1/analyses/${encodeURIComponent(analysisId)}`);

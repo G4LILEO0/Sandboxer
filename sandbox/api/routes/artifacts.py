@@ -92,14 +92,14 @@ async def artifact_download(
     artifact = await _artifact(db, principal, artifact_id)
     if artifact.quarantined:
         if principal.kind == "client":
-            raise HTTPException(403, "Quarantined files cannot be downloaded with a service token")
+            raise HTTPException(403, "A service token cannot download quarantined files")
         if not confirm or len(reason.strip()) < 3:
             raise HTTPException(
                 428,
                 {
                     "error": "confirmation_required",
-                    "detail": "This file was captured from a possibly malicious site. Pass "
-                    "confirm=true and a reason; it is delivered as an encrypted zip.",
+                    "detail": "This file came from a possibly malicious site. Pass confirm=true "
+                    "and a reason. The API delivers the file as an encrypted zip.",
                 },
             )
     ttl = int(await get_config(db, "download_url_ttl_s"))
