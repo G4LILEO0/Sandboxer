@@ -28,6 +28,7 @@ from sandbox.analysis.domains import (
     registrable,
     site,
 )
+from sandbox.core import antibot
 from sandbox.runner.page_scripts import is_harness_code
 
 # Detection strings (keyword patterns, host lists, file types, points) live in
@@ -1970,6 +1971,55 @@ def _abuse_interstitial(data: CaptureData, final_host: str) -> dict[str, str] | 
     return None
 
 
+def _antibot(
+    data: CaptureData, reqs: list[dict[str, Any]], final_host: str | None
+) -> dict[str, Any] | None:
+    """The bot check (Cloudflare challenge or block page) the session ended on, if any.
+
+    The runner records it (``result.antibot``); a capture from before it did is read
+    from the final page and the HAR: the final document's title, text and response
+    headers, and the challenge-platform requests it made."""
+    r = data.result
+    recorded = r.get("antibot")
+    if isinstance(recorded, dict) and "blocked" in recorded:
+        encounters = recorded.get("encounters") or []
+        if not recorded["blocked"] or not encounters:
+            return None
+        last = encounters[-1]
+        return {
+            k: last.get(k) for k in ("provider", "kind", "ray_id", "url", "waited_ms", "clicks")
+        }
+    frames = _frames(r)
+    if not frames or not final_host:
+        return None
+    main = frames[0]
+    final_url = r.get("final_url")
+    doc = next((q for q in reversed(reqs) if q["url"] == final_url), None)
+    resp_headers: dict[str, str] = {}
+    for e in reversed(data.har_entries):
+        if doc and e.get("request", {}).get("url") == doc["url"]:
+            resp_headers = {
+                h.get("name", "").lower(): h.get("value", "")
+                for h in e.get("response", {}).get("headers", [])
+            }
+            break
+    markers = []
+    if any(q["host"] == final_host and "/cdn-cgi/challenge-platform/" in q["path"] for q in reqs):
+        markers.append("challenge_platform")
+    if any("__cf_chl" in (f.get("action") or "") for f in main.get("forms", [])):
+        markers.append("challenge_form")
+    found = antibot.classify(
+        main.get("title", "") or r.get("title") or "",
+        main.get("text", ""),
+        markers,
+        resp_headers,
+        doc["status"] if doc else None,
+    )
+    if found:
+        found["url"] = final_url
+    return found
+
+
 def _fake_captcha(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
     evidence: set[str] = set()
     wording = fake = False
@@ -2597,6 +2647,10 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
             # A home-made canvas CAPTCHA no provider serves (Tycoon 2FA); it gates too.
             "custom_captcha": len(custom_captcha),
             "custom_captcha_pages": custom_captcha,
+            # The session ended on a bot check (Cloudflare challenge / block page) that
+            # it did not get through: the real page was never seen.
+            "antibot": _antibot(data, reqs, final_host),
+            "browser_mode": (r.get("browser") or {}).get("mode"),
         },
         "forms": forms,
         "scripts": {

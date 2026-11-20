@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     capture_pcap: bool = True
     # Seconds an automated run watches the page after it loads.
     automated_observe_s: int = 20
+    # Run automated sessions in a headed Chromium on a virtual display (Xvfb in the
+    # session image) rather than headless. Bot checks (Cloudflare managed challenges,
+    # Turnstile) block headless browsers much more often. False runs new headless mode.
+    automated_headed: bool = True
+    # Seconds an automated run waits for a Cloudflare-style bot check to clear (it ticks
+    # the Turnstile box if it has to) before the run is recorded as blocked by it.
+    antibot_wait_s: int = 30
 
     # --- Active-probe capture profiles (NFR-10 legal sign-off) --------------------------
     # These make the session *do* something a victim would, so they are OFF by default and

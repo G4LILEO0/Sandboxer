@@ -80,6 +80,8 @@ async def run_detonation(ctx: WorkerContext, analysis_id: str) -> None:
         viewport = profile.get("viewport") or {}
         runner = {
             "observe_s": ctx.settings.automated_observe_s,
+            "headed": ctx.settings.automated_headed,
+            "antibot_wait_s": ctx.settings.antibot_wait_s,
             "locale": profile.get("locale", "en-US"),
             "timezone": profile.get("timezone", "UTC"),
             "viewport_width": viewport.get("width", 1366),
