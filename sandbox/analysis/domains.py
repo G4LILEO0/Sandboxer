@@ -12,6 +12,8 @@ import httpx
 import idna
 import tldextract
 
+from sandbox import detection as S
+
 log = logging.getLogger(__name__)
 
 # Bundled public-suffix snapshot only: no network fetch at runtime.
@@ -105,8 +107,7 @@ def levenshtein(a: str, b: str) -> int:
 
 _LABEL = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
 _BRAND_DOMAIN = re.compile(rf"^{_LABEL}(\.{_LABEL})*$")
-# Free or cheap ccTLDs heavily used for abuse; "brand.*" never covers these.
-_ABUSED_CCTLDS = {"tk", "ml", "ga", "cf", "gq", "cc", "ws", "su", "pw"}
+_ABUSED_CCTLDS = S.bind(globals(), "_ABUSED_CCTLDS", "hosting.abused_cctlds", S.as_set)
 
 
 def normalise_brand_domain(raw: str) -> str | None:
@@ -179,31 +180,7 @@ def brand_owner(host: str, brands: list[BrandRef]) -> BrandRef | None:
     return next((b for b in brands if b.owns(host)), None)
 
 
-# Free hosting, site builders, tunnels, IPFS gateways and dynamic DNS: anyone can publish
-# a page under these in minutes, and phishing kits do. Each entry covers its subdomains;
-# path-based platforms (sites.google.com) are listed by host.
-FREE_HOSTING = (
-    "000webhostapp.com", "appspot.com", "azurefd.net", "azurestaticapps.net",
-    "azurewebsites.net", "blob.core.windows.net", "web.core.windows.net", "blogspot.com",
-    "bubbleapps.io", "carrd.co", "cf-ipfs.com", "codeberg.page", "ddns.net", "docs.google.com",
-    "duckdns.org", "dweb.link", "firebaseapp.com", "firebasestorage.googleapis.com",
-    "fleek.co", "framer.app", "framer.website", "gitbook.io", "github.io", "gitlab.io",
-    "glitch.me", "godaddysites.com", "herokuapp.com", "hopto.org", "ipfs.io", "jimdosite.com",
-    "loca.lt", "mystrikingly.com", "netlify.app", "ngrok-free.app", "ngrok.io", "notion.site",
-    "onrender.com", "pages.dev", "r2.dev", "replit.app", "repl.co", "sites.google.com",
-    "site123.me", "square.site", "storage.googleapis.com", "surge.sh", "telegra.ph",
-    "tiiny.site", "trycloudflare.com", "typedream.app", "vercel.app", "web.app",
-    "webflow.io", "webnode.page", "weebly.com", "weeblysite.com", "wixsite.com",
-    "wixstudio.io", "wordpress.com", "workers.dev", "yolasite.com", "zapto.org",
-    # Abused storage / dev / serverless hosting (DE-PHI-008).
-    "storage.dev", "amplifyapp.com", "fly.dev", "ondigitalocean.app", "up.railway.app",
-    "railway.app", "on.aws", "lambda-url.on.aws", "azurestaticapps.net", "s3.amazonaws.com",
-    # AI website builders / preview hosts (DE-PHI-013). v0 publishes to *.vercel.app
-    # (listed above); bolt.new itself is the editor, its sites go to bolt.host.
-    "lovable.app", "lovableproject.com", "v0.dev", "v0.app", "base44.app", "bolt.host",
-    # Free site-builder tenants seen hosting brand logins in live round 1 (LR1-03).
-    "flazio.online",
-)  # fmt: skip
+FREE_HOSTING = S.bind(globals(), "FREE_HOSTING", "hosting.free_hosting")
 
 
 def free_hosting(host: str) -> str | None:
@@ -226,14 +203,11 @@ def site(host: str) -> str:
     return f"{tenant}.{platform}"
 
 
-# Public suffix parts that mark a real government (gov.sa, gov.uk, .gov, go.jp, gob.mx).
-_GOV_SUFFIX_PARTS = {"gov", "gouv", "gob", "go", "govt", "gv", "mil", "gub", "guv"}
-_GOV_TOKEN = re.compile(
-    r"^(gov|govt|gouv|gob|government)(sa|ksa|uk|us|ae|qa|kw|bh|om|eg|jo|au|ca|in|ma)?$"
-    r"|^(sa|ksa|uk|us|ae|qa|kw|bh|om|eg)(gov|govt)$"
+_GOV_SUFFIX_PARTS = S.bind(
+    globals(), "_GOV_SUFFIX_PARTS", "hosting.government_suffix_parts", S.as_set
 )
-# Legitimate non-government hosts that carry a "gov" label (government cloud regions).
-_GOV_INFRA = ("amazonaws.com", "azure.us", "microsoft.us", "usgovcloudapi.net", "office365.us")
+_GOV_TOKEN = S.bind(globals(), "_GOV_TOKEN", "hosting.government_token")
+_GOV_INFRA = S.bind(globals(), "_GOV_INFRA", "hosting.government_infrastructure")
 
 
 def government_lookalike(
@@ -254,46 +228,8 @@ def government_lookalike(
     return {"host": host, "token": token} if token else None
 
 
-# Brand-domain labels that are ordinary words or infrastructure names. They still catch
-# homoglyphs (``0ffice.com``) but not typo or combo matches, which would flag
-# ``outlook.example.com`` (self-hosted webmail), ``offices.com`` or ``static.com``.
-# Tokens that put a short acronym brand in a delivery/sign-in context (lookalike).
-_ACRONYM_CONTEXT = {
-    "track", "tracking", "parcel", "package", "delivery", "redelivery", "shipping",
-    "shipment", "customs", "login", "signin", "verify", "account", "secure", "pay",
-    "payment", "fee", "update",
-}  # fmt: skip
-_GENERIC_LABELS = {
-    "android",
-    "apple",
-    "azure",
-    "blogger",
-    "chase",
-    "chrome",
-    "live",
-    "messenger",
-    "meta",
-    "office",
-    "outlook",
-    "threads",
-    "windows",
-    "gstatic",
-    "fbcdn",
-    "licdn",
-    "nflxext",
-    "msauth",
-    "msftauth",
-    "googleusercontent",
-    "exodus",
-    "ledger",
-    "phantom",
-    "trust",
-    "steam",
-    "zain",
-    "noon",
-    "sadad",
-    "alahli",  # also Al-Ahli football clubs
-}
+_ACRONYM_CONTEXT = S.bind(globals(), "_ACRONYM_CONTEXT", "hosting.acronym_context", S.as_set)
+_GENERIC_LABELS = S.bind(globals(), "_GENERIC_LABELS", "hosting.generic_brand_labels", S.as_set)
 
 
 def lookalike(host: str, brands: list[BrandRef], allowlisted: set[str]) -> dict | None:

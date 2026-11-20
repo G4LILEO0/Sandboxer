@@ -1,0 +1,113 @@
+# Scripts and obfuscation: detection strings read by the fact builders.
+# Shipped defaults. Change them in Admin > Detection strings (stored as an
+# override, audited, revertible); edit this file only to change what ships.
+# Regex syntax is Python re. flags: i = ignore case, s = dot matches newline,
+# m = multi-line, x = verbose.
+
+title = 'Scripts and obfuscation'
+
+[obfuscation_signals]
+title = 'Obfuscation signals and points'
+description = 'Obfuscation signals in collected scripts, each with the points it adds to scripts.max_obfuscation_score (the obfuscated_javascript rule fires at 3). Each item needs a name.'
+type = "regex_list"
+[[obfuscation_signals.items]]
+name = 'eval_decode'
+points = 2
+flags = 'i'
+pattern = 'eval\s*\(\s*(atob|unescape|decodeURIComponent|String\.fromCharCode)\s*\('
+[[obfuscation_signals.items]]
+name = 'function_decode'
+points = 2
+flags = 'i'
+pattern = 'new\s+Function\s*\(\s*(atob|unescape)'
+[[obfuscation_signals.items]]
+name = 'packer'
+points = 3
+flags = 'i'
+pattern = 'eval\(function\(p,a,c,k,e,[rd]\)'
+[[obfuscation_signals.items]]
+name = 'document_write_unescape'
+points = 2
+flags = 'i'
+pattern = 'document\.write\s*\(\s*unescape\s*\('
+[[obfuscation_signals.items]]
+name = 'fromcharcode_array'
+points = 1
+flags = 'i'
+pattern = 'fromCharCode\s*\((\s*\d+\s*,){20,}'
+[[obfuscation_signals.items]]
+name = 'long_base64'
+points = 1
+flags = ''
+pattern = '[A-Za-z0-9+/]{2000,}={0,2}'
+[[obfuscation_signals.items]]
+name = 'hex_escapes'
+points = 1
+flags = 'i'
+pattern = '(\\x[0-9a-f]{2}){200,}'
+
+[obfuscator_io_names]
+title = 'obfuscator.io variable names'
+description = 'obfuscator.io style variable names (_0x1a2b).'
+type = "regex"
+flags = 'i'
+pattern = '\b_0x[a-f0-9]{4,6}\b'
+
+[tag_manager_eval]
+title = 'Google Tag Manager eval marker'
+description = 'Google Tag Manager compiles custom-JS variables and tags through eval; that code calls google_tag_manager["rm"]["<container>"](n). Only readable tag code is let off (LR2-01).'
+type = "regex"
+flags = ''
+pattern = '''google_tag_manager\[\s*["']rm["']\s*\]\s*\[\s*["']\d+["']'''
+
+[packed_run]
+title = 'Packed or encoded run'
+description = 'A long encoded run or \x escapes. Tag-manager code that also carries one still counts as dynamic code.'
+type = "regex"
+flags = 'i'
+pattern = '[A-Za-z0-9+/=]{200,}|(?:\\x[0-9a-f]{2}){40,}'
+
+[libraries]
+title = 'JavaScript libraries (by URL)'
+description = 'JavaScript libraries recognised from script URLs; group 1 is the version. Wallet-connector UI kits come before web3/ethers, since they bundle those names in their paths. Each item needs a name.'
+type = "regex_list"
+[[libraries.items]]
+name = 'jquery'
+flags = 'i'
+pattern = '/jquery[/-]v?(\d+\.\d+\.\d+)'
+[[libraries.items]]
+name = 'crypto-js'
+flags = 'i'
+pattern = 'crypto-js[@/](\d+\.\d+\.\d+)'
+[[libraries.items]]
+name = 'randexp'
+flags = 'i'
+pattern = 'randexp[@/](\d+\.\d+\.\d+)'
+[[libraries.items]]
+name = 'socket.io'
+flags = 'i'
+pattern = 'socket\.io[@/](\d+\.\d+\.\d+)'
+[[libraries.items]]
+name = 'walletconnect'
+flags = 'i'
+pattern = 'walletconnect[^/]*[@/]v?(\d+\.\d+\.\d+)?'
+[[libraries.items]]
+name = 'web3modal'
+flags = 'i'
+pattern = 'web3modal[@/]v?(\d+\.\d+\.\d+)?'
+[[libraries.items]]
+name = 'wagmi'
+flags = 'i'
+pattern = '/wagmi[@/]v?(\d+\.\d+\.\d+)?'
+[[libraries.items]]
+name = 'rainbowkit'
+flags = 'i'
+pattern = 'rainbow-me/rainbowkit[@/]v?(\d+\.\d+\.\d+)?'
+[[libraries.items]]
+name = 'web3'
+flags = 'i'
+pattern = '/web3(?:\.min)?\.js|web3[@/](\d+\.\d+\.\d+)'
+[[libraries.items]]
+name = 'ethers'
+flags = 'i'
+pattern = 'ethers[@/.-]?v?(\d+\.\d+\.\d+)?'

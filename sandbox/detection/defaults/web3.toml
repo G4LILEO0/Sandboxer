@@ -1,0 +1,88 @@
+# Web3 and wallets: detection strings read by the fact builders.
+# Shipped defaults. Change them in Admin > Detection strings (stored as an
+# override, audited, revertible); edit this file only to change what ships.
+# Regex syntax is Python re. flags: i = ignore case, s = dot matches newline,
+# m = multi-line, x = verbose.
+
+title = 'Web3 and wallets'
+
+[known_bad_addresses]
+title = 'Known malicious contract addresses'
+description = 'Published malicious EtherHiding contract / deployer addresses (analyst-curated local feed; extend over time). Matched case-insensitively.'
+type = "words"
+values = [
+  '0x8eac3198dd72f3e07108c4c7cff43108ad48a71c',
+  '0xa1decfb75c8c0ca28c10517ce56b710baf727d2e',
+  '0xd71f4cdc84420d2bd07f50787b4f998b4c2d5290',
+]
+
+[jsonrpc_methods]
+title = 'Dead-drop JSON-RPC methods'
+description = 'JSON-RPC methods an EtherHiding loader uses to read its payload from a contract.'
+type = "words"
+values = [
+  'eth_call',
+  'eth_getcode',
+  'eth_getstorageat',
+  'eth_gettransactionbyhash',
+]
+
+[explorer_api_hosts]
+title = 'Block-explorer APIs'
+description = '''Block-explorer APIs a page can read a dead-drop transaction or token note from (DE-W3B-003, EtherHiding variants querying Ethplorer's free key).'''
+type = "words"
+values = [
+  'api.binplorer.com',
+  'api.blockchair.com',
+  'api.blockcypher.com',
+  'api.bscscan.com',
+  'api.etherscan.io',
+  'api.ethplorer.io',
+  'api.polygonscan.com',
+  'api.tronscan.org',
+]
+
+[ipfs_url]
+title = 'IPFS gateway URL'
+description = 'IPFS gateway URLs (path or subdomain CIDs).'
+type = "regex"
+flags = 'i'
+pattern = '^https?://[^/]+/ip[fn]s/(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{50,})|^https?://(b[a-z2-7]{50,}|k51[a-z0-9]{50,})\.ip[fn]s\.'
+
+[wallet_connector_libraries]
+title = 'Wallet-connector UI libraries'
+description = 'Wallet-connector UI libraries: a page using one is a dApp (or a drainer), not an EtherHiding loader.'
+type = "words"
+values = [
+  'rainbowkit',
+  'wagmi',
+  'walletconnect',
+  'web3modal',
+]
+
+[wallet_libraries]
+title = 'Wallet libraries'
+description = 'Every wallet library, connector kits plus web3 and ethers.'
+type = "words"
+values = [
+  'ethers',
+  'rainbowkit',
+  'wagmi',
+  'walletconnect',
+  'web3',
+  'web3modal',
+]
+
+[drainer_wording]
+title = 'Wallet drainer wording'
+description = 'Wallet drainer wording (airdrop, claim your tokens, validate your wallet).'
+type = "regex"
+flags = 'i'
+pattern = '\bairdrop\b|\bclaim\s+(your\s+)?(free\s+)?(tokens?|rewards?|allocation|nfts?)\b|\b(verify|validate|synchroni[sz]e|rectify|migrate)\s+(your\s+)?wallet\b|\bwallet\s+(verification|validation|synchroni[sz]ation)\b'
+
+[dapp_ui]
+title = 'Connect-wallet UI wording'
+description = 'A page that offers to connect a wallet is a dApp (or a drainer lure, DE-W3B-006), not an EtherHiding loader on an unrelated site.'
+type = "regex"
+flags = 'i'
+pattern = '\bconnect(\s+(your|a))?\s+wallet\b|\bwalletconnect\b|\bconnect\s+(to\s+)?(metamask|phantom|coinbase\s+wallet)\b'

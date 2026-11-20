@@ -1,0 +1,87 @@
+# Exfiltration and collectors: detection strings read by the fact builders.
+# Shipped defaults. Change them in Admin > Detection strings (stored as an
+# override, audited, revertible); edit this file only to change what ships.
+# Regex syntax is Python re. flags: i = ignore case, s = dot matches newline,
+# m = multi-line, x = verbose.
+
+title = 'Exfiltration and collectors'
+
+[form_collectors]
+title = 'Form-backend collector services'
+description = 'Form-backend / no-code collector services a phishing page with no backend posts to (analyst-curated; tune on local data).'
+type = "words"
+values = [
+  'api.emailjs.com',
+  'api.jsonbin.io',
+  'api.web3forms.com',
+  'formcarry.com',
+  'formspree.io',
+  'formsubmit.co',
+  'getform.io',
+  'hooks.zapier.com',
+  'sheetdb.io',
+  'submit-form.com',
+  'webhook.site',
+]
+
+[telegram_bot]
+title = 'Telegram Bot API path'
+description = 'Telegram Bot API calls (sendMessage, sendDocument ...) a phishing page posts stolen data to.'
+type = "regex"
+flags = 'i'
+pattern = '^/bot(\d{5,})(?::[A-Za-z0-9_-]{30,})?/(sendMessage|sendDocument|sendPhoto|sendMediaGroup|getUpdates|getMe)'
+
+[discord_webhook]
+title = 'Discord webhook path'
+description = 'Discord webhook paths a page posts stolen data to.'
+type = "regex"
+flags = 'i'
+pattern = '^/api/webhooks/(\d{15,22})/[A-Za-z0-9_.-]{20,}'
+
+[discord_hosts]
+title = 'Discord hosts'
+description = 'Hosts that serve Discord webhooks.'
+type = "words"
+values = [
+  'canary.discord.com',
+  'discord.com',
+  'discordapp.com',
+  'ptb.discord.com',
+]
+
+[ip_lookup_hosts]
+title = 'IP / geo lookup services'
+description = 'Client-side IP / ASN / geo lookup services used to geofence and spot sandboxes.'
+type = "words"
+values = [
+  'api.bigdatacloud.net',
+  'api.db-ip.com',
+  'api.ipapi.is',
+  'api.ipify.org',
+  'extreme-ip-lookup.com',
+  'freeipapi.com',
+  'get.geojs.io',
+  'ifconfig.me',
+  'ip-api.com',
+  'ip-info.ff.avast.com',
+  'ip.sb',
+  'ipapi.co',
+  'ipgeolocation.io',
+  'ipinfo.io',
+  'ipwho.is',
+  'wtfismyip.com',
+]
+
+[favicon_service]
+title = 'Favicon services'
+description = '''Favicon services a webmail kit uses to show the icon of the victim's own mail domain, so one page passes for every provider (LR1-04).'''
+type = "regex"
+flags = 'i'
+pattern = '^https?://(?:www\.google\.com/s2/favicons\?(?:[^#]*&)?domain(?:_url)?=|t\d\.gstatic\.com/faviconV2\?(?:[^#]*&)?url=|icons\.duckduckgo\.com/ip3/|logo\.clearbit\.com/|icon\.horse/icon/)([^&?#]+)'
+
+[numeric_php]
+title = 'Numeric PHP collector path'
+description = 'A numeric PHP collector path (/12345.php) used by kits to receive form posts.'
+type = "regex"
+flags = ''
+pattern = '/\d{5,6}\.php$'

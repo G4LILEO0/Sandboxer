@@ -26,6 +26,7 @@ from sandbox.ids import new_id
 from sandbox.orchestrator import jobs
 from sandbox.rules.behaviour import RuleSyntaxError, evaluate, parse_rule
 from sandbox.rules.bundles import activate_bundle
+from sandbox.rules.defaults import BUILTIN_SOURCE, builtin_body
 from sandbox.rules.importer import content_hash, validate_yara, yara_metadata
 from sandbox.runtime_config import get_config
 
@@ -59,6 +60,8 @@ def rule_dict(r: Rule, overridden: bool = False, full: bool = False) -> dict[str
         "error": r.error,
         "content_hash": r.content_hash,
         "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+        "modified_by": r.modified_by,
+        "editable": r.source in ("local", BUILTIN_SOURCE),
     }
     if full:
         out["body"] = r.body
@@ -234,14 +237,19 @@ async def update_rule(
     if rule is None:
         raise _error(404, "not_found", f"No rule {rule_id}")
     if body.body is not None:
-        if rule.source != "local":
+        if rule.source not in ("local", BUILTIN_SOURCE):
             raise _error(
                 409, "upstream_rule", "Upstream rules change through their feed; disable instead"
             )
         error = _validate(rule.engine, body.body)
         if error:
             raise _error(422, "invalid_rule", error)
-        rule.body, rule.content_hash = body.body, content_hash(body.body)
+        if body.body != rule.body:
+            rule.body, rule.content_hash = body.body, content_hash(body.body)
+            rule.error = None
+            if rule.source == BUILTIN_SOURCE:
+                # Seeding keeps this edit until it is reverted (POST .../revert).
+                rule.modified_by = principal.subject
     for field in ("description", "severity", "tags", "attack_ids"):
         if getattr(body, field) is not None:
             setattr(rule, field, getattr(body, field))
@@ -252,10 +260,45 @@ async def update_rule(
         action="rule.update",
         target=rule.id,
         source_ip=_ip(request),
-        detail=body.model_dump(exclude_none=True, exclude={"body"}),
+        detail={
+            **body.model_dump(exclude_none=True, exclude={"body"}),
+            **({"body_changed": True} if body.body is not None else {}),
+        },
     )
     jobs.enqueue(
         db, "bundle_build", {"reason": "rule updated", "activate": True, "actor": principal.subject}
+    )
+    await db.commit()
+    return rule_dict(rule, full=True)
+
+
+@router.post("/rules/{rule_id}/revert")
+async def revert_rule(
+    rule_id: str, request: Request, principal: Engineer, db: Db
+) -> dict[str, Any]:
+    """Put a built-in rule edited in Admin back to the body that ships with Sandboxer."""
+    rule = await db.get(Rule, rule_id)
+    if rule is None:
+        raise _error(404, "not_found", f"No rule {rule_id}")
+    shipped = builtin_body(rule.engine, rule.name) if rule.source == BUILTIN_SOURCE else None
+    if shipped is None:
+        raise _error(409, "not_builtin", "Only built-in rules have a shipped version")
+    rule.body, rule.content_hash = shipped, content_hash(shipped)
+    rule.error = validate_yara(shipped) if rule.engine == "yara" else None
+    rule.modified_by = None
+    rule.updated_at = datetime.now(UTC)
+    record_audit(
+        db,
+        actor=principal.subject,
+        action="rule.revert",
+        target=rule.id,
+        source_ip=_ip(request),
+        detail={"name": rule.name},
+    )
+    jobs.enqueue(
+        db,
+        "bundle_build",
+        {"reason": "rule reverted", "activate": True, "actor": principal.subject},
     )
     await db.commit()
     return rule_dict(rule, full=True)

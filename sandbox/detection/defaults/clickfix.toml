@@ -1,0 +1,231 @@
+# ClickFix and fake verification: detection strings read by the fact builders.
+# Shipped defaults. Change them in Admin > Detection strings (stored as an
+# override, audited, revertible); edit this file only to change what ships.
+# Regex syntax is Python re. flags: i = ignore case, s = dot matches newline,
+# m = multi-line, x = verbose.
+
+title = 'ClickFix and fake verification'
+
+[shell_command]
+title = 'Shell command on the clipboard'
+description = 'Any shell command in a clipboard write (PowerShell, cmd /c, mshta, curl, finger, for /f ...). Feeds clipboard.command_like.'
+type = "regex"
+flags = 'i'
+pattern = '\b(powershell|pwsh|cmd(\.exe)?\s*/[ck]|mshta|rundll32|regsvr32|bitsadmin|certutil|wscript|cscript|curl\s+|wget\s+|iex\b|invoke-(expression|webrequest)|msiexec|start-process|bash\s+-c|osascript|finger(\.exe)?\s+\S+@|conhost(\.exe)?\s|forfiles|for\s+/f\b)|%comspec%|\|\s*cmd(\.exe)?\b'
+
+[fetch_and_run]
+title = 'Fetch-then-run cradles'
+description = 'Fetch-then-run cradles: download a script and pipe it to an interpreter. Real package managers install this way too (Homebrew, uv, Bun, Scoop, Chocolatey, rustup), so a cradle whose every source is in Known installer sources is not ClickFix (R-01). Feeds clipboard.clickfix_like.'
+type = "regex_list"
+[[fetch_and_run.items]]
+flags = 'is'
+pattern = '\b(iwr|irm|invoke-webrequest|invoke-restmethod|downloadstring|downloadfile|net\.webclient|start-bitstransfer)\b.{0,300}(\biex\b|invoke-expression|\|\s*iex)'
+[[fetch_and_run.items]]
+flags = 'i'
+pattern = '(\biex\b|invoke-expression)\s*\(?\s*\(?\s*(iwr|irm|new-object|\[)'
+[[fetch_and_run.items]]
+flags = 'i'
+pattern = '\b(curl|wget)\b[^|\n]{0,300}\|\s*(ba|z)?sh\b'
+[[fetch_and_run.items]]
+flags = 'i'
+pattern = '\$\(\s*(curl|wget)\b'
+
+[unambiguous_traits]
+title = 'Unambiguous ClickFix traits'
+description = "Traits no installer uses, so always ClickFix whatever the source: encoded or hidden PowerShell, mshta of a URL, base64 piped to a shell, a fake-CAPTCHA comment, finger.exe or for /f fetch-and-run, cmd started minimised or via %COMSPEC%, and CrashFix's renamed finger.exe. Commands are matched with cmd's ^ escapes and in-word \"\" removed. Feeds clipboard.clickfix_like."
+type = "regex_list"
+[[unambiguous_traits.items]]
+flags = 'i'
+pattern = '\s-(e|ec|enc|encodedcommand)\s+[A-Za-z0-9+/=]{40,}'
+[[unambiguous_traits.items]]
+flags = 'i'
+pattern = '\s-w(indowstyle)?\s+(h|hidden|1)\b'
+[[unambiguous_traits.items]]
+flags = 'i'
+pattern = '''\bmshta(\.exe)?\s+[\"']?(https?:|\\\\|vbscript:|javascript:)'''
+[[unambiguous_traits.items]]
+flags = 'i'
+pattern = 'base64\s+(-d|--decode)[^|\n]{0,80}\|\s*(ba|z)?sh\b'
+[[unambiguous_traits.items]]
+flags = 'i'
+pattern = '(#|\brem\b|::).{0,80}\b(robot|captcha|verif\w*|human|cloudflare|ray id)'
+[[unambiguous_traits.items]]
+flags = 'i'
+pattern = '\bfinger(\.exe)?\s+\S+@\S+'
+[[unambiguous_traits.items]]
+flags = 'is'
+pattern = '''\bfor\s+/f\b.{0,200}\bin\s*\(\s*'.{0,300}'\s*\)\s*do\s+%%?\w'''
+[[unambiguous_traits.items]]
+flags = 'i'
+pattern = '\bstart\s+(\"[^\"]*\"\s+)?/min\b'
+[[unambiguous_traits.items]]
+flags = 'i'
+pattern = '%comspec%\s*/[ck]\b'
+[[unambiguous_traits.items]]
+note = 'CrashFix (DE-CFX-010) copies finger.exe under another name to dodge command-line rules.'
+flags = 'i'
+pattern = '\bcopy\b[^&|\n]{0,160}\bfinger(\.exe)?\b[^&|\n]{0,160}\\\w+\.exe\b'
+[[unambiguous_traits.items]]
+note = 'CrashFix: pipes <name>.exe user@host into cmd.'
+flags = 'i'
+pattern = '\b(?!finger\b)\w{1,12}\.exe\s+[\w.-]+@[\w.-]+\s*\|\s*cmd\b'
+
+[dns_cradle]
+title = 'DNS retrieval cradle'
+description = 'DNS-retrieval cradle (DE-CFX-009): nslookup / Resolve-DnsName whose answer is run as the next stage. The execution sink is required: a plain lookup, or one filtered with findstr, is a troubleshooting snippet.'
+type = "regex"
+flags = 'is'
+pattern = '\b(nslookup|resolve-dnsname)\b.{0,300}?(\|\s*(iex|invoke-expression|cmd|powershell)\b|\biex\b|invoke-expression|\bdo\s+(call\s+)?%%?\w)'
+
+[installer_sources]
+title = 'Known installer sources'
+description = 'Where real install one-liners fetch from (R-01): host = allowed path prefixes. An empty list means any path on that host. raw.githubusercontent.com serves anything, so only named installer repos count. A source that hides its host or path (userinfo, dot segments, a port) never counts.'
+type = "table"
+value_type = "str_list"
+[installer_sources.values]
+"brew.sh" = []
+"astral.sh" = []
+"bun.sh" = []
+"get.scoop.sh" = []
+"community.chocolatey.org" = ['/install.ps1']
+"chocolatey.org" = ['/install.ps1']
+"sh.rustup.rs" = []
+"win.rustup.rs" = []
+"deno.land" = ['/install.sh', '/install.ps1', '/x/install/']
+"get.docker.com" = []
+"get.pnpm.io" = []
+"install.python-poetry.org" = []
+"pyenv.run" = []
+"raw.githubusercontent.com" = ['/Homebrew/install/', '/nvm-sh/nvm/', '/ohmyzsh/ohmyzsh/', '/pyenv/pyenv-installer/']
+
+[padded_decoy]
+title = 'Padded decoy command'
+description = 'Separate test on the raw text: a one-line command padded with a long run of spaces or dashes, which pushes the real command out of view in the Run dialog and leaves only a decoy ("P_u_s_h t_h_e E_n_t_e_r k_e_y", "I am not a robot") visible.'
+type = "regex"
+flags = ''
+pattern = '^[^\n]*\S([ \t]{12,}|[-_=]{10,})[^\n]*[A-Za-z][^\n]*$'
+
+[caret_obfuscation]
+title = 'Caret obfuscation'
+description = 'Heavy caret escaping inside a word (f^^i^^n^^g^^e^^r): no copyable docs command does this.'
+type = "regex"
+flags = ''
+pattern = '(\w\^+){3,}\w'
+
+[filefix]
+title = 'FileFix command'
+description = '''FileFix: a shell command padded with a long whitespace run then a '#' commenting out a decoy Windows file path, so only the path shows in Explorer's address bar.'''
+type = "regex"
+flags = 'is'
+pattern = '^\s*(powershell|pwsh|cmd|mshta|conhost|curl|rundll32|msiexec)\b.*([ \t  ]{8,}|\^+)#\s*[A-Za-z]:\\.*\.(docx?|pdf|xlsx?|txt|rtf)\s*$'
+
+[mac_linux_traits]
+title = 'macOS and Linux terminal ClickFix traits'
+description = 'macOS and Linux terminal ClickFix traits, on top of the Windows ones. Feeds clipboard.clickfix_like.'
+type = "regex_list"
+[[mac_linux_traits.items]]
+flags = 'i'
+pattern = '\bosascript\b'
+[[mac_linux_traits.items]]
+flags = 'is'
+pattern = '\bxattr\s+-[cdr]\b.{0,80}(chmod\s+\+x|\./)'
+[[mac_linux_traits.items]]
+flags = 'i'
+pattern = '\bdscl\s+\.\s+-authonly\b'
+[[mac_linux_traits.items]]
+flags = 'i'
+pattern = '\bbase64\s+(-d|--decode|-D)\b[^|\n]{0,80}\|\s*(ba|z)?sh\b'
+[[mac_linux_traits.items]]
+flags = 'i'
+pattern = '\becho\s+[A-Za-z0-9+/=]{40,}\s*\|\s*base64\b'
+
+[run_dialog]
+title = 'Open Run dialog or terminal instructions'
+description = "Instructions to open the Run dialog, a terminal or Explorer's address bar (Win+R, Win+X, Cmd+Space ...). Together with Paste instruction on the same page this feeds lure.run_dialog_instructions."
+type = "regex"
+flags = 'i'
+pattern = '''(win(dows)?(\s*(key|logo))?\s*\+\s*r\b|⊞|press\s+(and\s+hold\s+)?(the\s+)?windows\s+(key|button)|open\s+(the\s+)?(run\s+dialog|terminal|powershell|windows\s+terminal)|powershell\s*\(\s*admin\s*\)|win\s*\+\s*x|cmd\s*\+\s*space|command\s*\+\s*space|ctrl\s*\+\s*l\b|explorer('s)?\s+address\s+bar|file\s+explorer)'''
+
+[paste]
+title = 'Paste instruction'
+description = 'A paste instruction (Ctrl+V, paste, Arabic لصق). Paired with the Run dialog wording for lure.run_dialog_instructions.'
+type = "regex"
+flags = 'i'
+pattern = '(ctrl|cmd|⌘)\s*\+\s*v\b|\bpaste\b|لصق'
+
+[terminal_context]
+title = 'macOS terminal instructions'
+description = 'Instructions to open the macOS Terminal and complete a step there.'
+type = "regex"
+flags = 'i'
+pattern = '(open|launch) terminal|command\s*\+\s*(space|v)|complete .{0,40}in terminal'
+
+[verify_wording]
+title = 'Fake verification wording'
+description = 'Fake verification / CAPTCHA wording (I am not a robot, verify you are human, verification ID). This is the trigger for lure.fake_captcha; the brand words below are evidence only (R-10), because every site behind a real challenge prints them. lure.fake_captcha also needs a copy/paste or press-keys instruction in the same frame.'
+type = "regex"
+flags = 'i'
+pattern = '''verify (that )?(you are|you'?re) (a )?human|i'?m not a robot|i am not a robot|verification (id|hash|code|steps?)|prove (that )?you'?re (a )?human|human verification|complete (the )?verification'''
+
+[captcha_brand]
+title = 'CAPTCHA brand words (evidence only)'
+description = 'CAPTCHA brand words (Cloudflare, reCAPTCHA, Ray ID, security check). Evidence only, never the trigger (R-10).'
+type = "regex"
+flags = 'i'
+pattern = 'security check|ray id|recaptcha|cloudflare|turnstile'
+
+[key_instruction]
+title = 'Press keys or copy code instruction'
+description = 'Press-keys or copy-the-code instructions that complete a fake CAPTCHA.'
+type = "regex"
+flags = 'i'
+pattern = '\bpress\s+(and\s+hold\s+)?(the\s+)?(win(dows)?|ctrl|cmd|command|⌘|enter|keys?)\b|\bcopy\s+(the\s+)?(code|command|text|verification)'
+
+[genuine_challenge]
+title = 'Genuine challenge resources'
+description = 'Real challenge resources: their presence lowers, not suppresses, the rule.'
+type = "regex"
+flags = 'i'
+pattern = 'challenges\.cloudflare\.com/turnstile|/cdn-cgi/challenge-platform|www\.google\.com/recaptcha/|www\.recaptcha\.net/recaptcha/|hcaptcha\.com'
+
+[fake_browser_update]
+title = 'Fake browser update wording'
+description = 'Fake browser / software update overlay text.'
+type = "regex"
+flags = 'i'
+pattern = '(update|install) (google )?chrome|(chrome|edge|firefox|safari|browser) (is )?(out of date|outdated|update (required|available))|your browser (version )?is (out of date|not supported)'
+
+[crash_repair]
+title = 'Fake crash-repair (CrashFix) wording'
+description = 'CrashFix / fake crash-repair popup (DE-CFX-010): "browser stopped abnormally / security issues detected", then a "repair" command to paste.'
+type = "regex"
+flags = 'i'
+pattern = '\bbrowser (has )?(stopped|crashed)\b|stopped abnormally|security issues? detected|\brepair (your )?(browser|chrome|edge)\b|\bbrowser (repair|recovery) (tool|command)\b'
+
+[fake_os_update]
+title = 'Fake OS update wording'
+description = 'L2-NEW-3: a full-screen fake OS update (JackFix): update-in-progress wording and a progress percentage on the same non-vendor page.'
+type = "regex"
+flags = 'i'
+pattern = '\b(working on|installing|configuring)\s+(windows\s+)?updates?\b|\bdo\s+not\s+(turn\s+off|switch\s+off|shut\s+down|restart)\s+(your\s+)?(computer|pc|device)\b|\bcritical\s+(security\s+)?updates?\b|\bwindows\s+update\b'
+
+[progress_percent]
+title = 'Progress percentage'
+description = 'A progress percentage, paired with Fake OS update wording on the same page.'
+type = "regex"
+flags = ''
+pattern = '\b\d{1,3}\s?%(\s*complete)?'
+
+[browser_vendors]
+title = 'Browser vendor sites (never fake updates)'
+description = 'Browser vendor sites (and their subdomains) whose pages are never flagged as fake updates or crash-repair prompts.'
+type = "words"
+values = [
+  'google.com',
+  'microsoft.com',
+  'apple.com',
+  'mozilla.org',
+  'opera.com',
+  'brave.com',
+  'browser-update.org',
+]
