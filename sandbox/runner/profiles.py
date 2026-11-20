@@ -1,6 +1,13 @@
 """Browser profiles (CAP-10). The engine is always Chromium; the profile sets what the
-page sees: user agent, platform hints and whether it looks like a phone."""
+page sees: user agent, platform hints and whether it looks like a phone.
 
+Bot checks (Cloudflare and others) compare the user agent with the client hints the
+browser sends (Sec-CH-UA*, navigator.userAgentData). Chromium derives the hints'
+platform from the user agent but takes the version from itself, so the runner puts the
+version of the Chromium it actually launched into the user agent (``user_agent_for``).
+"""
+
+import re
 from dataclasses import dataclass
 
 
@@ -14,6 +21,20 @@ class BrowserProfile:
     # navigator.platform override, so platform-gated kits (macOS ClickFix) show real content.
     platform: str = ""
     description: str = ""
+
+    def user_agent_for(self, browser_version: str | None) -> str:
+        """The profile's user agent with the Chrome (and Edge) major version of the
+        browser that is really running, in Chrome's reduced form (NNN.0.0.0)."""
+        major = _major(browser_version)
+        if not major or "Chrome/" not in self.user_agent:
+            return self.user_agent
+        ua = re.sub(r"Chrome/[\d.]+", f"Chrome/{major}.0.0.0", self.user_agent)
+        return re.sub(r"Edg/[\d.]+", f"Edg/{major}.0.0.0", ua)
+
+
+def _major(version: str | None) -> str | None:
+    m = re.match(r"\s*(\d+)\.", version or "")
+    return m.group(1) if m else None
 
 
 _CHROME = "131.0.0.0"

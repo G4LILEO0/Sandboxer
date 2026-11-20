@@ -197,6 +197,11 @@ class DockerBackend:
                 "SANDBOX_VNC_PASSWORD": vnc_password,
                 "SANDBOX_SCREEN": f"{width}x{height}x24",
             }
+        elif runner.get("headed"):
+            # Automated but headed: a virtual display only, no VNC (session-entrypoint).
+            width = runner.get("viewport_width", 1366)
+            height = runner.get("viewport_height", 768) + 120
+            env |= {"SANDBOX_HEADED": "1", "SANDBOX_SCREEN": f"{width}x{height}x24"}
         name = f"sbx-{spec.session_id}"
         kwargs = dict(
             image=s.session_image,

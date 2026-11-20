@@ -31,6 +31,7 @@ from sandbox.analysis.facts import (
     extract_iocs,
 )
 from sandbox.analysis.scoring import ScoreResult, score
+from sandbox.core import antibot
 from sandbox.db.audit import record_audit
 from sandbox.db.models import (
     AllowlistDomain,
@@ -130,8 +131,14 @@ def evaluate(
 ) -> Evaluation:
     facts = build_facts(data)
     rule_hits = behaviour_hits(behaviour, facts) + yara_hits
-    # A page that never loaded is "unknown" unless something else already scored it.
-    capture_ok = facts["capture"]["navigated"] and not facts["capture"]["load_failed"]
+    # A page that never loaded, or that only showed a bot check (Cloudflare challenge or
+    # block page) the browser did not get past, is "unknown" unless something else
+    # already scored it.
+    capture_ok = (
+        facts["capture"]["navigated"]
+        and not facts["capture"]["load_failed"]
+        and not facts["capture"]["antibot"]
+    )
     result = score(
         rule_hits=rule_hits,
         indicator_hits=indicator_hits,
@@ -524,6 +531,8 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
         )
         if ev.facts["capture"]["load_failed"]:
             notes.append(f"The page did not finish loading (ended on {ev.facts['final']['url']})")
+        if ev.facts["capture"]["antibot"]:
+            notes.append(antibot.describe(ev.facts["capture"]["antibot"]))
         ev.notes = notes
         enrichment = (
             await _enrich(ctx, ev.iocs, ev.facts["final"]["domain"]) if analysis.enrich else {}
