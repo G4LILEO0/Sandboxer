@@ -2,13 +2,20 @@
 # Starts the live-view stack for interactive sessions, then hands over to the runner.
 set -eu
 
-if [ "${SANDBOX_INTERACTIVE:-0}" = "1" ]; then
+# Automated sessions get the virtual display too when they run headed (SANDBOX_HEADED,
+# so bot checks see a normal desktop browser), but no VNC.
+if [ "${SANDBOX_INTERACTIVE:-0}" = "1" ] || [ "${SANDBOX_HEADED:-0}" = "1" ]; then
     export DISPLAY=:99
     Xvfb :99 -screen 0 "${SANDBOX_SCREEN:-1366x888x24}" -nolisten tcp >/tmp/xvfb.log 2>&1 &
     i=0
     while [ ! -e /tmp/.X11-unix/X99 ] && [ "$i" -lt 50 ]; do
         sleep 0.1; i=$((i + 1))
     done
+    # No display after 5 s: the runner falls back to headless and says so.
+    [ -e /tmp/.X11-unix/X99 ] || unset DISPLAY
+fi
+
+if [ "${SANDBOX_INTERACTIVE:-0}" = "1" ]; then
     # VNC is reachable only from the session network, through the API's token-checked
     # proxy, and also needs this per-session password. -nosel turns off clipboard
     # exchange in both directions (INT-4).

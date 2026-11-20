@@ -20,6 +20,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import time
@@ -40,13 +41,14 @@ from playwright.async_api import (
 )
 from playwright.async_api import Error as PlaywrightError
 
+from sandbox.core import antibot
 from sandbox.core.netguard import NetGuard, system_resolver
 from sandbox.runner.events import Emitter, now_iso
 from sandbox.runner.page_scripts import (
     BINDING,
     COLLECT_SCRIPT,
-    INIT_SCRIPT,
     WALLET_SCRIPT,
+    init_script,
     is_harness_code,
 )
 from sandbox.runner.profiles import get_profile
@@ -83,6 +85,14 @@ _LAUNCH_ARGS = [
     "--disable-sync",
     "--password-store=basic",
 ]
+# Playwright's own default switch that turns on navigator.webdriver and the "controlled by
+# automated test software" bar; bot checks look for both.
+_IGNORE_DEFAULT_ARGS = ["--enable-automation"]
+# How often a page on a bot check is re-probed, and when the Turnstile box is ticked if
+# the challenge has not cleared by itself (a managed challenge usually clears in 2-8 s).
+_ANTIBOT_POLL_S = 1.0
+_ANTIBOT_CLICK_AFTER_S = 6.0
+_ANTIBOT_MAX_CLICKS = 2
 
 
 class HostChecker:
@@ -157,6 +167,14 @@ class Capture:
         self.pages: list[dict[str, Any]] = []
         self.last_analyst_click = 0.0
         self.last_nav_at: dict[str, float] = {}
+        # Bot-check pages met this session (Cloudflare challenge / block), in order.
+        self.antibot: list[dict[str, Any]] = []
+        # Status and selected headers of each page's latest main-document response.
+        self.doc_response: dict[Page, tuple[int, dict[str, str]]] = {}
+        self.cdp_sessions: dict[Page, Any] = {}
+        self.browser_mode = "headless"
+        self.browser_version: str | None = None
+        self.user_agent = self.profile.user_agent
         self._tasks: set[asyncio.Task] = set()
         self._shot_lock = asyncio.Lock()
 
@@ -267,6 +285,12 @@ class Capture:
 
         is_main_nav = request.is_navigation_request() and request.frame == page.main_frame
         status = response.status
+        if is_main_nav:
+            headers = response.headers
+            self.doc_response[page] = (
+                status,
+                {k: headers[k][:200] for k in ("server", "cf-ray", "cf-mitigated") if k in headers},
+            )
         if is_main_nav and 300 <= status < 400:
             location = await response.header_value("location")
             if location:
@@ -329,6 +353,7 @@ class Capture:
             await cdp.send("Page.enable")
             tree = await cdp.send("Page.getFrameTree")
             self.main_frame_ids[page] = tree["frameTree"]["frame"]["id"]
+            self.cdp_sessions[page] = cdp
             cdp.on("Page.frameRequestedNavigation", lambda e: self._on_requested_nav(page, e))
             # A3: initiator type / script URL / stack top per request on this target.
             cdp.on("Network.requestWillBeSent", lambda e: self._on_cdp_request(page, e))
@@ -672,14 +697,31 @@ class Capture:
         viewport = {"width": spec.viewport_width, "height": spec.viewport_height}
         async with async_playwright() as pw:
             args = list(_LAUNCH_ARGS)
-            if spec.interactive:
+            # Automated runs are headed on the session's virtual display when there is one:
+            # a headed browser is what bot checks expect. Without a display it is Chromium's
+            # new headless mode (the full browser), never the separate headless shell, which
+            # announces itself as "HeadlessChrome" in every request's Sec-CH-UA header.
+            headed = spec.interactive or (spec.headed and bool(os.environ.get("DISPLAY")))
+            if spec.headed and not headed:
+                self.errors.append("headed mode asked for but there is no DISPLAY; ran headless")
+            self.browser_mode = (
+                "interactive" if spec.interactive else "headed" if headed else "headless"
+            )
+            if headed:
                 args += [
                     "--window-position=0,0",
                     f"--window-size={spec.viewport_width},{spec.viewport_height + 120}",
                 ]
-            browser = await pw.chromium.launch(headless=not spec.interactive, args=args)
+            browser = await pw.chromium.launch(
+                channel="chromium",
+                headless=not headed,
+                args=args,
+                ignore_default_args=_IGNORE_DEFAULT_ARGS,
+            )
+            self.browser_version = browser.version
+            self.user_agent = self.profile.user_agent_for(browser.version)
             context: BrowserContext = await browser.new_context(
-                user_agent=self.profile.user_agent,
+                user_agent=self.user_agent,
                 viewport=viewport,
                 is_mobile=self.profile.is_mobile,
                 has_touch=self.profile.has_touch,
@@ -697,12 +739,7 @@ class Capture:
             await context.route("**/*", self.on_route)
             await context.route_web_socket(re.compile(r".*"), self.on_websocket)
             await context.expose_binding(BINDING, self.on_binding)
-            await context.add_init_script(INIT_SCRIPT)
-            if self.profile.platform:
-                plat = json.dumps(self.profile.platform)
-                await context.add_init_script(
-                    f"Object.defineProperty(navigator,'platform',{{get:()=>{plat}}});"
-                )
+            await context.add_init_script(init_script(self.profile.platform))
             # Grant clipboard so hooked writes don't fail silently; notifications only when
             # service workers are allowed (so a push-bait flow can proceed and be recorded).
             perms = ["clipboard-read", "clipboard-write"]
@@ -727,6 +764,8 @@ class Capture:
                     await self._observe(page)
             finally:
                 ticker.cancel()
+                if context.pages:
+                    await self._antibot_final(context.pages[0])
                 for p in context.pages:
                     await self.collect_page(p)
                     with contextlib.suppress(Exception):
@@ -782,7 +821,15 @@ class Capture:
             await page.wait_for_load_state("networkidle", timeout=10_000)
         end = min(self.deadline, time.monotonic() + self.spec.observe_s)
         scrolled = False
+        next_probe = 0.0
         while time.monotonic() < end and not self.stop.is_set():
+            # A bot check can sit in front of the first page or appear after a redirect.
+            # Waiting it out does not count against the observation window.
+            if time.monotonic() >= next_probe and not page.is_closed():
+                next_probe = time.monotonic() + 2
+                if await self._pass_antibot(page):
+                    end = min(self.deadline, time.monotonic() + self.spec.observe_s)
+                    scrolled = False
             if not scrolled and not page.is_closed():
                 with contextlib.suppress(PlaywrightError):
                     await page.mouse.wheel(0, 600)
@@ -795,6 +842,178 @@ class Capture:
             self.end_reason = "stopped"
         elif time.monotonic() >= self.deadline:
             self.end_reason = "time_limit"
+
+    # --- bot checks ----------------------------------------------------------------
+
+    async def _antibot_state(self, page: Page) -> dict[str, Any] | None:
+        """Classify the page as a bot-check page (Cloudflare challenge / block) or None."""
+        if page.is_closed():
+            return None
+        cdp, frame_id = self.cdp_sessions.get(page), self.main_frame_ids.get(page)
+        if not cdp or not frame_id:
+            return None
+        # In an isolated world: the page shares the DOM but never sees the probe run (a
+        # main-world evaluate goes through the page's own eval, which challenge scripts
+        # and the exec hook both watch).
+        try:
+            world = await cdp.send(
+                "Page.createIsolatedWorld", {"frameId": frame_id, "worldName": "sbx-probe"}
+            )
+            res = await cdp.send(
+                "Runtime.evaluate",
+                {
+                    "expression": f"({antibot.PROBE_SCRIPT.strip()})()",
+                    "contextId": world["executionContextId"],
+                    "returnByValue": True,
+                },
+            )
+            probe = (res.get("result") or {}).get("value") or {}
+        except PlaywrightError:
+            return None  # navigating; the next probe sees the new document
+        status, headers = self.doc_response.get(page, (None, {}))
+        found = antibot.classify(
+            probe.get("title", ""), probe.get("text", ""), probe.get("markers", []), headers, status
+        )
+        if found:
+            found["markers"] = probe.get("markers", [])
+        return found
+
+    async def _pass_antibot(self, page: Page) -> bool:
+        """Automated mode: if the page is a bot check, wait for it to clear (ticking the
+        Turnstile box once it has had time to clear by itself) for up to
+        ``spec.antibot_wait_s``. Records the encounter; returns True if one was met."""
+        if self.antibot and not self.antibot[-1]["cleared"]:
+            return False  # already waited this one out; _antibot_final settles it
+        state = await self._antibot_state(page)
+        if not state:
+            return False
+        started = time.monotonic()
+        entry: dict[str, Any] = {
+            "provider": state["provider"],
+            "kind": state["kind"],
+            "url": page.url[:2000],
+            "ray_id": state.get("ray_id"),
+            "markers": state.get("markers", []),
+            "ms": self._elapsed_ms(),
+            "clicks": 0,
+            "cleared": False,
+        }
+        self.antibot.append(entry)
+        self.events.emit(
+            "antibot_challenge",
+            "runner",
+            provider=entry["provider"],
+            check=entry["kind"],
+            url=entry["url"],
+            ray_id=entry["ray_id"],
+        )
+        await self.screenshot(page, "antibot")
+        limit = min(self.deadline, started + max(0, self.spec.antibot_wait_s))
+        # A firewall block page does not change by waiting; give it one look only.
+        if state["kind"] == "blocked":
+            limit = min(limit, started + 3)
+        while time.monotonic() < limit and not self.stop.is_set() and not page.is_closed():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self.stop.wait(), timeout=_ANTIBOT_POLL_S)
+            state = await self._antibot_state(page)
+            if not state:
+                # The challenge reloads the page when it passes; look again once the new
+                # document is there, so a page mid-navigation is not taken for success.
+                with contextlib.suppress(PlaywrightError):
+                    await page.wait_for_load_state("domcontentloaded", timeout=5_000)
+                state = await self._antibot_state(page)
+            if not state:
+                entry["cleared"] = True
+                break
+            entry["kind"] = state["kind"]
+            entry["ray_id"] = entry["ray_id"] or state.get("ray_id")
+            waited = time.monotonic() - started
+            if (
+                state["kind"] == "challenge"
+                and entry["clicks"] < _ANTIBOT_MAX_CLICKS
+                and waited >= _ANTIBOT_CLICK_AFTER_S * (entry["clicks"] + 1)
+                and await self._click_turnstile(page)
+            ):
+                entry["clicks"] += 1
+        entry["waited_ms"] = int((time.monotonic() - started) * 1000)
+        entry["final_url"] = page.url[:2000] if not page.is_closed() else None
+        if entry["cleared"]:
+            self.events.emit(
+                "antibot_cleared", "runner", url=entry["final_url"], waited_ms=entry["waited_ms"]
+            )
+            with contextlib.suppress(PlaywrightError):
+                await page.wait_for_load_state("load", timeout=15_000)
+            await self.screenshot(page, "antibot-cleared")
+        else:
+            self.events.emit(
+                "antibot_unpassed",
+                "runner",
+                provider=entry["provider"],
+                check=entry["kind"],
+                url=entry["final_url"],
+                waited_ms=entry["waited_ms"],
+            )
+        return True
+
+    async def _click_turnstile(self, page: Page) -> bool:
+        """Tick the Turnstile checkbox the way a person would: move to it, then click.
+        The widget is an iframe from challenges.cloudflare.com (inside a closed shadow
+        root, so it is found through the frame tree, not a selector)."""
+        for frame in page.frames:
+            if "challenges.cloudflare.com" not in frame.url:
+                continue
+            try:
+                element = await frame.frame_element()
+                box = await element.bounding_box()
+            except PlaywrightError:
+                continue
+            if not box or box["width"] < 20 or box["height"] < 20:
+                continue
+            # The checkbox sits at the left of the widget, vertically centred.
+            x = box["x"] + min(30.0, box["width"] / 2)
+            y = box["y"] + box["height"] / 2
+            try:
+                await page.mouse.move(x - 120, y + 40, steps=8)
+                await page.mouse.move(x, y, steps=12)
+                await asyncio.sleep(0.2)
+                await page.mouse.click(x, y, delay=80)
+            except PlaywrightError:
+                return False
+            self.events.emit("antibot_click", "runner", url=frame.url[:500], x=x, y=y)
+            return True
+        return False
+
+    async def _antibot_final(self, page: Page) -> None:
+        """At the end of the session: is the page still a bot check? Covers interactive
+        sessions (the analyst may or may not have passed it) and a check that appeared
+        after the last probe."""
+        state = await self._antibot_state(page)
+        if state and not (self.antibot and not self.antibot[-1]["cleared"]):
+            self.antibot.append(
+                {
+                    "provider": state["provider"],
+                    "kind": state["kind"],
+                    "url": page.url[:2000],
+                    "ray_id": state.get("ray_id"),
+                    "markers": state.get("markers", []),
+                    "ms": self._elapsed_ms(),
+                    "clicks": 0,
+                    "cleared": False,
+                    "waited_ms": 0,
+                    "final_url": page.url[:2000],
+                }
+            )
+            self.events.emit(
+                "antibot_unpassed",
+                "runner",
+                provider=state["provider"],
+                check=state["kind"],
+                url=page.url[:2000],
+                waited_ms=0,
+            )
+        elif not state and self.antibot and not self.antibot[-1]["cleared"]:
+            # Passed later: by the analyst, or by itself after the wait gave up.
+            self.antibot[-1]["cleared"] = True
 
     async def _run_key_probe(self, page: Page) -> None:
         """Dispatch DevTools shortcuts and a right-click (A5). The init-script
@@ -841,9 +1060,15 @@ class Capture:
             "analysis_id": self.spec.analysis_id,
             "url": self.spec.url,
             "interactive": self.spec.interactive,
+            "browser": {"mode": self.browser_mode, "version": self.browser_version},
+            # Bot-check pages met, and whether the session ended on one (``blocked``).
+            "antibot": {
+                "encounters": self.antibot,
+                "blocked": bool(self.antibot and not self.antibot[-1]["cleared"]),
+            },
             "profile": {
                 "name": self.profile.name,
-                "user_agent": self.profile.user_agent,
+                "user_agent": self.user_agent,
                 "locale": self.spec.locale,
                 "timezone": self.spec.timezone,
                 "viewport": [self.spec.viewport_width, self.spec.viewport_height],
