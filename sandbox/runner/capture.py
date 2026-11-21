@@ -172,6 +172,8 @@ class Capture:
         # URLs of downloads Chromium has reported, also while they are still saving: a
         # relayed page report of the same click can arrive after the download event.
         self.download_urls: set[str] = set()
+        # Patchright relay sessions of out-of-process iframes, per page.
+        self.relay_frame_sessions: dict[Page, dict[Frame, Any]] = {}
         self.hosts = HostChecker(
             NetGuard.from_cidrs(spec.ssrf_extra_blocked_cidrs, spec.ssrf_allowed_cidrs)
         )
@@ -422,6 +424,10 @@ class Capture:
                     "Page.frameRequestedNavigation",
                     lambda _e: self._spawn(self._relay_drain(page)),
                 )
+                page.on("frameattached", lambda f: self._spawn(self._relay_attach_frame(page, f)))
+                page.on("framenavigated", lambda f: self._spawn(self._relay_attach_frame(page, f)))
+                for frame in page.frames:
+                    self._spawn(self._relay_attach_frame(page, frame))
                 self._spawn(self._relay_poll(page))
         except PlaywrightError as exc:
             self.errors.append(f"cdp attach {pid}: {exc.message[:200]}")
@@ -679,11 +685,48 @@ class Capture:
             await self._relay_drain(page)
             await asyncio.sleep(_RELAY_POLL_S)
 
+    async def _relay_attach_frame(self, page: Page, frame: Frame) -> None:
+        """Out-of-process iframes (cross-site, such as a fake CAPTCHA served from another
+        domain) are separate CDP targets the page's session does not reach: give each its
+        own session with the relay world, or its hooks' reports are lost."""
+        if frame == page.main_frame or page.is_closed():
+            return
+        try:
+            cdp = await page.context.new_cdp_session(frame)
+        except PlaywrightError:
+            return  # same-process frame: the page's session already covers it
+        try:
+            await cdp.send(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {
+                    "source": relay_listener(self.relay),
+                    "worldName": RELAY_WORLD,
+                    "runImmediately": True,
+                },
+            )
+        except PlaywrightError:
+            return
+        sessions = self.relay_frame_sessions.setdefault(page, {})
+        old = sessions.get(frame)
+        sessions[frame] = cdp
+        if old is not None and old is not cdp:
+            with contextlib.suppress(PlaywrightError):
+                await old.detach()
+
     async def _relay_drain(self, page: Page) -> None:
         """Hand the page hooks' queued reports (Patchright relay world) to on_binding."""
-        cdp = self.cdp_sessions.get(page)
-        if not cdp or page.is_closed():
+        if page.is_closed():
             return
+        cdp = self.cdp_sessions.get(page)
+        if cdp:
+            await self._relay_drain_session(page, cdp)
+        for frame, frame_cdp in list(self.relay_frame_sessions.get(page, {}).items()):
+            if frame.is_detached():
+                self.relay_frame_sessions[page].pop(frame, None)
+                continue
+            await self._relay_drain_session(page, frame_cdp)
+
+    async def _relay_drain_session(self, page: Page, cdp: Any) -> None:
         try:
             tree = await cdp.send("Page.getFrameTree")
         except PlaywrightError:
@@ -707,7 +750,7 @@ class Capture:
                     },
                 )
             except PlaywrightError:
-                continue  # frame gone or navigating
+                continue  # frame gone, navigating, or owned by another target
             for raw in (res.get("result") or {}).get("value") or []:
                 try:
                     kind, data = json.loads(raw)
