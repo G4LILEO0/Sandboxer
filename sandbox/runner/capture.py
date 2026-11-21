@@ -22,24 +22,45 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
-from playwright.async_api import (
-    BrowserContext,
-    Download,
-    Frame,
-    Page,
-    Request,
-    Response,
-    Route,
-    WebSocketRoute,
-    async_playwright,
-)
-from playwright.async_api import Error as PlaywrightError
+try:
+    # The session image ships Patchright: Playwright's API without the CDP side effects
+    # (Runtime.enable / Console.enable on page targets) that Cloudflare Turnstile detects.
+    from patchright.async_api import (
+        BrowserContext,
+        Download,
+        Frame,
+        Page,
+        Request,
+        Response,
+        Route,
+        WebSocketRoute,
+        async_playwright,
+    )
+    from patchright.async_api import Error as PlaywrightError
+
+    DRIVER = "patchright"
+except ImportError:  # development machines and tests with stock Playwright
+    from playwright.async_api import (  # type: ignore[assignment]
+        BrowserContext,
+        Download,
+        Frame,
+        Page,
+        Request,
+        Response,
+        Route,
+        WebSocketRoute,
+        async_playwright,
+    )
+    from playwright.async_api import Error as PlaywrightError  # type: ignore[assignment]
+
+    DRIVER = "playwright"
 
 from sandbox.core import antibot
 from sandbox.core.netguard import NetGuard, system_resolver
@@ -47,9 +68,12 @@ from sandbox.runner.events import Emitter, now_iso
 from sandbox.runner.page_scripts import (
     BINDING,
     COLLECT_SCRIPT,
+    RELAY_DRAIN,
+    RELAY_WORLD,
     WALLET_SCRIPT,
     init_script,
     is_harness_code,
+    relay_listener,
 )
 from sandbox.runner.profiles import get_profile
 from sandbox.runner.spec import RunSpec
@@ -93,6 +117,19 @@ _IGNORE_DEFAULT_ARGS = ["--enable-automation"]
 _ANTIBOT_POLL_S = 1.0
 _ANTIBOT_CLICK_AFTER_S = 6.0
 _ANTIBOT_MAX_CLICKS = 2
+# How often the Patchright relay queue of each page is collected.
+_RELAY_POLL_S = 0.25
+# Seconds between the first and the second click on the Turnstile box.
+_ANTIBOT_RECLICK_S = 10.0
+
+
+def locale_args(locale: str) -> list[str]:
+    """Chromium switches that make ``locale`` the browser's real language: navigator.language(s),
+    Intl and the Accept-Language header all agree, with nothing emulated on top."""
+    loc = re.sub(r"[^A-Za-z0-9-]", "", (locale or "en-US").replace("_", "-"))[:20] or "en-US"
+    base = loc.split("-")[0]
+    langs = [loc] if base == loc else [loc, base]
+    return [f"--lang={loc}", f"--accept-lang={','.join(langs)}"]
 
 
 class HostChecker:
@@ -130,6 +167,11 @@ class Capture:
         for sub in ("screenshots", "dom", "scripts", "quarantine", "video"):
             (out / sub).mkdir(parents=True, exist_ok=True)
         self.events = Emitter(out / "events.jsonl")
+        # Per-session DOM event name the page hooks report through under Patchright.
+        self.relay = "sbx" + secrets.token_hex(8) if DRIVER == "patchright" else ""
+        # URLs of downloads Chromium has reported, also while they are still saving: a
+        # relayed page report of the same click can arrive after the download event.
+        self.download_urls: set[str] = set()
         self.hosts = HostChecker(
             NetGuard.from_cidrs(spec.ssrf_extra_blocked_cidrs, spec.ssrf_allowed_cidrs)
         )
@@ -364,6 +406,23 @@ class Capture:
             cdp.on("Network.requestWillBeSent", lambda e: self._on_cdp_request(page, e))
             cdp.on("Network.webSocketCreated", lambda e: self._on_cdp_ws(page, e))
             await cdp.send("Network.enable")
+            if self.relay:
+                # Patchright: page hooks report through the runner's own isolated world
+                # (page_scripts.RELAY_LISTENER), drained by polling (_relay_poll).
+                await cdp.send(
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    {
+                        "source": relay_listener(self.relay),
+                        "worldName": RELAY_WORLD,
+                        "runImmediately": True,
+                    },
+                )
+                # Collect what the old document reported before a navigation replaces it.
+                cdp.on(
+                    "Page.frameRequestedNavigation",
+                    lambda _e: self._spawn(self._relay_drain(page)),
+                )
+                self._spawn(self._relay_poll(page))
         except PlaywrightError as exc:
             self.errors.append(f"cdp attach {pid}: {exc.message[:200]}")
 
@@ -383,6 +442,7 @@ class Capture:
     async def _on_download(self, page: Page, download: Download) -> None:
         """Downloads land in quarantine with hashes and never leave it (CAP-7, INT-4)."""
         url = download.url[:2000]
+        self.download_urls.add(url)
         # The entry made when Chromium started the download, if there is one: this event
         # completes it instead of adding a second entry.
         entry = self.pending_downloads.pop(url, None)
@@ -427,8 +487,10 @@ class Capture:
     def _on_download_requested(self, pid: str | None, data: dict[str, Any]) -> None:
         """Record a download link the page activated, before any response (page hook)."""
         url = str(data.get("href", ""))[:2000]
-        if not url or len(self.downloads) >= 200 or any(d["url"] == url for d in self.downloads):
+        if not url or len(self.downloads) >= 200 or url in self.download_urls:
             return  # already recorded (the download event can arrive first)
+        if any(d["url"] == url for d in self.downloads):
+            return
         name = str(data.get("name") or "") or urlsplit(url).path.rsplit("/", 1)[-1]
         entry: dict[str, Any] = {
             "page": pid,
@@ -612,6 +674,48 @@ class Capture:
         await self.screenshot(page, "load")
         await self.dom_snapshot(page, "load")
 
+    async def _relay_poll(self, page: Page) -> None:
+        while not page.is_closed():
+            await self._relay_drain(page)
+            await asyncio.sleep(_RELAY_POLL_S)
+
+    async def _relay_drain(self, page: Page) -> None:
+        """Hand the page hooks' queued reports (Patchright relay world) to on_binding."""
+        cdp = self.cdp_sessions.get(page)
+        if not cdp or page.is_closed():
+            return
+        try:
+            tree = await cdp.send("Page.getFrameTree")
+        except PlaywrightError:
+            return
+        frames, stack = [], [tree["frameTree"]]
+        while stack:
+            node = stack.pop()
+            frames.append(node["frame"]["id"])
+            stack.extend(node.get("childFrames") or [])
+        for frame_id in frames:
+            try:
+                world = await cdp.send(
+                    "Page.createIsolatedWorld", {"frameId": frame_id, "worldName": RELAY_WORLD}
+                )
+                res = await cdp.send(
+                    "Runtime.evaluate",
+                    {
+                        "expression": RELAY_DRAIN,
+                        "contextId": world["executionContextId"],
+                        "returnByValue": True,
+                    },
+                )
+            except PlaywrightError:
+                continue  # frame gone or navigating
+            for raw in (res.get("result") or {}).get("value") or []:
+                try:
+                    kind, data = json.loads(raw)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(kind, str):
+                    await self.on_binding({"page": page}, kind, data)
+
     async def on_binding(self, source: dict[str, Any], kind: str, data: dict[str, Any]) -> None:
         page = source.get("page")
         pid = self.page_ids.get(page) if page else None
@@ -754,6 +858,7 @@ class Capture:
             self.browser_mode = (
                 "interactive" if spec.interactive else "headed" if headed else "headless"
             )
+            args += locale_args(spec.locale)
             if headed:
                 args += [
                     "--window-position=0,0",
@@ -773,7 +878,9 @@ class Capture:
                 is_mobile=self.profile.is_mobile,
                 has_touch=self.profile.has_touch,
                 device_scale_factor=self.profile.device_scale_factor,
-                locale=spec.locale,
+                # No locale= here: Playwright's locale emulation is an override Turnstile
+                # detects (it fails with it and passes without). The browser's own locale
+                # comes from the launch switches instead (locale_args).
                 timezone_id=spec.timezone,
                 accept_downloads=True,
                 ignore_https_errors=True,
@@ -786,7 +893,7 @@ class Capture:
             await context.route("**/*", self.on_route)
             await context.route_web_socket(re.compile(r".*"), self.on_websocket)
             await context.expose_binding(BINDING, self.on_binding)
-            await context.add_init_script(init_script(self.profile.platform))
+            await context.add_init_script(init_script(self.profile.platform, self.relay))
             # Grant clipboard so hooked writes don't fail silently; notifications only when
             # service workers are allowed (so a push-bait flow can proceed and be recorded).
             perms = ["clipboard-read", "clipboard-write"]
@@ -811,6 +918,9 @@ class Capture:
                     await self._observe(page)
             finally:
                 ticker.cancel()
+                if self.relay:
+                    for p in context.pages:
+                        await self._relay_drain(p)
                 if context.pages:
                     await self._antibot_final(context.pages[0])
                 for p in context.pages:
@@ -960,6 +1070,7 @@ class Capture:
         # A firewall block page does not change by waiting; give it one look only.
         if state["kind"] == "blocked":
             limit = min(limit, started + 3)
+        last_click = 0.0
         while time.monotonic() < limit and not self.stop.is_set() and not page.is_closed():
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.stop.wait(), timeout=_ANTIBOT_POLL_S)
@@ -975,14 +1086,23 @@ class Capture:
                 break
             entry["kind"] = state["kind"]
             entry["ray_id"] = entry["ray_id"] or state.get("ray_id")
-            waited = time.monotonic() - started
+            now = time.monotonic()
+            # The first click once the check has had time to clear by itself, a second
+            # only well after it: a click while the widget is still verifying the first
+            # one cancels it and the check fails.
+            due = (
+                started + _ANTIBOT_CLICK_AFTER_S
+                if not last_click
+                else last_click + _ANTIBOT_RECLICK_S
+            )
             if (
                 state["kind"] == "challenge"
                 and entry["clicks"] < _ANTIBOT_MAX_CLICKS
-                and waited >= _ANTIBOT_CLICK_AFTER_S * (entry["clicks"] + 1)
+                and now >= due
                 and await self._click_turnstile(page)
             ):
                 entry["clicks"] += 1
+                last_click = time.monotonic()
         entry["waited_ms"] = int((time.monotonic() - started) * 1000)
         entry["final_url"] = page.url[:2000] if not page.is_closed() else None
         if entry["cleared"]:
@@ -1021,7 +1141,7 @@ class Capture:
             x = box["x"] + min(30.0, box["width"] / 2)
             y = box["y"] + box["height"] / 2
             try:
-                await page.mouse.move(x - 120, y + 40, steps=8)
+                await page.mouse.move(max(5.0, x - 120), y + 40, steps=8)
                 await page.mouse.move(x, y, steps=12)
                 await asyncio.sleep(0.2)
                 await page.mouse.click(x, y, delay=80)
@@ -1108,7 +1228,11 @@ class Capture:
             "analysis_id": self.spec.analysis_id,
             "url": self.spec.url,
             "interactive": self.spec.interactive,
-            "browser": {"mode": self.browser_mode, "version": self.browser_version},
+            "browser": {
+                "mode": self.browser_mode,
+                "version": self.browser_version,
+                "driver": DRIVER,
+            },
             # Bot-check pages met, and whether the session ended on one (``blocked``).
             "antibot": {
                 "encounters": self.antibot,
@@ -1148,6 +1272,25 @@ class Capture:
             "errors": self.errors,
             "event_count": self.events.count,
         }
+
+    def write_partial_result(self, reason: str) -> None:
+        """Write result.json from what has been captured so far, when the normal end of
+        the session (final screenshots, browser close) takes too long and the container
+        is about to be killed. Without result.json the whole session is lost. run()
+        overwrites it with the full result if it still finishes in time."""
+        path = self.out / "result.json"
+        if path.exists():
+            return
+        self.errors.append(reason)
+        try:
+            self.write_request_log()
+        except Exception:  # noqa: BLE001, S110 - the result itself matters more
+            pass
+        result = self.result()
+        result["partial"] = True
+        tmp = self.out / "result.json.tmp"
+        tmp.write_text(json.dumps(result, default=str, indent=1))
+        tmp.replace(path)
 
 
 def truncate_har(path: Path, max_body: int) -> None:

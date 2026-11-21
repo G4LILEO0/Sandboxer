@@ -5,6 +5,7 @@ session image)."""
 import asyncio
 import http.server
 import json
+import re
 import threading
 from pathlib import Path
 
@@ -35,13 +36,21 @@ _WIDGET_PAGE = (
     "</label></body></html>"
 )
 _REAL = (
-    "<html><head><title>Real page</title></head><body><h1>Welcome</h1><script>"
+    "<html><head><title>Real page</title></head><body><h1>Welcome</h1><pre id=fp></pre><script>"
     "console.log('FP ' + JSON.stringify({webdriver: navigator.webdriver,"
     " platform: navigator.platform, chrome: typeof window.chrome,"
     " hooked: Function.prototype.toString.call(setTimeout),"
     " ownToString: Object.prototype.hasOwnProperty.call(setTimeout, 'toString'),"
     " ownPlatform: !!Object.getOwnPropertyDescriptor(navigator, 'platform'),"
     " keys: Object.keys(window).filter((k) => k.startsWith('__'))}));"
+    # The same fingerprint in the DOM: Patchright does not report console messages a
+    # page logs before the driver attaches its listener.
+    "document.getElementById('fp').textContent = JSON.stringify({webdriver: navigator.webdriver,"
+    " platform: navigator.platform, chrome: typeof window.chrome,"
+    " hooked: Function.prototype.toString.call(setTimeout),"
+    " ownToString: Object.prototype.hasOwnProperty.call(setTimeout, 'toString'),"
+    " ownPlatform: !!Object.getOwnPropertyDescriptor(navigator, 'platform'),"
+    " keys: Object.keys(window).filter((k) => k.startsWith('__'))});"
     "</script></body></html>"
 )
 _BLOCK = (
@@ -98,7 +107,7 @@ def server():
 
 @pytest.fixture(scope="module")
 def chromium():
-    from playwright.async_api import async_playwright
+    from sandbox.runner.capture import async_playwright  # Patchright where installed
 
     async def probe():
         async with async_playwright() as pw:
@@ -172,7 +181,11 @@ def test_fingerprint_has_no_headless_or_automation_tells(server, chromium, tmp_p
     major = r["browser"]["version"].split(".")[0]
     assert f"Chrome/{major}.0.0.0" in headers["user-agent"]
     assert headers.get("sec-ch-ua-platform") == '"Windows"'
-    [fp] = [json.loads(c["text"][3:]) for c in r["console"] if c["text"].startswith("FP ")]
+    final = next(d for d in r["dom_snapshots"] if d["reason"] == "final")
+    html = (tmp_path / final["file"]).read_text()
+    fp = json.loads(
+        re.search(r"<pre id=\"?fp\"?>(.*?)</pre>", html).group(1).replace("&quot;", '"')
+    )
     assert fp == {
         "webdriver": False,
         "platform": "Win32",

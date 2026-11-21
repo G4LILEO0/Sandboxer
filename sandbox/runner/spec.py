@@ -15,7 +15,7 @@ class RunSpec:
     headed: bool = False
     # Seconds an automated run waits for a bot-check page (Cloudflare "Just a moment...")
     # to clear before it gives up and records the run as blocked.
-    antibot_wait_s: int = 30
+    antibot_wait_s: int = 45
     # Hard cap for the runner itself; the orchestrator normally stops it first.
     time_limit_s: int = 600
     observe_s: int = 20

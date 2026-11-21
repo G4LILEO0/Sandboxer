@@ -61,6 +61,29 @@ def test_words_alone_are_not_a_challenge():
     assert antibot.classify("Sign in", "Welcome back", [], headers, 200) is None
 
 
+def test_turnstile_gate_a_kit_builds_itself():
+    # Live case an_01M7XR8MR5KGR1QSSABJ4F4FY9: "Please Wait…" page with only a widget.
+    gate = antibot.classify(
+        "Please Wait…", "Please wait while we check your connection...", ["turnstile_widget"]
+    )
+    assert gate == {
+        "provider": "cloudflare",
+        "kind": "challenge",
+        "ray_id": None,
+        "gate": "turnstile",
+    }
+    # A bare widget page with no wording is a gate too.
+    assert antibot.classify("", "", ["turnstile_widget", "cf_turnstile_iframe"])
+    # Solved: the page behind it is next, the gate no longer stands.
+    solved = ["turnstile_widget", "turnstile_solved"]
+    assert antibot.classify("Please Wait…", "Please wait", solved) is None
+    # A login form protected by Turnstile is the real page, not a gate.
+    login = ["turnstile_widget", "form_fields"]
+    assert antibot.classify("Sign in to Cloudflare", "Email Password Sign in", login) is None
+    # A long article page with a widget somewhere (comments) is not a gate.
+    assert antibot.classify("Blog", "x " * 400, ["turnstile_widget"]) is None
+
+
 def test_describe():
     note = antibot.describe({"provider": "cloudflare", "kind": "challenge", "waited_ms": 30100})
     assert "Cloudflare's bot check" in note and "30 s" in note and "interactively" in note
@@ -197,7 +220,7 @@ def test_init_script_platform_and_native_looking_hooks():
 
 def test_run_spec_carries_headed_and_wait():
     spec = RunSpec.from_json(json.dumps({"analysis_id": "a", "url": URL, "headed": True}))
-    assert spec.headed is True and spec.antibot_wait_s == 30
+    assert spec.headed is True and spec.antibot_wait_s == 45
 
 
 class _Containers:
