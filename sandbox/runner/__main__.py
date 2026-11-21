@@ -29,15 +29,38 @@ async def _main() -> int:
             loop.add_signal_handler(sig, capture.stop.set)
         except NotImplementedError:  # Windows, for local development only
             signal.signal(sig, lambda *_: loop.call_soon_threadsafe(capture.stop.set))
+    run = asyncio.ensure_future(capture.run())
+    watchdog = asyncio.ensure_future(_finalise_watchdog(capture, run))
     try:
-        await capture.run()
+        await run
     except Exception as exc:
         (out / "runner_error.json").write_text(
             json.dumps({"error": str(exc), "traceback": traceback.format_exc()})
         )
         capture.events.emit("runner_error", "runner", error=str(exc)[:2000])
         return 1
+    finally:
+        watchdog.cancel()
     return 0
+
+
+# Seconds the runner may spend ending the session after it is told to stop before it
+# writes what it has. The orchestrator kills the container _STOP_TIMEOUT_S (45 s) after
+# asking it to stop; closing the browser (video and HAR flush) needs the rest.
+FINALISE_BUDGET_S = 20.0
+
+
+async def _finalise_watchdog(capture: Capture, run: "asyncio.Future[object]") -> None:
+    await capture.stop.wait()
+    try:
+        await asyncio.wait_for(asyncio.shield(run), timeout=FINALISE_BUDGET_S)
+    except TimeoutError:
+        capture.write_partial_result(
+            f"the session did not finish ending within {FINALISE_BUDGET_S:.0f} s; "
+            "result written from what was captured until then"
+        )
+    except Exception:  # noqa: BLE001, S110 - run() reports its own errors
+        pass
 
 
 def main() -> None:

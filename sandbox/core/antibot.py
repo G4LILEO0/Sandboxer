@@ -29,6 +29,13 @@ _CHALLENGE_TEXT = re.compile(
     r"(?i)verify(ing)? you are human|checking (if the site connection is secure|your browser)"
     r"|needs to review the security of your connection|enable javascript and cookies to continue"
 )
+# Wording of a Turnstile gate page a site (or kit) builds itself.
+_GATE_TEXT = re.compile(
+    r"(?i)please wait|just a (moment|second)|check(ing)? (your|the) (connection|browser)"
+    r"|verify(ing)? (you are|you're|that you are) (a )?human|security check|one more step"
+)
+# Visible text below this on a widget page means nothing but the gate is there.
+_GATE_MAX_TEXT = 400
 _RAY_ID = re.compile(r"(?i)ray id:?\s*(?:<[^>]+>\s*)*([0-9a-f]{16})")
 
 # Structural markers the runner's page probe reports (see ``PROBE_SCRIPT``).
@@ -62,6 +69,21 @@ PROBE_SCRIPT = r"""
     for (const f of document.querySelectorAll('iframe')) {
       if (/challenges\.cloudflare\.com/.test(f.src || '')) { add('cf_turnstile_iframe'); break; }
     }
+    // A Turnstile widget a page embeds itself (phishing kits gate the real page behind
+    // one). The iframe sits in a closed shadow root, so the widget is found by its
+    // container, its script or its hidden response field.
+    const widget = '.cf-turnstile, [data-sitekey][class*="turnstile"]';
+    if (document.querySelector(widget)) add('turnstile_widget');
+    for (const s of document.querySelectorAll('script[src]')) {
+      const turnstile = /challenges\.cloudflare\.com\/turnstile\//;
+      if (turnstile.test(s.src)) { add('turnstile_widget'); break; }
+    }
+    const resp = document.querySelectorAll('input[name="cf-turnstile-response"]');
+    if (resp.length) add('turnstile_widget');
+    for (const r of resp) { if (r.value) { add('turnstile_solved'); break; } }
+    // Fields that make a page a real form (login, sign-up) rather than a bare gate.
+    const fields = 'input[type="password"], input[type="email"], textarea';
+    if (document.querySelector(fields)) add('form_fields');
   } catch (e) {}
   return out;
 }
@@ -102,6 +124,21 @@ def classify(
     )
     if challenge:
         return {"provider": "cloudflare", "kind": "challenge", "ray_id": ray}
+    # A page of its own that is only a Turnstile widget and a "please wait" line: the
+    # gate phishing kits put in front of the real page. A widget on a real form (a login
+    # page protected by Turnstile) is the page itself, not a gate.
+    gate = (
+        "turnstile_widget" in marks
+        and not marks & {"turnstile_solved", "form_fields"}
+        and (
+            _GATE_TEXT.search(title)
+            or _GATE_TEXT.search(text)
+            or _CHALLENGE_TITLE.search(title)
+            or len(text.strip()) < _GATE_MAX_TEXT
+        )
+    )
+    if gate:
+        return {"provider": "cloudflare", "kind": "challenge", "ray_id": ray, "gate": "turnstile"}
     blocked = (_BLOCK_TITLE.search(title) or _BLOCK_TEXT.search(text)) and (
         marks & set(BLOCK_MARKERS) or (cloudflare and status in (403, 429, 503))
     )
@@ -122,5 +159,7 @@ def describe(antibot: dict[str, Any]) -> str:
         what = f"{provider}'s bot check did not let the sandbox browser through{took}{ray}"
     return (
         f"{what}, so the page behind it was not seen and the verdict cannot be benign. "
-        "Re-run it interactively and pass the check by hand, or from another egress IP."
+        "Cloudflare also rejects a browser whose profile claims another operating system "
+        "than the sandbox's own (Linux): re-run it with the Chrome on Linux profile, "
+        "interactively to pass the check by hand, or from another egress IP."
     )

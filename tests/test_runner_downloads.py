@@ -10,7 +10,10 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("playwright")
+try:  # the runner's driver: Patchright in the session image, else stock Playwright
+    import patchright  # noqa: F401
+except ImportError:
+    pytest.importorskip("playwright")
 
 from sandbox.runner.capture import Capture  # noqa: E402
 from sandbox.runner.spec import RunSpec  # noqa: E402
@@ -54,7 +57,7 @@ def server():
 
 @pytest.fixture(scope="module")
 def chromium():
-    from playwright.async_api import async_playwright
+    from sandbox.runner.capture import async_playwright
 
     async def probe():
         async with async_playwright() as pw:
