@@ -305,11 +305,20 @@ def _downloads(data: CaptureData) -> dict[str, Any]:
         for e in data.events
         if e.get("kind") == "download"
     ]
+    # When the page activated the download link (runner page hook). Counts even when the
+    # file never arrived: the server can hold the response, or the session can end first.
+    request_times = [
+        (e.get("payload", {}).get("url"), datetime.fromisoformat(e["ts"]))
+        for e in data.events
+        if e.get("kind") == "download_requested"
+    ]
     files = []
-    unprompted = unprompted_risky = executable = archive = disguised = 0
+    unprompted = unprompted_risky = executable = archive = disguised = not_received = 0
     for d in data.result.get("downloads", []):
         sha = d.get("sha256")
-        when = next((t for s, t in download_times if s == sha), None)
+        when = next((t for u, t in request_times if u and u == d.get("url")), None)
+        if when is None and sha:
+            when = next((t for s, t in download_times if s == sha), None)
         prompted = when is not None and any(0 <= (when - c).total_seconds() <= 10 for c in clicks)
         name = d.get("suggested_filename", "")
         parts = name.lower().split(".")
@@ -327,11 +336,15 @@ def _downloads(data: CaptureData) -> dict[str, Any]:
         executable += is_exec
         archive += is_archive
         disguised += is_disguised
+        not_received += not sha
         files.append(
             {
                 "name": name,
                 "url": d.get("url"),
                 "sha256": sha,
+                "received": bool(sha),
+                "status": d.get("status") or ("complete" if sha else "failed"),
+                "error": d.get("error"),
                 "size": d.get("size"),
                 "extension": ext,
                 "magic": magic,
@@ -348,6 +361,7 @@ def _downloads(data: CaptureData) -> dict[str, Any]:
         "executable": executable,
         "archive": archive,
         "disguised": disguised,
+        "not_received": not_received,
         "types": sorted({f["magic"] for f in files if f["magic"]}),
         "files": files,
     }
@@ -1051,6 +1065,7 @@ _CAPTCHA_BRAND = S.bind(globals(), "_CAPTCHA_BRAND", "clickfix.captcha_brand")
 _KEY_INSTRUCTION = S.bind(globals(), "_KEY_INSTRUCTION", "clickfix.key_instruction")
 _GENUINE_CHALLENGE = S.bind(globals(), "_GENUINE_CHALLENGE", "clickfix.genuine_challenge")
 _FAKE_UPDATE = S.bind(globals(), "_FAKE_UPDATE", "clickfix.fake_browser_update")
+_OPEN_DOWNLOAD = S.bind(globals(), "_OPEN_DOWNLOAD", "clickfix.open_download_instructions")
 _BROWSER_VENDORS = S.bind(globals(), "_BROWSER_VENDORS", "clickfix.browser_vendors")
 _FILEFIX = S.bind(globals(), "_FILEFIX", "clickfix.filefix")
 _MAC_CLICKFIX = S.bind(globals(), "_MAC_CLICKFIX", "clickfix.mac_linux_traits", S.patterns)
@@ -2082,6 +2097,17 @@ def _fake_update(data: CaptureData) -> list[str]:
     return sorted(set(out))[:10]
 
 
+def _open_download_pages(data: CaptureData) -> list[str]:
+    """Non-vendor pages that tell the visitor to open the disk image / installer they got."""
+    out = []
+    for frame in _all_frames(data):
+        host = _host(frame.get("url"))
+        if host and not any(host == v or host.endswith("." + v) for v in _BROWSER_VENDORS):
+            if _OPEN_DOWNLOAD.search(str(frame.get("text", ""))):
+                out.append(frame.get("url", ""))
+    return sorted(set(out))[:10]
+
+
 _LIBRARY_PATTERNS = S.bind(globals(), "_LIBRARY_PATTERNS", "scripts.libraries", S.named_patterns)
 _DECOY_HOST = S.bind(globals(), "_DECOY_HOST", "network.cloaking_decoy_hosts")
 _TRUSTED_REDIRECTOR = S.bind(globals(), "_TRUSTED_REDIRECTOR", "network.trusted_redirectors")
@@ -2594,6 +2620,7 @@ def build_facts(data: CaptureData) -> dict[str, Any]:
         **_lure(data),
         **_fake_captcha(data, reqs),
         "fake_update_pages": _fake_update(data),
+        "open_download_pages": _open_download_pages(data),
         "crash_repair_pages": _crash_repair(data),
         "fake_os_update_pages": _fake_os_update(data),
     }
