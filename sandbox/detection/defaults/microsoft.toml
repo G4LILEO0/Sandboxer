@@ -84,7 +84,7 @@ pattern = 'error=(interaction_required|access_denied|consent_required|login_requ
 
 [login_page_markers]
 title = 'Microsoft sign-in page markers'
-description = 'Microsoft sign-in page structural markers in the raw HTML ($Config, i0116, idSIButton9, aadcdn assets). They survive text obfuscation. Each item needs a name, which is shown as evidence.'
+description = 'Microsoft sign-in page structural markers in the raw HTML ($Config, i0116, idSIButton9, aadcdn assets, the account-type picker tiles, the Back button id). They survive text obfuscation. Each item needs a name, which is shown as evidence.'
 type = "regex_list"
 [[login_page_markers.items]]
 name = 'ests_config'
@@ -110,6 +110,16 @@ pattern = 'login\.microsoftonline\.com'
 name = 'ms_title'
 flags = 'i'
 pattern = 'Sign in to your account'
+[[login_page_markers.items]]
+# The "work or school / personal account" picker (an_01M7XWWVJT5TKD4MJ2SDA0F0K8): kits
+# show it before the password page, so it is often the only page the run reaches.
+name = 'account_type_picker'
+flags = ''
+pattern = '\b(aadTile|msaTile)\b|used with more than one account from Microsoft'
+[[login_page_markers.items]]
+name = 'back_button'
+flags = ''
+pattern = '\bidBtn_Back\b'
 
 [fake_address_bar]
 title = 'Browser-in-the-browser address bar'
