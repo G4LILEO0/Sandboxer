@@ -1082,8 +1082,9 @@ BEHAVIOUR_RULES = [
         "critical",
         ["fake-update", "malware-download"],
         ["T1189", "T1204.002", "T1036.005"],
-        "A non-vendor page shows a browser/software update lure and either downloads a "
-        "risky file or writes a clipboard command (ClearFake / SocGholish).",
+        "A non-vendor page shows a browser/software update lure and either downloads (or "
+        "tries to download) a risky file, tells the visitor to open the file it delivered, "
+        "or writes a clipboard command (ClearFake / SocGholish / fake Acrobat update).",
         {
             "all": [
                 {"fact": "lure.fake_update_pages", "op": "exists", "value": True},
@@ -1091,13 +1092,14 @@ BEHAVIOUR_RULES = [
                     "any": [
                         {"fact": "downloads.unprompted_risky", "op": "gt", "value": 0},
                         {"fact": "downloads.executable", "op": "gt", "value": 0},
+                        {"fact": "lure.open_download_pages", "op": "exists", "value": True},
                         {"fact": "clipboard.command_like", "op": "gt", "value": 0},
                         {"fact": "web3.etherhiding_rpc", "op": "eq", "value": True},
                     ]
                 },
             ]
         },
-        ["lure.fake_update_pages", "final.url"],
+        ["lure.fake_update_pages", "lure.open_download_pages", "downloads.files", "final.url"],
     ),
     # --- CrashFix fake crash-repair lure (DE-CFX-010) --------------------------------
     _rule(

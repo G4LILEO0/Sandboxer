@@ -189,11 +189,18 @@ flags = 'i'
 pattern = 'challenges\.cloudflare\.com/turnstile|/cdn-cgi/challenge-platform|www\.google\.com/recaptcha/|www\.recaptcha\.net/recaptcha/|hcaptcha\.com'
 
 [fake_browser_update]
-title = 'Fake browser update wording'
-description = 'Fake browser / software update overlay text.'
+title = 'Fake browser / software update wording'
+description = 'Fake browser / software update overlay text, including fake Adobe Acrobat Reader / Flash Player updates that deliver an ISO or installer (lure.fake_update_pages).'
 type = "regex"
 flags = 'i'
-pattern = '(update|install) (google )?chrome|(chrome|edge|firefox|safari|browser) (is )?(out of date|outdated|update (required|available))|your browser (version )?is (out of date|not supported)'
+pattern = '(update|install) (google )?chrome|(chrome|edge|firefox|safari|browser) (is )?(out of date|outdated|update (required|available))|your browser (version )?is (out of date|not supported)|\b(update|upgrade|install)\s+(adobe\s+)?(acrobat(\s+reader)?|reader\s+dc|flash(\s+player)?)\b|\b(acrobat|adobe\s+reader|flash\s+player)\s+(is\s+)?(out\s+of\s+date|outdated|update\s+(required|available))\b|\byour\s+(software\s+)?(update|upgrade)\s+is\s+(downloading|ready)\b'
+
+[open_download_instructions]
+title = 'Open-the-downloaded-file instructions'
+description = 'The page tells the visitor to find and open the file it just downloaded: a disk image, installer or script named next to open / run / double-click wording (lure.open_download_pages). Fake-update kits do this so the visitor runs the payload.'
+type = "regex"
+flags = 'i'
+pattern = '\b(double[\s-]?click|open|run|launch|locate|find)\b[^.]{0,60}?\b[\w()\[\] -]{1,60}\.(iso|img|vhdx?|exe|msi|msix|appx|scr|lnk|hta|vbs|js|bat|cmd|ps1)\b|\b[\w()\[\] -]{1,60}\.(iso|img|vhdx?|exe|msi|msix|appx|scr|lnk|hta|vbs|bat|cmd|ps1)\b[^.]{0,40}?\bdouble[\s-]?click'
 
 [crash_repair]
 title = 'Fake crash-repair (CrashFix) wording'

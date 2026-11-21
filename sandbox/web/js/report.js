@@ -545,6 +545,16 @@ function renderDownloads() {
       el('td', { className: 'small', textContent: `${f.prompted ? 'after a click' : 'automatic'}${f.executable ? ', executable' : ''}` }),
       el('td', {}, btn));
   })) : empty('No downloads were captured.'));
+  // Download links the page activated that delivered no file (the server held or refused
+  // the response, or the session ended first). The attempt is still evidence.
+  const missed = facts.filter((f) => f.received === false);
+  if (missed.length) {
+    box.append(el('p', { className: 'small muted', textContent: 'The page started these downloads, but no file arrived:' }),
+      table(['File', 'URL', 'Result', 'Origin'], missed.map((f) => el('tr', {},
+        el('td', { textContent: f.name || '' }), el('td', { className: 'monospace small', textContent: f.url || '' }),
+        el('td', { className: 'small', textContent: f.status === 'no_response' ? 'server never answered' : (f.error || f.status || 'failed') }),
+        el('td', { className: 'small', textContent: `${f.prompted ? 'after a click' : 'automatic'}${f.executable ? ', executable' : ''}` })))));
+  }
 }
 
 async function downloadQuarantined(a) {

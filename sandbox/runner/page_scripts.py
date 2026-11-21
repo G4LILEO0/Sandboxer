@@ -207,6 +207,29 @@ INIT_SCRIPT = r"""
       window[ctor].prototype = O.prototype;
     }
   } catch (e) {}
+  // Download links (a[download]). Chromium starts these downloads without an event the
+  // runner can see until the server answers, so a server that holds the response would
+  // leave no trace of the download at all. Report the attempt from the page.
+  try {
+    const seen = new Map();
+    const dl = (a, how) => {
+      try {
+        if (!a || !a.hasAttribute || !a.hasAttribute('download') || !a.href) return;
+        const href = String(a.href), now = Date.now();
+        if ((seen.get(href) || 0) > now - 1000 || seen.size > 200) return;
+        seen.set(href, now);
+        send('download_attempt', { href: href.slice(0, 2000), name: String(a.getAttribute('download') || '').slice(0, 255), how, script_url: scriptUrl() });
+      } catch (x) {}
+    };
+    const AP = HTMLAnchorElement.prototype, C = AP.click;
+    AP.click = nativeize(function (...a) { dl(this, 'click()'); return C.apply(this, a); }, 'click');
+    const D = EventTarget.prototype.dispatchEvent;
+    AP.dispatchEvent = nativeize(function (ev, ...r) { if (ev && ev.type === 'click') dl(this, 'dispatchEvent'); return D.call(this, ev, ...r); }, 'dispatchEvent');
+    document.addEventListener('click', (ev) => {
+      const a = ev.target && ev.target.closest ? ev.target.closest('a[download]') : null;
+      if (a) dl(a, ev.isTrusted ? 'analyst click' : 'script event');
+    }, true);
+  } catch (e) {}
   // A11 permission / service-worker / push bait (DE-SCM-003) and fullscreen-locker APIs.
   try {
     if (window.Notification && Notification.requestPermission) {
