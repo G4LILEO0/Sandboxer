@@ -9,6 +9,7 @@ from sandbox.db.models import (
     AnalysisTag,
     AnalysisVersion,
     Artifact,
+    IOC_TYPES,
     IndicatorHit,
     Ioc,
     Note,
@@ -17,7 +18,17 @@ from sandbox.db.models import (
     VerdictOverride,
 )
 
-_IOC_GROUPS = {"domain": "domains", "ip": "ips", "url": "urls", "hash": "hashes", "email": "emails"}
+# One report group for each IOC type. Every type in IOC_TYPES must have a group: a
+# missing one made build_report fail with KeyError and the whole report UI empty.
+_IOC_GROUPS = {
+    "domain": "domains",
+    "ip": "ips",
+    "url": "urls",
+    "hash": "hashes",
+    "email": "emails",
+    "eth_address": "eth_addresses",
+}
+assert set(_IOC_GROUPS) == set(IOC_TYPES), "add a report group for each IOC type"
 
 
 def artifact_dict(a: Artifact) -> dict[str, Any]:
@@ -94,7 +105,9 @@ async def build_report(db, analysis: Analysis, version: int | None = None) -> di
         select(Ioc).where(Ioc.analysis_id == analysis.id, Ioc.version == version).order_by(Ioc.id)
     ):
         entry = ioc.value if not ioc.enrichment else {"value": ioc.value, **ioc.enrichment}
-        iocs[_IOC_GROUPS[ioc.type]].append(entry)
+        # An unknown type (a row older or newer than this code) gets its own group
+        # instead of failing the whole report.
+        iocs.setdefault(_IOC_GROUPS.get(ioc.type, ioc.type), []).append(entry)
     artifacts = list(
         await db.scalars(
             select(Artifact)

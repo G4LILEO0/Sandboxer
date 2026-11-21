@@ -36,11 +36,13 @@ LABEL_SESSION = "sandbox.session"
 LABEL_ANALYSIS = "sandbox.analysis"
 LABEL_EXPIRES = "sandbox.expires"
 LABEL_ROLE = "sandbox.role"
+LABEL_IPV6 = "sandbox.ipv6"
 STREAM_PORT = 6080
 SESSION_DISPLAY = ":99"  # docker/session-entrypoint.sh
 
-# Runs in a throwaway container on the session network: argv[1] should be reachable,
-# the rest must not be. Prints one JSON line.
+# Runs in a throwaway container on the session network: argv[1] (IPv4) and argv[2]
+# (IPv6) should be reachable, the rest must not be. Targets are host:port or
+# [v6-address]:port. Prints one JSON line.
 _PROBE_SCRIPT = """
 import json, socket, sys
 from concurrent.futures import ThreadPoolExecutor
@@ -48,19 +50,34 @@ from concurrent.futures import ThreadPoolExecutor
 def opens(target):
     host, port = target.rsplit(":", 1)
     try:
-        with socket.create_connection((host, int(port)), timeout=3):
+        with socket.create_connection((host.strip("[]"), int(port)), timeout=3):
             return True
     except OSError:
         return False
 
-public, targets = sys.argv[1], sys.argv[2:]
-with ThreadPoolExecutor(len(targets) + 1) as pool:
-    results = list(pool.map(opens, [public, *targets]))
-print(json.dumps({"public": results[0], "leaks": [t for t, ok in zip(targets, results[1:]) if ok]}))
+public, public6, targets = sys.argv[1], sys.argv[2], sys.argv[3:]
+with ThreadPoolExecutor(len(targets) + 2) as pool:
+    results = list(pool.map(opens, [public, public6, *targets]))
+print(json.dumps({
+    "public": results[0],
+    "public6": results[1],
+    "leaks": [t for t, ok in zip(targets, results[2:]) if ok],
+}))
 """
+
+# Sessions without IPv6: no address, no route, so Chromium never waits on an IPv6 path
+# that goes nowhere (a host without IPv6 routing).
+_NO_IPV6_SYSCTLS = {
+    "net.ipv6.conf.all.disable_ipv6": "1",
+    "net.ipv6.conf.default.disable_ipv6": "1",
+}
 
 
 class EgressNotIsolated(RuntimeError):
+    pass
+
+
+class SessionImageMissing(RuntimeError):
     pass
 
 
@@ -71,6 +88,8 @@ class DockerBackend:
         self.settings = settings
         self._client = client
         self._egress_ok_until = 0.0
+        self._public6_ok = False
+        self._network_ipv6: bool | None = None
 
     @property
     def client(self) -> docker.DockerClient:
@@ -87,18 +106,47 @@ class DockerBackend:
     def _ensure_network(self) -> None:
         s = self.settings
         try:
-            self.client.networks.get(s.session_network)
+            network = self.client.networks.get(s.session_network)
+            has_ipv6 = bool(network.attrs.get("EnableIPv6"))
         except NotFound:
             # Same shape as compose.yaml, so the egress guard finds the bridge by name.
+            pools = [docker.types.IPAMPool(subnet=s.session_subnet)]
+            if s.session_ipv6 != "off":
+                pools.append(docker.types.IPAMPool(subnet=s.session_subnet_v6))
             self.client.networks.create(
                 s.session_network,
                 driver="bridge",
                 labels={LABEL_ROLE: "network"},
                 options={"com.docker.network.bridge.name": s.session_bridge},
-                ipam=docker.types.IPAMConfig(
-                    pool_configs=[docker.types.IPAMPool(subnet=s.session_subnet)]
-                ),
+                enable_ipv6=s.session_ipv6 != "off",
+                ipam=docker.types.IPAMConfig(pool_configs=pools),
             )
+            has_ipv6 = s.session_ipv6 != "off"
+        if has_ipv6 != self._network_ipv6:
+            self._network_ipv6 = has_ipv6
+            if not has_ipv6 and s.session_ipv6 != "off":
+                log.warning(
+                    "session network %s has no IPv6; sessions run IPv4-only. Recreate it "
+                    "(docker compose down && docker compose up -d) to enable IPv6",
+                    s.session_network,
+                )
+
+    def _session_ipv6(self) -> bool:
+        """Whether the next session gets IPv6 (``session_ipv6``, see config.py)."""
+        mode = self.settings.session_ipv6
+        if mode == "off" or not self._network_ipv6:
+            return False
+        return mode == "on" or self._public6_ok
+
+    def _require_image(self, image: str) -> None:
+        """Session images are built locally, never pulled: a pull would go to Docker Hub."""
+        try:
+            self.client.images.get(image)
+        except docker.errors.ImageNotFound:
+            raise SessionImageMissing(
+                f"Image {image} is not built on this Docker host. Build it with: "
+                "docker compose --profile build build"
+            ) from None
 
     def _check_egress(self) -> None:
         """Prove internal addresses are unreachable from the session network (NFR-3).
@@ -112,11 +160,19 @@ class DockerBackend:
         if s.egress_guard == "off" or time.monotonic() < self._egress_ok_until:
             return
         try:
-            leaks, public_ok = self._probe_egress()
+            leaks, public_ok, public6_ok = self._probe_egress()
         except Exception as exc:  # noqa: BLE001 - the probe itself failing is a failure
-            leaks, public_ok = [f"probe failed: {exc}"], False
+            leaks, public_ok, public6_ok = [f"probe failed: {exc}"], False, False
         if not public_ok:
             log.warning("egress probe: %s is not reachable from sessions", s.egress_probe_public)
+        if public6_ok != self._public6_ok or not self._egress_ok_until:
+            log.info(
+                "egress probe: public IPv6 (%s) is %s from sessions%s",
+                s.egress_probe_public6,
+                "reachable" if public6_ok else "not reachable",
+                "" if public6_ok or s.session_ipv6 != "auto" else "; sessions run IPv4-only",
+            )
+        self._public6_ok = public6_ok
         if not leaks:
             self._egress_ok_until = time.monotonic() + s.egress_probe_ttl_s
             return
@@ -129,12 +185,19 @@ class DockerBackend:
             raise EgressNotIsolated(message)
         log.warning(message)
 
-    def _probe_egress(self) -> tuple[list[str], bool]:
+    def _probe_egress(self) -> tuple[list[str], bool, bool]:
         s = self.settings
         targets = s.egress_probe_targets()
         container = self.client.containers.run(
             image=s.session_image,
-            entrypoint=["python", "-c", _PROBE_SCRIPT, s.egress_probe_public, *targets],
+            entrypoint=[
+                "python",
+                "-c",
+                _PROBE_SCRIPT,
+                s.egress_probe_public,
+                s.egress_probe_public6,
+                *targets,
+            ],
             detach=True,
             network=s.session_network,
             labels={LABEL_ROLE: "egress-probe"},
@@ -154,7 +217,7 @@ class DockerBackend:
         if line is None:
             raise RuntimeError(f"unexpected probe output: {output[-300:]!r}")
         result = json.loads(line)
-        return result["leaks"], result["public"]
+        return result["leaks"], result["public"], bool(result.get("public6"))
 
     def _container(self, native_id: str) -> Container | None:
         try:
@@ -173,12 +236,15 @@ class DockerBackend:
     def _start(self, spec: SessionSpec) -> SessionHandle:
         s = self.settings
         self._ensure_network()
+        self._require_image(s.session_image)
         self._check_egress()
+        ipv6 = self._session_ipv6()
         labels = {
             LABEL_SESSION: spec.session_id,
             LABEL_ANALYSIS: spec.analysis_id,
             LABEL_EXPIRES: spec.expires_at.isoformat(),
             LABEL_ROLE: "browser",
+            LABEL_IPV6: "1" if ipv6 else "0",
         }
         runner = {
             "analysis_id": spec.analysis_id,
@@ -223,11 +289,14 @@ class DockerBackend:
             pids_limit=s.session_pids_limit,
             # No secrets, host mounts or Docker socket ever go into a session (NFR-3).
         )
+        if not ipv6:
+            kwargs["sysctls"] = dict(_NO_IPV6_SYSCTLS)
         if s.session_runtime:
             kwargs["runtime"] = s.session_runtime
         container = self.client.containers.run(**kwargs)
         if s.capture_pcap:
             try:
+                self.client.images.get(s.pcap_image)  # local only, so run() never pulls
                 self.client.containers.run(
                     image=s.pcap_image,
                     name=self._sidecar_name(spec.session_id),

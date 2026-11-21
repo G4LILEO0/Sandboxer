@@ -14,6 +14,11 @@ x-app-env: &app-env
   SANDBOX_SESSION_BRIDGE: sbx-sessions
   SANDBOX_SESSION_SUBNET: 172.31.213.0/24
   SANDBOX_SESSION_API_IP: 172.31.213.2
+  # IPv6 on the session network (ULA, NAT66 to the host). auto: sessions get IPv6 only
+  # when the egress probe reaches a public IPv6 address; on | off force it.
+  SANDBOX_SESSION_IPV6: ${SANDBOX_SESSION_IPV6:-auto}
+  SANDBOX_SESSION_SUBNET_V6: fd5b:d213:5e55::/64
+  SANDBOX_SESSION_API_IP6: fd5b:d213:5e55::2
   # enforce | warn | off: refuse sessions unless the egress probe passes (NFR-3).
   SANDBOX_EGRESS_GUARD: ${SANDBOX_EGRESS_GUARD:-enforce}
   # Read from .env by compose; blank means that vendor's lookups are disabled.
@@ -61,6 +66,7 @@ services:
       default: {}
       sessions:
         ipv4_address: 172.31.213.2
+        ipv6_address: fd5b:d213:5e55::2
     depends_on:
       postgres:
         condition: service_healthy
@@ -104,6 +110,11 @@ services:
     environment:
       SANDBOX_SESSION_BRIDGE: sbx-sessions
       SANDBOX_SESSION_API_IP: 172.31.213.2
+      SANDBOX_SESSION_API_IP6: fd5b:d213:5e55::2
+      # Extra IPv6 CIDRs sessions must not reach, space-separated. On Docker Desktop the
+      # guard cannot see the Windows host's addresses: put the office LAN's public IPv6
+      # prefix here (the guard already blocks the Docker host's own prefixes).
+      SANDBOX_EGRESS_BLOCKED6: ${SANDBOX_EGRESS_BLOCKED6:-}
     restart: unless-stopped
 
   # Images the worker starts per session. Built with: docker compose --profile build build
@@ -136,9 +147,14 @@ networks:
     driver: bridge
     driver_opts:
       com.docker.network.bridge.name: sbx-sessions
+    # IPv6 is filtered by the egress guard like IPv4. Docker masquerades the ULA subnet
+    # (NAT66) out of the host's IPv6 address; without IPv6 routing on the host, the
+    # worker keeps sessions IPv4-only (SANDBOX_SESSION_IPV6=auto).
+    enable_ipv6: true
     ipam:
       config:
         - subnet: 172.31.213.0/24
+        - subnet: fd5b:d213:5e55::/64
 
 volumes:
   pgdata:

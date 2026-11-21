@@ -219,6 +219,7 @@ def test_headed_automated_session_gets_a_display_but_no_vnc(monkeypatch):
     backend = DockerBackend(Settings(), client=type("C", (), {"containers": containers})())
     monkeypatch.setattr(backend, "_ensure_network", lambda: None)
     monkeypatch.setattr(backend, "_check_egress", lambda: None)
+    monkeypatch.setattr(backend, "_require_image", lambda image: None)
     spec = SessionSpec(
         session_id="se_1",
         analysis_id="an_1",

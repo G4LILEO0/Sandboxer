@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     session_bridge: str = "sbx-sessions"
     session_subnet: str = "172.31.213.0/24"
     session_api_ip: str = "172.31.213.2"
+    # IPv6 on the session network (a ULA subnet, NAT66 to the host's public IPv6). The
+    # egress guard applies the IPv6 equivalents of the IPv4 blocks. "auto" gives a
+    # session IPv6 only when the egress probe reached a public IPv6 address; on a host
+    # without IPv6 routing, sessions run IPv4-only so nothing waits on a dead IPv6 path.
+    # "on" always gives sessions IPv6; "off" never does.
+    session_ipv6: Literal["auto", "on", "off"] = "auto"
+    session_subnet_v6: str = "fd5b:d213:5e55::/64"
+    session_api_ip6: str = "fd5b:d213:5e55::2"
     # Before starting sessions the worker runs a probe container on the session network
     # that tries to reach internal targets. "enforce" refuses to start sessions if any
     # answers, "warn" logs and continues, "off" skips the probe (tests only).
@@ -85,6 +93,8 @@ class Settings(BaseSettings):
     egress_probe_extra_targets: list[str] = Field(default_factory=list)
     # A public host:port that should be reachable; only reported, never enforced.
     egress_probe_public: str = "1.1.1.1:443"
+    # The same over IPv6; with session_ipv6="auto" it decides whether sessions get IPv6.
+    egress_probe_public6: str = "[2606:4700:4700::1111]:443"
     egress_probe_ttl_s: int = 300
     # "runsc" for gVisor where installed; None uses Docker's default runtime.
     session_runtime: str | None = None
@@ -151,6 +161,8 @@ class Settings(BaseSettings):
             "host.docker.internal:8000",  # the Docker host (Docker Desktop), API port
             "host.docker.internal:5432",  # ...and Postgres
             "169.254.169.254:80",  # cloud metadata
+            f"[{self.session_api_ip6}]:8000",  # the API over IPv6
+            "[fd00:ec2::254]:80",  # cloud metadata over IPv6 (AWS)
             *self.egress_probe_extra_targets,
         ]
 
