@@ -16,6 +16,14 @@ Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 Resolver = Callable[[str], Awaitable[list[str]]]
 
 _NAT64 = ipaddress.IPv6Network("64:ff9b::/96")
+# Ranges Python's ipaddress still calls global, but the egress guard drops
+# (docker/egress-guard.sh): deprecated site-local IPv6 and the 6to4 relay anycast.
+_ALSO_RESERVED = (
+    ipaddress.IPv6Network("fec0::/10"),
+    ipaddress.IPv4Network("192.88.99.0/24"),
+)
+# The only IPv6 space with public unicast addresses; the guard drops everything else.
+_GLOBAL_UNICAST6 = ipaddress.IPv6Network("2000::/3")
 
 
 class BlockedDestination(Exception):
@@ -57,8 +65,10 @@ class NetGuard:
             return "a private address"
         if ip.is_multicast:
             return "a multicast address"
-        if ip.is_unspecified or ip.is_reserved:
+        if ip.is_unspecified or ip.is_reserved or any(ip in net for net in _ALSO_RESERVED):
             return "a reserved address"
+        if isinstance(ip, ipaddress.IPv6Address) and ip not in _GLOBAL_UNICAST6:
+            return "outside IPv6 global unicast (2000::/3)"
         if any(ip in net for net in self.extra_blocked):
             return "in a blocked range"
         if not ip.is_global:

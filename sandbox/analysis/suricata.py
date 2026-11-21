@@ -17,6 +17,11 @@ from sandbox.analysis.har_pcap import SYNTHETIC_CLIENT_IP
 
 log = logging.getLogger(__name__)
 
+# Suricata's stock HOME_NET is IPv4 only. Session traffic over IPv6 comes from the ULA
+# session subnet (inside fc00::/7), so without it $HOME_NET -> $EXTERNAL_NET rules would
+# never match IPv6 flows.
+HOME_NET = "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,fc00::/7]"
+
 
 def _tar(files: dict[str, Path]) -> bytes:
     buf = io.BytesIO()
@@ -48,6 +53,8 @@ def _run(settings, image: str, rules: Path, pcaps: list[Path]) -> tuple[bool, st
             "/work/out",
             "-k",
             "none",
+            "--set",
+            f"vars.address-groups.HOME_NET={HOME_NET}",
         ]
     else:
         cmd = ["-T", "-S", "/work/rules.rules", "-l", "/work/out"]
