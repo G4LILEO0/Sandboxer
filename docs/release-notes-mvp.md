@@ -185,7 +185,7 @@ These settings control the browser, Suricata and IPv6:
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `SANDBOX_AUTOMATED_HEADED` | `true` | Automated runs use a headed Chromium on a virtual screen. Set to `false` for the new headless mode. |
-| `SANDBOX_ANTIBOT_WAIT_S` | `30` | The maximum time, in seconds, that a run waits for a Cloudflare challenge to clear. |
+| `SANDBOX_ANTIBOT_WAIT_S` | `45` | The maximum time, in seconds, that a run waits for a Cloudflare challenge to clear. |
 | `SANDBOX_SURICATA_DECRYPTED_HTTPS` | `true` | Suricata also scans HTTPS requests from the HAR. |
 | `SANDBOX_SESSION_IPV6` | `auto` | `auto` gives sessions IPv6 only when the worker can reach a public IPv6 address. `on` always gives sessions IPv6. `off` never gives sessions IPv6. |
 | `SANDBOX_EGRESS_BLOCKED6` | empty | More IPv6 ranges that sessions must not reach. On Docker Desktop, put the office LAN's public IPv6 prefix here. |
