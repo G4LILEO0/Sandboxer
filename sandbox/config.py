@@ -110,7 +110,7 @@ class Settings(BaseSettings):
     automated_headed: bool = True
     # Seconds an automated run waits for a Cloudflare-style bot check to clear (it ticks
     # the Turnstile box if it has to) before the run is recorded as blocked by it.
-    antibot_wait_s: int = 30
+    antibot_wait_s: int = 45
 
     # --- Active-probe capture profiles (NFR-10 legal sign-off) --------------------------
     # These make the session *do* something a victim would, so they are OFF by default and

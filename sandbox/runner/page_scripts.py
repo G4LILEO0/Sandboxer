@@ -16,10 +16,24 @@ BINDING = "__sandboxReport"
 
 INIT_SCRIPT = r"""
 (() => {
-  const report = window.__sandboxReport;
-  if (typeof report !== 'function') return;
-  // The global must stay: Playwright's binding wrapper looks it up by name on each call.
-  const send = (kind, data) => { try { report(kind, data); } catch (e) {} };
+  const binding = window.__sandboxReport;
+  // Under Patchright the hooks run in the page's main world, where no binding is
+  // visible (that is what keeps Cloudflare from seeing it). Each report goes out as a
+  // string in a DOM event under a per-session name (the DOM is the one thing worlds
+  // share) to the runner's own isolated world (RELAY_LISTENER), which queues it for the
+  // runner to collect. Stock Playwright: the binding is in the main world.
+  // Cloudflare's own challenge frame is never hooked.
+  const relay = /*RELAY*/'';
+  try { if (location.hostname === 'challenges.cloudflare.com') return; } catch (e) { return; }
+  if (relay ? typeof binding === 'function' : typeof binding !== 'function') return;
+  const send = (() => {
+    if (!relay) return (kind, data) => { try { binding(kind, data); } catch (e) {} };
+    const dispatch = EventTarget.prototype.dispatchEvent, CE = CustomEvent;
+    const stringify = JSON.stringify, doc = document;
+    return (kind, data) => {
+      try { dispatch.call(doc, new CE(relay, { detail: stringify([kind, data]) })); } catch (e) {}
+    };
+  })();
   const describe = (el) => {
     if (!el || !el.tagName) return '';
     let s = el.tagName.toLowerCase();
@@ -311,9 +325,33 @@ INIT_SCRIPT = r"""
 """
 
 
-def init_script(platform: str = "") -> str:
-    """``INIT_SCRIPT`` with the profile's navigator.platform (empty keeps the real one)."""
-    return INIT_SCRIPT.replace("/*PLATFORM*/''", json.dumps(platform), 1)
+RELAY_WORLD = "sbx-relay"
+# Runs in the runner's isolated world of every frame of a page (Patchright only): queues
+# the main-world hooks' reports from the per-session DOM event. The runner drains the
+# queue (RELAY_DRAIN) by polling: a CDP binding would need Runtime.enable, the very
+# thing Cloudflare detects.
+RELAY_LISTENER = r"""
+(() => {
+  if (globalThis.__sbxQ) return;
+  const q = globalThis.__sbxQ = [];
+  document.addEventListener(/*RELAY*/'', (ev) => {
+    try { if (typeof ev.detail === 'string' && q.length < 5000) q.push(ev.detail); } catch (e) {}
+  }, true);
+})()
+"""
+RELAY_DRAIN = "(() => { const q = globalThis.__sbxQ; return q ? q.splice(0, q.length) : []; })()"
+
+
+def relay_listener(relay: str) -> str:
+    return RELAY_LISTENER.replace("/*RELAY*/''", json.dumps(relay), 1)
+
+
+def init_script(platform: str = "", relay: str = "") -> str:
+    """``INIT_SCRIPT`` with the profile's navigator.platform (empty keeps the real one).
+    ``relay``: the per-session DOM event name main-world hooks report through under
+    Patchright (empty with stock Playwright, where the binding is in the main world)."""
+    script = INIT_SCRIPT.replace("/*PLATFORM*/''", json.dumps(platform), 1)
+    return script.replace("/*RELAY*/''", json.dumps(relay), 1)
 
 
 # Fake EIP-1193 wallet (DE-W3B-005/006). Injected only when `fake_wallet` is enabled. It
@@ -411,7 +449,9 @@ _PW_HARNESS = re.compile(
     r"\s*(\(\(\)\s*=>\s*\{\s*globalThis\.__pwInitScripts\s*="
     r"|globalThis\.__pwWebSocketDispatch\(\{\"id\":\"[0-9a-f]{64}\""
     # Playwright handing an exposed binding's return value back (every report call).
-    r"|\(function deliverResult\(arg\) \{)"
+    r"|\(function deliverResult\(arg\) \{"
+    # Patchright installing the exposed binding in each new document.
+    r"|\(\(\)\s*=>\s*\{\s*\(function addPageBinding\()"
 )
 
 

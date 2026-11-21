@@ -16,8 +16,11 @@ RUN apt-get update \
         tini xvfb x11vnc novnc websockify xclip fonts-liberation fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install "playwright==1.49.1" "idna>=3.7" \
-    && playwright install --with-deps chromium \
+# Patchright: Playwright's API without the automation side effects Cloudflare Turnstile
+# detects (Runtime.enable / Console.enable on page targets). Stock Playwright fails every
+# live Turnstile check, even driving an unmodified browser.
+RUN pip install "patchright==1.64.4" "idna>=3.7" \
+    && patchright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/* /root/.cache
 
 WORKDIR /app

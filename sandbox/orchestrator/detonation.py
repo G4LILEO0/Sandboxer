@@ -29,7 +29,9 @@ from sandbox.runner.events import parse_stdout_line
 from sandbox.runtime_config import get_all, get_config
 
 log = logging.getLogger(__name__)
-_STOP_TIMEOUT_S = 25
+# docker stop grace period. The runner writes result.json at the latest 20 s after the
+# stop signal (runner FINALISE_BUDGET_S), then closes the browser to flush video and HAR.
+_STOP_TIMEOUT_S = 45
 _CLIPBOARD_POLL_S = 0.5
 
 
