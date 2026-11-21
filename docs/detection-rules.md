@@ -73,7 +73,7 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `forms.password_over_http` | Password forms served or submitted over http |
 | `scripts.max_obfuscation_score`, `scripts.obfuscated` | Obfuscation signals per script |
 | `scripts.invisible_unicode`, `.invisible_unicode_details` | Scripts (fetched, or inline in a raw DOM snapshot) holding a run of 64+ invisible characters (Hangul fillers, zero-width characters) that mixes at least two of them: an invisible-character payload encoding (`{source, longest_run, chars}`) |
-| `downloads.count`, `.executable`, `.archive`, `.disguised`, `.unprompted`, `.unprompted_risky` | Downloads; `disguised` covers `x.pdf.exe` and a PE file named `.pdf`; `unprompted_risky` counts executables, archives or disguised files downloaded without a click |
+| `downloads.count`, `.executable`, `.archive`, `.disguised`, `.unprompted`, `.unprompted_risky`, `.not_received` | Downloads, including download links the page activated that delivered no file (`files[].received` false, `files[].status` `no_response` or `failed`; counted in `.not_received`). Extension-based counts include those attempts. `disguised` covers `x.pdf.exe` and a PE file named `.pdf`; `unprompted_risky` counts executables, archives or disguised files downloaded without a click |
 | `clipboard.command_like` | Clipboard writes that contain any shell command |
 | `clipboard.writes`, `.max_write_len`, `.write_samples` | Page-initiated clipboard writes (analyst Ctrl+C excluded): count, longest text, and up to 5 samples (300 chars, with `user_activation`) |
 | `clipboard.clickfix_like` | Clipboard writes with ClickFix traits: a download cradle, hidden or encoded PowerShell, mshta of a URL, `curl … \| sh`, `finger user@host` or `for /f … in ('…') do %x` fetch-and-run, `start /min` or `%COMSPEC%`, `^` caret obfuscation, or a fake-CAPTCHA comment or space/dash-padded decoy. `^` and in-word `""` are stripped before matching |
@@ -114,7 +114,8 @@ To see the facts for a real case, open the report's raw summary (`summary.facts`
 | `websocket.count`, `.connections` | WebSocket connections and parsed Socket.IO event names |
 | `clipboard.path_disguised`, `.no_gesture_writes`, `.overwritten_command` | FileFix path-disguised commands; writes with no user gesture; a command later blanked/overwritten |
 | `lure.fake_captcha`, `.fake_captcha_evidence`, `.genuine_challenge` | Fake CAPTCHA/verification UI, and whether a genuine Turnstile/reCAPTCHA resource was loaded; with `lure.run_dialog_instructions` this also reads hidden overlay text from the raw DOM snapshots |
-| `lure.fake_update_pages` | Non-vendor pages showing a browser/software update lure |
+| `lure.fake_update_pages` | Non-vendor pages showing a browser/software update lure (browsers, Adobe Acrobat Reader, Flash Player) |
+| `lure.open_download_pages` | Non-vendor pages that tell the visitor to open/run/double-click a named disk image, installer or script (`AcrobatSetup.iso`) |
 | `final.ipfs` | The final page is served from an IPFS gateway (`{gateway, cid}` or null) |
 | `evasion.devtools_blocked`, `.devtools_blocked_keys`, `.context_menu_blocked` | DevTools shortcuts / context menu the page cancelled (observed via the key probe) |
 | `evasion.debugger_trap`, `.debugger_trap_sources` | Scripts with a debugger trap: `debugger` run from a timer, between two clock reads, or built from a string (`constructor("debugger")`, `'debu'+'gger'`). A lone `debugger;` does not count |

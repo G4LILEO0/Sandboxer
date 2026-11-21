@@ -1626,6 +1626,49 @@ def test_fake_browser_update_fires_and_browser_update_org_is_quiet():
     assert "fake_browser_update" not in _hits(_cap("https://browser-update.org/", [ok]))
 
 
+# an_01M7XREZ0NCQ7WHNSGW799P669: S3 redirector -> Turnstile gate -> fake "Update Adobe
+# Acrobat Reader" page whose script clicks an a[download] for AcrobatSetup.iso. The server
+# held the response, so no file and no request were captured.
+_ACROBAT_DONE = (
+    "Your update is downloading Open File Manager and go to your Downloads folder Locate "
+    "AcrobatSetup.iso Double-click it to open, then double-click the AcrobatSetup inside to "
+    "finish the upgrade If your browser asked for permission, click Save."
+)
+
+
+def test_fake_acrobat_update_with_open_instructions_fires_without_a_file():
+    page = _page("https://zenithsgroupadvisor.com/", "Adobe Acrobat Reader DC", _ACROBAT_DONE)
+    data = _cap("https://zenithsgroupadvisor.com/", [page])
+    facts = build_facts(data)
+    assert facts["lure"]["fake_update_pages"] == ["https://zenithsgroupadvisor.com/"]
+    assert facts["lure"]["open_download_pages"] == ["https://zenithsgroupadvisor.com/"]
+    assert "fake_browser_update" in _hits(data)
+
+
+def test_attempted_download_without_response_counts_as_risky():
+    """The runner records a download link the page activated even when the server never
+    answered; an ISO it tried to deliver is still an executable/disk-image download."""
+    url = "https://kit.example/property-files/AcrobatSetup.iso?v=1"
+    attempt = {"page": "p0", "url": url, "suggested_filename": "AcrobatSetup.iso",
+               "status": "no_response", "error": "no response"}  # fmt: skip
+    data = _cap("https://kit.example/", downloads=[attempt])
+    data.events = [{"ts": "2026-11-21T00:35:45+00:00", "kind": "download_requested",
+                    "source": "browser", "payload": {"url": url}}]  # fmt: skip
+    dl = build_facts(data)["downloads"]
+    assert dl["executable"] == 1 and dl["not_received"] == 1 and dl["unprompted_risky"] == 1
+    assert dl["files"][0]["received"] is False and dl["files"][0]["status"] == "no_response"
+    hits = _hits(data)
+    assert {"executable_download", "automatic_download"} <= hits
+
+
+def test_open_instructions_without_update_lure_are_quiet():
+    """Install docs that say 'run setup.exe' are not a fake update on their own."""
+    page = _page("https://docs.example/", "Install", "Download and run setup.exe to install.")
+    data = _cap("https://docs.example/", [page])
+    assert build_facts(data)["lure"]["open_download_pages"]
+    assert "fake_browser_update" not in _hits(data)
+
+
 _CRASH_TEXT = (
     "Your browser stopped abnormally. Security issues detected. "
     "Press Win + R, then Ctrl + V and Enter to repair your browser."

@@ -148,6 +148,11 @@ class Capture:
         self.tls: dict[str, dict[str, Any]] = {}
         self.contacted: dict[str, set[str]] = {}
         self.downloads: list[dict[str, Any]] = []
+        # Downloads Chromium started (Page.frameRequestedNavigation, disposition "download")
+        # that Playwright has not reported yet. Playwright raises its download event only
+        # when response headers arrive, so a server that holds the response leaves no other
+        # trace: download requests are in neither the HAR nor the request log.
+        self.pending_downloads: dict[str, dict[str, Any]] = {}
         self.dialogs: list[dict[str, Any]] = []
         self.clipboard: list[dict[str, Any]] = []
         self.websocket_frames: list[dict[str, Any]] = []
@@ -377,11 +382,21 @@ class Capture:
 
     async def _on_download(self, page: Page, download: Download) -> None:
         """Downloads land in quarantine with hashes and never leave it (CAP-7, INT-4)."""
-        entry: dict[str, Any] = {
-            "page": self._page_id(page),
-            "url": download.url[:2000],
-            "suggested_filename": download.suggested_filename[:255],
-        }
+        url = download.url[:2000]
+        # The entry made when Chromium started the download, if there is one: this event
+        # completes it instead of adding a second entry.
+        entry = self.pending_downloads.pop(url, None)
+        if entry is None:
+            # A redirect changes the URL Playwright reports: take the oldest download
+            # still waiting on this page.
+            pid = self._page_id(page)
+            key = next((k for k, v in self.pending_downloads.items() if v["page"] == pid), None)
+            entry = self.pending_downloads.pop(key) if key else None
+        is_new = entry is None
+        if entry is None:
+            entry = {"page": self._page_id(page), "url": url}
+        entry["suggested_filename"] = download.suggested_filename[:255]
+        entry["status"] = "responded"
         try:
             path = await download.path()
             failure = await download.failure()
@@ -399,13 +414,42 @@ class Capture:
             if not target.exists():
                 shutil.copyfile(path, target)
                 target.chmod(0o600)
-            entry.update(sha256=digest, md5=md5.hexdigest(), size=size)
+            entry.update(sha256=digest, md5=md5.hexdigest(), size=size, status="complete")
         else:
             entry["error"] = str(failure)[:500]
+            entry["status"] = "failed"
         with contextlib.suppress(PlaywrightError):
             await download.delete()
-        self.downloads.append(entry)
+        if is_new:
+            self.downloads.append(entry)
         self.events.emit("download", "browser", **entry)
+
+    def _on_download_requested(self, pid: str | None, data: dict[str, Any]) -> None:
+        """Record a download link the page activated, before any response (page hook)."""
+        url = str(data.get("href", ""))[:2000]
+        if not url or len(self.downloads) >= 200 or any(d["url"] == url for d in self.downloads):
+            return  # already recorded (the download event can arrive first)
+        name = str(data.get("name") or "") or urlsplit(url).path.rsplit("/", 1)[-1]
+        entry: dict[str, Any] = {
+            "page": pid,
+            "url": url,
+            "suggested_filename": name[:255],
+            "status": "requested",
+            "trigger": str(data.get("how") or "")[:40],
+            "script_url": str(data.get("script_url") or "")[:2000] or None,
+            "ms": self._elapsed_ms(),
+        }
+        self.pending_downloads[url] = entry
+        self.downloads.append(entry)
+        self.events.emit("download_requested", "browser", **entry)
+
+    def _finish_pending_downloads(self) -> None:
+        """Downloads Chromium started that got no response before the session ended."""
+        for entry in self.pending_downloads.values():
+            entry["status"] = "no_response"
+            entry["error"] = "the server sent no response before the session ended"
+            self.events.emit("download", "browser", **entry)
+        self.pending_downloads.clear()
 
     @staticmethod
     def _initiator(raw: dict[str, Any] | None) -> dict[str, Any]:
@@ -596,6 +640,9 @@ class Capture:
         if kind in ("js_exec", "js_decode", "js_blob", "js_api"):
             self._on_jsapi(kind, data)
             return
+        if kind == "download_attempt":
+            self._on_download_requested(pid, data)
+            return
         if kind == "form_submit" and not data.get("trusted"):
             self.events.emit("form_submit", "browser", page=pid, **data)
             return
@@ -774,6 +821,7 @@ class Capture:
                     await self.screenshot(context.pages[0], "final-fullpage", full_page=True)
                 if self._tasks:
                     await asyncio.wait(self._tasks, timeout=10)
+                self._finish_pending_downloads()
                 await self._collect_cookies(context)
                 await context.close()
                 await browser.close()
