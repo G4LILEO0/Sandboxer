@@ -32,7 +32,7 @@ pattern = '\$\(\s*(curl|wget)\b'
 
 [unambiguous_traits]
 title = 'Unambiguous ClickFix traits'
-description = "Traits no installer uses, so always ClickFix whatever the source: encoded or hidden PowerShell, mshta of a URL, base64 piped to a shell, a fake-CAPTCHA comment, finger.exe or for /f fetch-and-run, cmd started minimised or via %COMSPEC%, and CrashFix's renamed finger.exe. Commands are matched with cmd's ^ escapes and in-word \"\" removed. Feeds clipboard.clickfix_like."
+description = "Traits no installer uses, so always ClickFix whatever the source: encoded or hidden PowerShell, mshta of a URL, base64 piped to a shell, a fake-CAPTCHA comment, finger.exe or for /f fetch-and-run, cmd started minimised or via %COMSPEC%, CrashFix's renamed finger.exe, msiexec of a remote package, a URL with a backslash after the scheme, and look-alike or zero-width characters in a command. Commands are matched with cmd's ^ escapes and in-word \"\" removed. Feeds clipboard.clickfix_like."
 type = "regex_list"
 [[unambiguous_traits.items]]
 flags = 'i'
@@ -69,6 +69,18 @@ pattern = '\bcopy\b[^&|\n]{0,160}\bfinger(\.exe)?\b[^&|\n]{0,160}\\\w+\.exe\b'
 note = 'CrashFix: pipes <name>.exe user@host into cmd.'
 flags = 'i'
 pattern = '\b(?!finger\b)\w{1,12}\.exe\s+[\w.-]+@[\w.-]+\s*\|\s*cmd\b'
+[[unambiguous_traits.items]]
+note = 'msiexec installing a package straight from a URL or UNC path (an_01M7Z16QMSQGR0CK13MM6DTQ5H, a js-static.pro fake CAPTCHA).'
+flags = 'i'
+pattern = '''\bmsiexec(\.exe)?\b[^|&\n]{0,40}\s/(i|package|j[mu]?|fa|update|x)\s+[\"']?(https?:|\\\\)'''
+[[unambiguous_traits.items]]
+note = 'A URL with a backslash right after the scheme (http:\/host\path). Windows accepts it; documentation never writes it.'
+flags = 'i'
+pattern = '\bhttps?:/?\\'
+[[unambiguous_traits.items]]
+note = 'Look-alike letters (Unicode mathematical alphanumerics) or zero-width characters inside a command: decoy text disguised from the reader, such as a hidden "CAPTCHA solved" comment.'
+flags = 'i'
+pattern = '[\U0001D400-\U0001D7FF​-‍⁠﻿]'
 
 [dns_cradle]
 title = 'DNS retrieval cradle'
