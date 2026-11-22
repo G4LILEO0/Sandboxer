@@ -6,7 +6,7 @@ For whoever deploys and runs the sandbox. Read the "Before production" list firs
 
 1. **Network egress isolation.** See [Egress isolation](#egress-isolation) below. Keep the `egress-guard` service running and `SANDBOX_EGRESS_GUARD=enforce`. On a Docker host you don't control (some managed or rootless setups), apply the same rules in the host or cloud firewall instead. The worker's probe tells you whether they work.
 2. **Session network.** The API joins `sandbox_sessions` to proxy the live view. The egress guard lets only the API's fixed address (`SANDBOX_SESSION_API_IP`) open connections to sessions, only on the live-view port. Sessions cannot open connections to the API. In production, you can still move the live-view proxy to a dedicated, minimal service.
-3. **Worker privileges.** The worker uses the Docker socket, which is equivalent to root on the host. Run it on a dedicated host or VM, never expose it, and keep it off the session network. Use `SANDBOX_SESSION_RUNTIME=runsc` (gVisor) where available.
+3. **Worker privileges.** The worker uses the Docker socket, which is equivalent to root on the host. On SELinux hosts it runs with `label=disable` to reach the socket (see [Linux hosts](#linux-hosts-selinux-and-the-iptables-backend)). Run it on a dedicated host or VM, never expose it, and keep it off the session network. Use `SANDBOX_SESSION_RUNTIME=runsc` (gVisor) where available.
 4. **Secrets.** Set `SANDBOX_SECRET_KEY` to a long random value (32+ characters), the same on every API instance. Production refuses to start with the default, a short key or dev auth. OIDC mode refuses the default key in every environment, because the key signs session cookies.
 5. **Single sign-on.** Set `SANDBOX_AUTH_MODE=oidc`, `SANDBOX_OIDC_ISSUER`, `SANDBOX_OIDC_CLIENT_ID`, `SANDBOX_OIDC_CLIENT_SECRET`, `SANDBOX_OIDC_REDIRECT_URL` (`https://<host>/auth/callback`) and map IdP groups to roles with `SANDBOX_OIDC_ROLE_MAP` (JSON, for example `{"sg-soc": "analyst", "sg-soc-leads": "senior_analyst"}`). Tests cover the token format, but not yet your provider.
 6. **Feeds and terms.** Check each feed's licence and key requirements (Admin → Feeds). URLhaus, ThreatFox and MalwareBazaar need a free abuse.ch Auth-Key from https://auth.abuse.ch/. Put it in `.env` as `SANDBOX_ABUSECH_AUTH_KEY` (one key covers all three), or set it per feed with **Set key**. PhishTank is disabled by default.
@@ -25,7 +25,7 @@ Detonated pages must reach the internet and nothing else. The browser refuses in
 | Worker probe | Before it starts sessions, the worker starts a throwaway container on the session network. The container tries to reach the API, the Docker host's API and Postgres ports (`host.docker.internal`), cloud metadata over IPv4 and IPv6 (`169.254.169.254`, `fd00:ec2::254`), the API's IPv6 address and any `SANDBOX_EGRESS_PROBE_EXTRA_TARGETS` (use `[address]:port` for IPv6). With `SANDBOX_EGRESS_GUARD=enforce` (the default), any answer fails the analysis with "Egress isolation check failed". The worker caches a pass for 5 minutes. It also reports whether `1.1.1.1:443` and `[2606:4700:4700::1111]:443` are reachable. With `SANDBOX_SESSION_IPV6=auto` (the default), the IPv6 result decides whether new sessions get IPv6 |
 | Per-session IPv6 | When IPv6 is off for a session (`SANDBOX_SESSION_IPV6=off`, or `auto` and the probe could not reach public IPv6), the worker starts the container with `net.ipv6.conf.all.disable_ipv6=1`. The container then has no IPv6 address, so Chromium never waits on an IPv6 path that goes nowhere. The container label `sandbox.ipv6` (`1` or `0`) records the choice |
 
-It works on Docker Desktop (the rules go into its Linux VM) and on Linux hosts using Docker's iptables firewall. A test checks this. With the rules removed, a session reached the API, the host's port 8000 and Postgres, and the probe refused to start sessions. With the rules in place, the guard blocked all of those, and the internet stayed reachable.
+It works on Docker Desktop (the rules go into its Linux VM) and on Linux hosts using Docker's iptables firewall, with the host's iptables on either the nf_tables or the legacy backend (see [Linux hosts](#linux-hosts-selinux-and-the-iptables-backend)). A test checks this. With the rules removed, a session reached the API, the host's port 8000 and Postgres, and the probe refused to start sessions. With the rules in place, the guard blocked all of those, and the internet stayed reachable.
 
 ### IPv6
 
@@ -41,6 +41,36 @@ Without IPv6 routing, the system degrades cleanly: sessions are IPv4-only and an
 On 2026-11-20 the development host had no public IPv6 (link-local addresses only). On that host, I checked these results: the guard installed the IPv6 rules; with the rules removed, a session reached another container's IPv6 address, the bridge gateway and the VM's IPv6 address; with the rules in place, none of them answered and the API still reached a session's port 6080 over IPv6; in `auto`, sessions started with IPv6 off; in `on`, the pcap held the session's IPv6 connection attempts and Suricata alerted on them. I did not test a connection to a public IPv6 site.
 
 What it does not cover: DNS passes from Docker's embedded resolver to the host's resolver. So a page can still resolve internal names, but it cannot connect to them. Use a public resolver for the Docker daemon if internal DNS names are sensitive. Traffic leaves with the host's public IP.
+
+## Linux hosts: SELinux and the iptables backend
+
+Two things on Linux hosts stop the stack working even though `docker compose up` succeeds. Both were found on openSUSE (Docker with `"selinux-enabled": true`, iptables 1.8 on the legacy backend, `Firewall Backend: iptables+firewalld` in `docker info`).
+
+### Docker socket and SELinux
+
+With SELinux enforcing and `"selinux-enabled": true` in `/etc/docker/daemon.json`, Docker runs containers under the `container_t` label, and that label may not connect to `/var/run/docker.sock`. The worker then fails with `PermissionError: [Errno 13] Permission denied` even though it runs as root. `compose.yaml` therefore starts the worker with `security_opt: [label=disable]`, which turns off SELinux confinement for that one container. It costs little: access to the Docker socket is root on the host anyway. Where SELinux is off (Docker Desktop, Debian, Ubuntu), the option does nothing.
+
+- Do not relabel the socket with `:z` or `:Z`. That changes the label of the host's socket for every process, and Docker or other services can stop working.
+- Do not switch SELinux off for the whole host (`setenforce 0`). That works, but it removes the confinement of every other container, including the session containers.
+- If the worker still cannot reach the socket, look for denials with `sudo ausearch -m avc -ts recent`, and make sure the container was recreated with the current file: `docker compose up -d --force-recreate worker`.
+- The worker runs as root (`user: "0:0"`), so the socket's group does not matter. If you change it to a non-root user, add the socket's group with `group_add` (the number from `stat -c %g /var/run/docker.sock`).
+- `compose.yaml` mounts `docker/postgres-init.sql` into Postgres with `:z`, so the Postgres container can read that one file on SELinux hosts.
+
+The worker now checks the socket when it starts. If it cannot reach Docker, it logs one line that says why (permission denied, no socket, or another error) and what to do, and exits. Compose restarts it, so the line repeats in `docker compose logs worker` until the cause is fixed.
+
+### iptables backend (legacy or nf_tables)
+
+`iptables` has two backends, nf_tables and legacy (x_tables). Docker creates its `DOCKER-USER` chain with the host's `iptables`, so the chain exists in one backend only. The egress guard's Alpine image used to have only the nf_tables binaries. On a host whose `iptables --version` says `(legacy)`, the guard found no `DOCKER-USER` chain, installed nothing and retried forever. The worker's probe then refused every session.
+
+The image now has both backends. With `SANDBOX_EGRESS_IPTABLES=auto` (the default), the guard looks for `DOCKER-USER` in `iptables-nft` and `iptables-legacy` and installs its rules in every backend that has the chain, for IPv4 and IPv6. When IPv6 has no `DOCKER-USER` chain, it hooks `FORWARD` on the same backend as IPv4. Set `SANDBOX_EGRESS_IPTABLES=legacy` or `nft` in `.env` to use one backend only.
+
+Check it after `docker compose up -d --build egress-guard`:
+
+- `docker compose logs egress-guard` shows `rules installed with iptables-legacy` (or `-nft`).
+- On the host, `sudo iptables -L DOCKER-USER -n` shows the `SBX-EGRESS` jump.
+- If the guard cannot find `DOCKER-USER` in any backend, it logs `error: no iptables backend has Docker's DOCKER-USER chain, so sessions are NOT isolated`, with the reason for each backend. The usual causes are Docker's firewall being off (`"iptables": false`) or Docker's own nftables backend (`Firewall Backend: nftables` in `docker info`), which has no `DOCKER-USER` chain. In those cases, firewall the session bridge in the host firewall instead, as described in "Before production".
+
+With firewalld, a `firewall-cmd --reload` can remove the guard's rules; the guard puts them back within 10 seconds. If SELinux denies the guard's iptables calls (`Permission denied` in its log while `docker info` shows SELinux on), add `security_opt: [label=disable]` to the `egress-guard` service as well.
 
 ## Bot checks (Cloudflare)
 

@@ -81,6 +81,54 @@ class SessionImageMissing(RuntimeError):
     pass
 
 
+class DockerUnavailable(RuntimeError):
+    """The worker cannot talk to the Docker daemon; the message says why and what to do."""
+
+
+def _socket_path(url: str | None) -> str:
+    if url and url.startswith("unix://"):
+        return url.removeprefix("unix://")
+    return url or "/var/run/docker.sock"
+
+
+def explain_docker_error(exc: BaseException, url: str | None = None) -> str:
+    """A message an operator can act on, from a failed connection to the daemon."""
+    chain: list[BaseException] = []
+    seen: BaseException | None = exc
+    while seen is not None and seen not in chain:
+        chain.append(seen)
+        seen = seen.__cause__ or seen.__context__
+    text = " ".join(str(e) for e in chain)
+    socket = _socket_path(url)
+    denied = any(isinstance(e, PermissionError) for e in chain) or (
+        "PermissionError" in text or "Permission denied" in text or "Errno 13" in text
+    )
+    if denied:
+        return (
+            f"Permission denied on the Docker socket ({socket}). The worker runs as root "
+            "(user 0:0), so on Linux this is almost always SELinux: with SELinux enforcing "
+            '(openSUSE, Fedora, RHEL; "selinux-enabled": true in /etc/docker/daemon.json) '
+            "a labelled container may not connect to the socket. compose.yaml runs the "
+            "worker with security_opt label=disable for this; recreate it with the current "
+            "compose.yaml (docker compose up -d --force-recreate worker) and check for "
+            "denials with: sudo ausearch -m avc -ts recent. If you run the worker as a "
+            "non-root user, also add the socket's group: group_add with the number from "
+            f"stat -c %g {socket}. Do not relabel the socket with :z. See "
+            "docs/operations.md, 'Docker socket and SELinux'."
+        )
+    missing = any(isinstance(e, FileNotFoundError) for e in chain) or (
+        "No such file or directory" in text or "FileNotFoundError" in text
+    )
+    if missing:
+        return (
+            f"No Docker socket at {socket}. Mount the host's socket into the worker "
+            "(compose.yaml does: /var/run/docker.sock:/var/run/docker.sock), or set "
+            "DOCKER_HOST / SANDBOX_DOCKER_URL. With rootless Docker the socket is "
+            "$XDG_RUNTIME_DIR/docker.sock on the host."
+        )
+    return f"Cannot reach the Docker daemon at {socket}: {exc}"
+
+
 class DockerBackend:
     name = "docker"
 
@@ -100,6 +148,14 @@ class DockerBackend:
                 else docker.from_env()
             )
         return self._client
+
+    def check_access(self) -> None:
+        """Fail fast at worker start, with a clear reason, if Docker is unreachable."""
+        try:
+            self.client.ping()
+        except Exception as exc:
+            self._client = None
+            raise DockerUnavailable(explain_docker_error(exc, self.settings.docker_url)) from exc
 
     # --- helpers -------------------------------------------------------------------
 
@@ -179,6 +235,7 @@ class DockerBackend:
         message = (
             "Egress isolation check failed. Sessions could reach "
             f"{', '.join(leaks)}. Start the egress-guard service (docker compose up -d "
+            "egress-guard), check why it did not install its rules (docker compose logs "
             "egress-guard) or see docs/operations.md."
         )
         if s.egress_guard == "enforce":
