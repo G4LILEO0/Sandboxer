@@ -44,7 +44,14 @@ What it does not cover: DNS passes from Docker's embedded resolver to the host's
 
 ## Linux hosts: SELinux and the iptables backend
 
-Two things on Linux hosts stop the stack working even though `docker compose up` succeeds. Both were found on openSUSE (Docker with `"selinux-enabled": true`, iptables 1.8 on the legacy backend, `Firewall Backend: iptables+firewalld` in `docker info`).
+Some Linux host settings stop the sandbox working even though `docker compose up` succeeds. A first install on openSUSE found three: SELinux (Docker with `"selinux-enabled": true`), iptables 1.8 on the legacy backend (`Firewall Backend: iptables+firewalld` in `docker info`), and `br_netfilter` not loaded. The stack now handles the first two by itself. For the third, run the host script.
+
+**Checklist for a new Linux host**
+
+1. `sudo scripts/host-setup.sh --fix` before the first `docker compose up`. The script loads `br_netfilter`, sets the two bridge sysctls and writes `/etc/modules-load.d/sandbox-br_netfilter.conf` and `/etc/sysctl.d/90-sandbox-bridge.conf`, so the settings survive a reboot. It changes nothing else. It checks the following and reports each one: Docker and compose, Docker's firewall backend (nftables fails), rootless Docker, the host's iptables backend, SELinux and the worker's `label=disable`, `.env` (lines compose refuses, Windows line endings, `SANDBOX_SECRET_KEY`), and the session and pcap images. Without `--fix`, it changes nothing at all.
+2. `docker compose --profile build build` and `docker compose up -d --build`.
+3. `scripts/host-setup.sh` again. It reads the egress guard's log and reports `IPv4 rules installed` or `already in place`, or a failure.
+4. Submit a test URL. The worker probes isolation before the first session. If the probe fails, the message says what to do: when only the API on the session bridge answered, the cause is `br_netfilter`, otherwise it is the egress guard.
 
 ### Docker socket and SELinux
 
@@ -89,7 +96,7 @@ echo 'net.bridge.bridge-nf-call-iptables = 1' | sudo tee /etc/sysctl.d/90-sandbo
 echo 'net.bridge.bridge-nf-call-ip6tables = 1' | sudo tee -a /etc/sysctl.d/90-sandbox-bridge.conf
 ```
 
-The guard checks the setting on every pass and logs `br_netfilter is on` once it is. After a reboot, check it with `sysctl net.bridge.bridge-nf-call-iptables`.
+`sudo scripts/host-setup.sh --fix` does both steps. The guard checks the setting on every pass and logs `br_netfilter is on` once it is. When the worker's probe finds only the API on the bridge reachable, its error names `br_netfilter` as the cause. After a reboot, check it with `sysctl net.bridge.bridge-nf-call-iptables`.
 
 ### Reading the guard's log
 

@@ -81,6 +81,27 @@ class SessionImageMissing(RuntimeError):
     pass
 
 
+def _egress_hint(settings: Settings, leaks: list[str]) -> str:
+    """What to do about a failed probe. Leaks to bridge neighbours only (the API on the
+    session network) while the host and metadata are blocked mean the guard's rules are
+    in place but bridged traffic skips iptables: br_netfilter is off on the host."""
+    neighbours = {f"{settings.session_api_ip}:8000", f"[{settings.session_api_ip6}]:8000"}
+    if set(leaks) <= neighbours:
+        return (
+            "Only the API on the session bridge answered, so the egress guard's rules are "
+            "in place but traffic between containers on the bridge skips iptables: the "
+            "br_netfilter module is off on the Docker host. On the host run "
+            "sudo scripts/host-setup.sh --fix (or: sudo modprobe br_netfilter && sudo "
+            "sysctl -w net.bridge.bridge-nf-call-iptables=1 "
+            "net.bridge.bridge-nf-call-ip6tables=1). See docs/operations.md, 'br_netfilter'."
+        )
+    return (
+        "Start the egress-guard service (docker compose up -d egress-guard), check why "
+        "it did not install its rules (docker compose logs egress-guard), run "
+        "scripts/host-setup.sh on the Docker host, or see docs/operations.md."
+    )
+
+
 class DockerUnavailable(RuntimeError):
     """The worker cannot talk to the Docker daemon; the message says why and what to do."""
 
@@ -234,9 +255,7 @@ class DockerBackend:
             return
         message = (
             "Egress isolation check failed. Sessions could reach "
-            f"{', '.join(leaks)}. Start the egress-guard service (docker compose up -d "
-            "egress-guard), check why it did not install its rules (docker compose logs "
-            "egress-guard) or see docs/operations.md."
+            f"{', '.join(leaks)}. {_egress_hint(s, leaks)}"
         )
         if s.egress_guard == "enforce":
             raise EgressNotIsolated(message)
@@ -263,6 +282,9 @@ class DockerBackend:
             security_opt=["no-new-privileges"],
             mem_limit="128m",
             pids_limit=64,
+            # host.docker.internal resolves on Docker Desktop by itself; on Linux it
+            # needs this, or the probe never tries the Docker host's own ports.
+            extra_hosts={"host.docker.internal": "host-gateway"},
         )
         try:
             container.wait(timeout=60)

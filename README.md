@@ -19,6 +19,16 @@ Open http://127.0.0.1:8000/. In dev mode a picker in the header lets you act as 
 
 Tests: `pytest` runs unit tests anywhere. With `TEST_DATABASE_URL` pointing at a Postgres database ending in `_test` (compose exposes one on `localhost:5432/sandbox_test`), the database and end-to-end pipeline tests run too.
 
+## Deploy on a Linux host
+
+1. Install Docker (with its default iptables firewall) and the compose plugin. Clone the repository.
+2. `cp .env.example .env` and edit it. For anything beyond a trial, set `SANDBOX_SECRET_KEY` (`openssl rand -hex 32`).
+3. `sudo scripts/host-setup.sh --fix`. It turns on `br_netfilter` and keeps it on after reboots. It also checks Docker's firewall backend, the host's iptables backend (legacy or nf_tables), SELinux, `.env` and the images, and prints the command to run for anything it does not fix.
+4. `docker compose --profile build build`, then `docker compose up -d --build`.
+5. `scripts/host-setup.sh` again: it reports whether the egress guard installed its rules. Then submit a test URL. If the worker says "Egress isolation check failed", the message names the cause.
+
+SELinux can stay enforcing, and the iptables backend can be legacy or nf_tables: the stack handles both. Details are in [docs/operations.md](docs/operations.md#linux-hosts-selinux-and-the-iptables-backend).
+
 ## What it does
 
 | Area | Where |
