@@ -1,8 +1,9 @@
-# Publishes the API on the LAN as well as on 127.0.0.1.
+# Publishes the API on the LAN as well as on the local address in compose.yaml.
 #   docker compose -f compose.yaml -f compose.lan.yaml up -d
+# Set SANDBOX_LAN_IP (and SANDBOX_LAN_PORT if 8000 is taken) in .env first.
 # Dev auth has no sign-in: anyone who can reach this address can act as admin.
 # See docs/lan-exposure-assessment.md before using this on an untrusted network.
 services:
   api:
     ports:
-      - "${SANDBOX_LAN_IP:-192.168.1.20}:8000:8000"
+      - "${SANDBOX_LAN_IP:?set SANDBOX_LAN_IP in .env to this host's LAN address}:${SANDBOX_LAN_PORT:-8000}:8000"
