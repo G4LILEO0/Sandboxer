@@ -75,7 +75,7 @@ Analysts copy text into a session (for example new URLs to visit) and copy text 
 | session containers | Internet only, enforced by `egress-guard`. Started from `sandbox-session:latest`, removed after every session |
 | `egress-guard` | The Docker host's network namespace and `NET_ADMIN`, nothing else. Without it, the worker refuses to start sessions |
 | pcap sidecar | Shares one session's network namespace. Its only capability is `NET_RAW` |
-| Suricata (optional) | `SANDBOX_SURICATA_IMAGE`, for example `jasonish/suricata:7.0`. Without it, the sandbox stores pcaps but does not scan them, and publishes Suricata rules in bundles unvalidated (the bundle says so). Suricata also scans HTTPS requests from the HAR as plaintext, unless `SANDBOX_SURICATA_DECRYPTED_HTTPS=false` (see detection-rules.md) |
+| Suricata | `SANDBOX_SURICATA_IMAGE`. Compose pulls `jasonish/suricata:7.0` from Docker Hub and turns Suricata on by default. Set the variable to empty in `.env` to turn it off. Without it, the sandbox stores pcaps but does not scan them, and publishes Suricata rules in bundles unvalidated (the bundle says so). Suricata also scans HTTPS requests from the HAR as plaintext, unless `SANDBOX_SURICATA_DECRYPTED_HTTPS=false` (see detection-rules.md) |
 
 Several API instances and workers can run against one database. Workers claim work with `SKIP LOCKED` under an advisory lock and keep a heartbeat. When a worker dies, the next worker re-adopts its running sessions or fails them cleanly.
 

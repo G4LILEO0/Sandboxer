@@ -26,8 +26,9 @@ x-app-env: &app-env
   SANDBOX_ABUSEIPDB_API_KEY: ${SANDBOX_ABUSEIPDB_API_KEY:-}
   # abuse.ch Auth-Key for the URLhaus, ThreatFox and MalwareBazaar feeds.
   SANDBOX_ABUSECH_AUTH_KEY: ${SANDBOX_ABUSECH_AUTH_KEY:-}
-  # Optional Suricata over session pcaps, e.g. jasonish/suricata:7.0.
-  SANDBOX_SURICATA_IMAGE: ${SANDBOX_SURICATA_IMAGE:-}
+  # Suricata over session pcaps, from the Docker Hub image that the suricata-image
+  # service pulls. On by default. Set SANDBOX_SURICATA_IMAGE= (empty) in .env to turn it off.
+  SANDBOX_SURICATA_IMAGE: ${SANDBOX_SURICATA_IMAGE-jasonish/suricata:7.0}
 
 services:
   postgres:
@@ -132,8 +133,8 @@ services:
       dockerfile: docker/pcap.Dockerfile
     image: sandbox-pcap:latest
 
-  # The worker runs Suricata in short-lived containers from this image, so `up` pulls it
-  # (if missing) and checks it starts before the worker does. Exits straight away.
+  # The worker runs Suricata in short-lived containers from this image. `up` pulls it from
+  # Docker Hub (if missing) and checks it starts before the worker does. Exits straight away.
   suricata-image:
     image: ${SANDBOX_SURICATA_IMAGE:-jasonish/suricata:7.0}
     pull_policy: missing
