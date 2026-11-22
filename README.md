@@ -8,6 +8,40 @@ Internal URL sandbox. You submit a link, and the sandbox opens it in a disposabl
 
 **Status:** the code implements development plan steps 1–9, and the sandbox enforces session egress isolation (see the operations notes). Infrastructure (hosting, backups) is the deferred phase.
 
+## Install
+
+On a Windows workstation, do all steps. On a Linux server, start at step 6.
+
+**On Windows, in PowerShell as administrator**
+
+1. Run `wsl --install -d Ubuntu-24.04` (installs WSL 2 and Ubuntu. Restart Windows when it asks, then open Ubuntu and set a Linux user name and password).
+2. Run `notepad $env:USERPROFILE\.wslconfig` (sets the memory and CPU for WSL. Put `[wsl2]`, `memory=8GB` and `processors=4` on three lines, or as much as the workstation can spare, and save).
+3. Run `wsl --shutdown` (restarts WSL, so that it uses the new memory and CPU settings).
+
+**In Ubuntu**
+
+4. Run `cat /etc/wsl.conf` (checks that systemd is on. Docker Engine runs as a systemd service. The file must have `systemd=true` under `[boot]`).
+5. If step 4 did not show `systemd=true`, run `sudo nano /etc/wsl.conf`, add the two lines `[boot]` and `systemd=true`, then run `wsl --shutdown` in PowerShell (turns on systemd).
+6. Run `sudo apt-get update && sudo apt-get install -y git curl openssl` (installs the tools that the next steps use).
+7. Run `curl -fsSL https://get.docker.com | sh` (installs Docker Engine and the Compose plugin with Docker's official script. In WSL, the script shows a Docker Desktop message and waits 20 seconds. Let it continue).
+8. Run `sudo usermod -aG docker $USER` (lets your user run Docker without sudo. Close the terminal and open it again so that this applies).
+9. Run `docker run --rm hello-world` (checks that Docker works).
+10. Run `git clone https://github.com/G4LILEO0/Sandboxer.git ~/Sandboxer` (gets the code. In WSL, keep it in the Linux file system, not under `/mnt/c`, because file access there is slow).
+11. Run `cd ~/Sandboxer` (all the next commands run in this folder).
+12. Run `cp .env.example .env` (creates your settings file).
+13. Run `sed -i "s/^# SANDBOX_SECRET_KEY=.*/SANDBOX_SECRET_KEY=$(openssl rand -hex 32)/" .env` (sets a random key that signs cookies and links).
+14. Run `nano .env` (adds your keys. Set `SANDBOX_ABUSECH_AUTH_KEY`, and the VirusTotal and AbuseIPDB keys if you have them).
+15. Run `sudo scripts/host-setup.sh --fix` (turns on `br_netfilter`, so that the firewall also controls traffic between containers, and checks the host).
+16. Run `docker compose --profile build build` (builds the session browser image and the pcap image).
+17. Run `docker compose up -d --build` (starts the API, the worker, Postgres and the egress guard, and pulls the Suricata image).
+18. Run `scripts/host-setup.sh` (checks that the egress guard installed its firewall rules).
+19. Open `http://localhost:8000/` in a browser on the same computer (opens the Sandboxer UI. WSL forwards `localhost` from Windows to Ubuntu).
+20. In Admin > Configuration, set `max_concurrent_sessions` to 1 or 2 on a workstation (prevents too many sessions in the limited memory of WSL).
+
+Company workstations cannot use Docker Desktop, so they run Sandboxer in WSL 2 until the server deployment. WSL gets only part of the workstation's memory and CPU, so analysis there is slow.
+
+SELinux can stay enforcing, and the iptables backend can be legacy or nf_tables: the stack handles both. Troubleshooting for WSL and Linux hosts is in [docs/operations.md](docs/operations.md#windows-workstations-wsl-with-docker-engine).
+
 ## Run locally
 
 ```sh
@@ -18,30 +52,6 @@ docker compose up --build                # API + UI on http://127.0.0.1:8000, wo
 Open http://127.0.0.1:8000/. In dev mode a picker in the header lets you act as any user and role.
 
 Tests: `pytest` runs unit tests anywhere. With `TEST_DATABASE_URL` pointing at a Postgres database ending in `_test` (compose exposes one on `localhost:5432/sandbox_test`), the database and end-to-end pipeline tests run too.
-
-## Deploy on a Linux host
-
-1. Install Docker (with its default iptables firewall) and the compose plugin. Clone the repository.
-2. `cp .env.example .env` and edit it. For anything beyond a trial, set `SANDBOX_SECRET_KEY` (`openssl rand -hex 32`).
-3. `sudo scripts/host-setup.sh --fix`. It turns on `br_netfilter` and keeps it on after reboots. It also checks Docker's firewall backend, the host's iptables backend (legacy or nf_tables), SELinux, `.env` and the images, and prints the command to run for anything it does not fix.
-4. `docker compose --profile build build`, then `docker compose up -d --build`.
-5. `scripts/host-setup.sh` again: it reports whether the egress guard installed its rules. Then submit a test URL. If the worker says "Egress isolation check failed", the message names the cause.
-
-SELinux can stay enforcing, and the iptables backend can be legacy or nf_tables: the stack handles both. Details are in [docs/operations.md](docs/operations.md#linux-hosts-selinux-and-the-iptables-backend).
-
-## Run on a Windows workstation (WSL, no Docker Desktop)
-
-Work laptops that cannot use Docker Desktop run Sandboxer in Ubuntu under WSL 2, with Docker Engine inside Ubuntu. This is the interim setup until the server deployment. It is slower than a server because of the WSL memory and CPU limits.
-
-1. In PowerShell as administrator: `wsl --install -d Ubuntu-24.04`, then restart Windows.
-2. Give WSL memory and CPUs in `%UserProfile%\.wslconfig` (for example `memory=8GB`, `processors=4`), then `wsl --shutdown`.
-3. In Ubuntu: make sure `/etc/wsl.conf` has `systemd=true` under `[boot]`.
-4. Install Docker Engine from Docker's apt repository (not Docker Desktop), and add your user to the `docker` group.
-5. Clone the repository into `~/Sandboxer` (not under `/mnt/c`), then follow "Deploy on a Linux host" from step 2.
-6. Open http://localhost:8000/ in a Windows browser.
-7. Set Admin > Configuration > `max_concurrent_sessions` to 1 or 2.
-
-The full commands, the iptables and `br_netfilter` notes and the performance advice are in [docs/operations.md](docs/operations.md#windows-workstations-wsl-with-docker-engine).
 
 ## What it does
 

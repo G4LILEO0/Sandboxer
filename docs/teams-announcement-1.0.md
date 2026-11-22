@@ -13,7 +13,7 @@ What it does:
 
 If Sandboxer gives a wrong verdict for a malicious link, open the report and select "Report missed detection". Send me the zip that downloads. I use it to write new detection rules.
 
-How to run it: Until the server is ready, Sandboxer runs on your Windows laptop in WSL (Ubuntu), with Docker Engine. We cannot use Docker Desktop. The setup steps are in the release notes, section 7.4.
+How to run it: Until the server is ready, Sandboxer runs on your Windows laptop in WSL (Ubuntu), with Docker Engine. We cannot use Docker Desktop. The setup steps are in the release notes, section 2.2.
 
 Limitation: WSL gets only part of the laptop's memory and CPU. Each analysis is slow, and only 1 or 2 can run at the same time. The server deployment removes this limit.
 

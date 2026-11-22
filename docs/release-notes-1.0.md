@@ -23,25 +23,127 @@ Sandboxer has three modes of work:
 
 Release 1.0 is ready for team use on a single host. It is not ready for production. Section 9 gives the known limitations, and section 10 gives the work that is necessary before production.
 
-Until the server deployment, the team runs Sandboxer on Windows workstations in WSL 2 (Windows Subsystem for Linux), with Docker Engine inside Ubuntu. Company workstations cannot use Docker Desktop, because the company size rules out its free licence. The WSL virtual machine gets only part of the workstation's memory and CPU, so analysis in this setup is slow. Section 7.4 describes the setup, and section 9.3 describes the limitation.
+Until the server deployment, the team runs Sandboxer on Windows workstations in WSL 2 (Windows Subsystem for Linux), with Docker Engine inside Ubuntu. Company workstations cannot use Docker Desktop, because the company size rules out its free licence. The WSL virtual machine gets only part of the workstation's memory and CPU, so analysis in this setup is slow. Section 2 describes the setup, and section 9.3 describes the limitation.
 
 ### 1.1 Document structure
 
 | Section | Contents |
 | --- | --- |
-| 2 | Highlights of the release |
-| 3 | Architecture and components |
-| 4 | Features, area by area |
-| 5 | Detection content |
-| 6 | Security controls, the security review and the re-assessment |
-| 7 | Installation and configuration |
+| 2 | Installation and configuration |
+| 3 | Highlights of the release |
+| 4 | Architecture and components |
+| 5 | Features, area by area |
+| 6 | Detection content |
+| 7 | Security controls, the security review and the re-assessment |
 | 8 | Operation and day-to-day tasks |
 | 9 | Known limitations |
 | 10 | Roadmap |
 | Appendix A | Settings reference |
 | Appendix B | Security findings |
 
-## 2. Highlights
+## 2. Installation
+
+### 2.1 Requirements
+
+- A Windows workstation with WSL 2 (the interim setup), or a Linux server with Docker Engine.
+- Internet access for the worker and the session containers.
+- Access to Docker Hub. Compose pulls the Suricata image (`jasonish/suricata:7.0`) and Postgres from Docker Hub.
+- A free abuse.ch Auth-Key for URLhaus, ThreatFox and MalwareBazaar, from `https://auth.abuse.ch/`.
+- Optional: VirusTotal and AbuseIPDB API keys for enrichment.
+
+Company workstations cannot use Docker Desktop. Until the server deployment, Sandboxer runs in Ubuntu under WSL 2, with Docker Engine installed inside Ubuntu.
+
+### 2.2 Installation steps
+
+On a Windows workstation, do all steps. On a Linux server, start at step 6.
+
+**On Windows, in PowerShell as administrator**
+
+1. Run `wsl --install -d Ubuntu-24.04` (installs WSL 2 and Ubuntu. Restart Windows when it asks, then open Ubuntu and set a Linux user name and password).
+2. Run `notepad $env:USERPROFILE\.wslconfig` (sets the memory and CPU for WSL. Put `[wsl2]`, `memory=8GB` and `processors=4` on three lines, or as much as the workstation can spare, and save).
+3. Run `wsl --shutdown` (restarts WSL, so that it uses the new memory and CPU settings).
+
+**In Ubuntu**
+
+4. Run `cat /etc/wsl.conf` (checks that systemd is on. Docker Engine runs as a systemd service. The file must have `systemd=true` under `[boot]`).
+5. If step 4 did not show `systemd=true`, run `sudo nano /etc/wsl.conf`, add the two lines `[boot]` and `systemd=true`, then run `wsl --shutdown` in PowerShell (turns on systemd).
+6. Run `sudo apt-get update && sudo apt-get install -y git curl openssl` (installs the tools that the next steps use).
+7. Run `curl -fsSL https://get.docker.com | sh` (installs Docker Engine and the Compose plugin with Docker's official script. In WSL, the script shows a Docker Desktop message and waits 20 seconds. Let it continue).
+8. Run `sudo usermod -aG docker $USER` (lets your user run Docker without sudo. Close the terminal and open it again so that this applies).
+9. Run `docker run --rm hello-world` (checks that Docker works).
+10. Run `git clone https://github.com/G4LILEO0/Sandboxer.git ~/Sandboxer` (gets the code. In WSL, keep it in the Linux file system, not under `/mnt/c`, because file access there is slow).
+11. Run `cd ~/Sandboxer` (all the next commands run in this folder).
+12. Run `cp .env.example .env` (creates your settings file).
+13. Run `sed -i "s/^# SANDBOX_SECRET_KEY=.*/SANDBOX_SECRET_KEY=$(openssl rand -hex 32)/" .env` (sets a random key that signs cookies and links).
+14. Run `nano .env` (adds your keys. Set `SANDBOX_ABUSECH_AUTH_KEY`, and the VirusTotal and AbuseIPDB keys if you have them).
+15. Run `sudo scripts/host-setup.sh --fix` (turns on `br_netfilter`, so that the firewall also controls traffic between containers, and checks the host).
+16. Run `docker compose --profile build build` (builds the session browser image and the pcap image).
+17. Run `docker compose up -d --build` (starts the API, the worker, Postgres and the egress guard, and pulls the Suricata image).
+18. Run `scripts/host-setup.sh` (checks that the egress guard installed its firewall rules).
+19. Open `http://localhost:8000/` in a browser on the same computer (opens the Sandboxer UI. WSL forwards `localhost` from Windows to Ubuntu).
+20. In Admin > Configuration, set `max_concurrent_sessions` to 1 or 2 on a workstation (prevents too many sessions in the limited memory of WSL).
+
+The API applies the database migrations each time it starts. In dev mode, a menu in the page header lets you act as any user and role.
+
+Run step 16 again after each change to the runner. A missing session image looks like an egress error.
+
+### 2.3 Notes for WSL workstations
+
+- Keep an Ubuntu window open while you use Sandboxer, because WSL can stop Ubuntu when all its windows close. After a restart, open Ubuntu, run `cd ~/Sandboxer`, then run `docker compose up -d`.
+- If Docker does not start and `sudo journalctl -u docker` shows iptables errors, run `sudo update-alternatives --set iptables /usr/sbin/iptables-legacy` and `sudo update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy`, then run `sudo systemctl restart docker`. The egress guard works with either backend.
+- If `modprobe br_netfilter` fails in step 15, run `ls /proc/sys/net/bridge`. If that folder exists, the WSL kernel has the function built in, and the sysctls are enough.
+- If `http://localhost:8000/` does not open from Windows, check that `localhostForwarding` is not set to `false` in `.wslconfig`.
+- Do not use `compose.lan.yaml` on a workstation.
+
+`docs/operations.md`, section "Windows workstations: WSL with Docker Engine", gives more detail.
+
+### 2.4 Notes for Linux servers
+
+`scripts/host-setup.sh` without `--fix` changes nothing. It checks Docker, Docker's firewall backend, rootless mode, `br_netfilter`, the iptables backend, the guard rules, firewalld, SELinux, `.env` and the images. For each problem that it does not fix, it gives the command to run.
+
+With `--fix`, the script loads the `br_netfilter` module and sets the bridge sysctls to 1. It also writes files in `/etc/modules-load.d/` and `/etc/sysctl.d/`, so that both settings stay after a reboot. Without `br_netfilter`, traffic between containers on the bridge does not go through the firewall rules.
+
+The stack handles these Linux differences automatically:
+
+- **SELinux.** SELinux can stay in enforcing mode. The worker container runs with `label=disable`, so it can use the Docker socket. The Postgres init file uses the `:z` mount option.
+- **iptables backend.** The guard image contains both `iptables-nft` and `iptables-legacy`. The guard finds Docker's `DOCKER-USER` chain on either backend. `SANDBOX_EGRESS_IPTABLES` (`auto`, `nft` or `legacy`) can set the backend.
+- **Clear errors.** If the worker cannot reach Docker, it logs the cause in one line and stops. If no backend has the `DOCKER-USER` chain, the guard logs a "NOT isolated" error. The probe error names `br_netfilter` when the module is missing.
+- **Host ports.** On Linux, the isolation probe also tests the Docker host's own ports.
+
+### 2.5 Configuration
+
+Static settings are `SANDBOX_*` environment variables in `.env`. Admins change runtime settings in Admin > Configuration, and Postgres stores them. Appendix A lists the most important settings. `docs/operations.md` describes all settings.
+
+### 2.6 Single sign-on
+
+1. Set `SANDBOX_AUTH_MODE=oidc`.
+2. Set `SANDBOX_OIDC_ISSUER`, `SANDBOX_OIDC_CLIENT_ID`, `SANDBOX_OIDC_CLIENT_SECRET` and `SANDBOX_OIDC_REDIRECT_URL` (`https://<host>/auth/callback`).
+3. Map identity-provider groups to roles with `SANDBOX_OIDC_ROLE_MAP`, for example `{"sg-soc": "analyst", "sg-soc-leads": "senior_analyst"}`.
+
+### 2.7 LAN access
+
+By default, the API listens only on `127.0.0.1`, port 8000. Set `SANDBOX_API_BIND` and `SANDBOX_API_PORT` in `.env` to change this. The optional file `compose.lan.yaml` also publishes the API on a LAN address:
+
+`docker compose -f compose.yaml -f compose.lan.yaml up -d`
+
+Before you use this file, set `SANDBOX_LAN_IP` to the host's LAN address in `.env`. Compose refuses to start without it. `SANDBOX_LAN_PORT` sets the port on that address (default 8000).
+
+Do not use this file until a sign-in proxy is in front of the API and `SANDBOX_SECRET_KEY` has a random value. Section 9.2 explains why.
+
+### 2.8 Production checklist
+
+Before production, complete these steps. `docs/operations.md` gives the details.
+
+1. Keep the egress guard running, with `SANDBOX_EGRESS_GUARD=enforce`.
+2. Run the worker on a dedicated host or VM, and use gVisor where available.
+3. Set a long random `SANDBOX_SECRET_KEY`, the same on each API instance.
+4. Configure OIDC single sign-on.
+5. Check the licence and key for each feed.
+6. Get the legal and safety sign-off.
+7. Set `SANDBOX_NOVNC_DIR` so that the API serves the live-view page itself.
+8. Set `SANDBOX_METRICS_TOKEN`.
+
+## 3. Highlights
 
 - Hardened, disposable browser container for each run, with network isolation for IPv4 and IPv6.
 - 85 built-in behaviour rules and 11 web YARA rules for current phishing and malware-delivery kits.
@@ -56,9 +158,9 @@ Until the server deployment, the team runs Sandboxer on Windows workstations in 
 - OIDC single sign-on, four roles, service tokens with scopes, and an append-only audit log.
 - A full security review and a re-assessment before release. 16 of 24 findings are fixed, and the re-assessment found no new High finding.
 
-## 3. Architecture
+## 4. Architecture
 
-### 3.1 Components
+### 4.1 Components
 
 Sandboxer runs as a set of Docker containers on one host.
 
@@ -72,7 +174,7 @@ Sandboxer runs as a set of Docker containers on one host.
 | Postgres | Stores the queue, the analyses, rules, feeds, settings and the audit log. | Local volume |
 | Suricata | Scans the session pcap. Compose pulls the image from Docker Hub. | Read access to the pcap |
 
-### 3.2 Processing flow
+### 4.2 Processing flow
 
 1. An analyst or a system submits a URL. The API normalises the URL, applies the SSRF guard and the quotas, and puts the run in the queue.
 2. A worker takes the run from the queue. It checks network isolation, then starts a session container and a pcap sidecar.
@@ -81,16 +183,16 @@ Sandboxer runs as a set of Docker containers on one host.
 5. The worker calculates the score and the verdict, extracts the IoCs and maps the findings to MITRE ATT&CK.
 6. The API shows the report. If a client registered a webhook, Sandboxer sends a signed notification.
 
-### 3.3 Technology
+### 4.3 Technology
 
 - Python with FastAPI for the API. Postgres 16 for all state, with Alembic migrations.
 - Chromium, driven by Patchright, inside the session container. Patchright has the same interface as Playwright, but bot checks cannot see it.
 - A static HTML and JavaScript UI with no build step.
 - A filesystem artifact store behind an `ArtifactStore` interface. An S3-compatible store can replace it later.
 
-## 4. Features
+## 5. Features
 
-### 4.1 URL submission
+### 5.1 URL submission
 
 - Analysts submit URLs from the web UI, the API, a bulk list or an embeddable widget.
 - Each run has options: automated or live, the time limit (30 to 3600 seconds), the locale, the time zone and the screen size.
@@ -100,7 +202,7 @@ Sandboxer runs as a set of Docker containers on one host.
 - Quotas limit the number of runs for each user. A per-analyst limit controls the number of live sessions.
 - Sandboxer can give a recent report for the same URL and not run the URL again.
 
-### 4.2 Isolated detonation
+### 5.2 Isolated detonation
 
 - Each run gets a new container. Sandboxer removes the container after the run.
 - The container runs as non-root, with a read-only root filesystem, no Linux capabilities and resource limits. gVisor (`runsc`) is optional.
@@ -109,7 +211,7 @@ Sandboxer runs as a set of Docker containers on one host.
 - Sessions block service workers by default.
 - All outbound requests from Sandboxer send a desktop Chrome user agent. This includes feeds, webhooks, domain lookups and the redirect walker. Cloaking kits send non-browser clients to a decoy page, so this setting is important.
 
-### 4.3 Network isolation
+### 5.3 Network isolation
 
 A detonated page must reach the internet and nothing else. The browser refuses internal addresses for each request. The network also enforces this rule, because DNS rebinding, WebRTC and other paths can avoid a check in the browser.
 
@@ -121,7 +223,7 @@ A detonated page must reach the internet and nothing else. The browser refuses i
 - The worker keeps a passed test for 5 minutes.
 - The guard works on Docker Desktop and on Linux hosts that use Docker's iptables firewall.
 
-### 4.4 IPv6 support
+### 5.4 IPv6 support
 
 - Sessions can reach public IPv6 sites. The session network has an IPv6 subnet (`fd5b:d213:5e55::/64`), and Docker translates it to the host's IPv6 address (NAT66).
 - The guard applies the IPv4 blocks to IPv6 too. It blocks ULA (`fc00::/7`), link-local (`fe80::/10`), site-local, loopback, IPv4-mapped and translated addresses, NAT64, 6to4, Teredo, multicast, and the documentation and reserved ranges.
@@ -131,7 +233,7 @@ A detonated page must reach the internet and nothing else. The browser refuses i
 - When IPv6 becomes available, the worker turns it on again within 5 minutes.
 - The pcap records IPv6 traffic, and Suricata treats the session IPv6 range as the home network.
 
-### 4.5 Capture
+### 5.5 Capture
 
 During each run, Sandboxer records the following:
 
@@ -146,7 +248,7 @@ During each run, Sandboxer records the following:
 
 When a session ends, the runner writes its results within 20 seconds. If the browser is still closing, the runner writes a partial result, so the capture is not lost.
 
-### 4.6 Live sessions
+### 5.6 Live sessions
 
 - The analyst controls the sandbox browser from the web UI through noVNC.
 - The API checks a token before it streams a session. Other analysts can watch as read-only observers, and the server enforces read-only access.
@@ -155,7 +257,7 @@ When a session ends, the runner writes its results within 20 seconds. If the bro
 - The analyst can extend, pause or end a session.
 - Only the submitter or a senior analyst can cancel an analysis or end a live session.
 
-### 4.7 Clipboard transfer in live sessions
+### 5.7 Clipboard transfer in live sessions
 
 - The analyst can copy text into the session, for example a new URL. The analyst can also copy text out of the session, for example a command from a lure.
 - Each copy is one explicit request. VNC clipboard sync stays off, so nothing syncs automatically.
@@ -164,7 +266,7 @@ When a session ends, the runner writes its results within 20 seconds. If the bro
 - Admins can turn off each direction and change the size limit.
 - Text that the analyst copies inside the session does not count as a page clipboard write, so it does not change the verdict.
 
-### 4.8 Queue and reliability
+### 5.8 Queue and reliability
 
 - A Postgres queue holds the runs. A global limit controls the number of sessions that run at the same time.
 - The UI shows the position of each run in the queue and its estimated start time.
@@ -172,7 +274,7 @@ When a session ends, the runner writes its results within 20 seconds. If the bro
 - More than one API and more than one worker can use one database. Workers claim work with `SKIP LOCKED` under an advisory lock, and each worker sends a heartbeat.
 - If a worker stops, the next worker takes its running sessions or fails them cleanly.
 
-### 4.9 Bot-check handling
+### 5.9 Bot-check handling
 
 Many sites, and many phishing kits, put a Cloudflare check in front of the page. A run that sees only the check does not see the site. Sandboxer handles these checks as follows:
 
@@ -185,11 +287,11 @@ Many sites, and many phishing kits, put a Cloudflare check in front of the page.
 - The timeline shows each step, with a screenshot of the challenge.
 - If the run cannot get past the check, the verdict is "unknown", not "benign", unless other evidence scored the page. The report then gives the Cloudflare Ray ID and recommends a live re-run or another egress IP.
 
-### 4.10 Analysis and scoring
+### 5.10 Analysis and scoring
 
 Sandboxer uses five sources of evidence to score each run:
 
-1. **Behaviour rules.** Declarative rules match facts that the analysis builds from the capture. Section 5 describes them.
+1. **Behaviour rules.** Declarative rules match facts that the analysis builds from the capture. Section 6 describes them.
 2. **YARA.** Web YARA rules scan the DOM, scripts and downloads.
 3. **Threat feeds.** Sandboxer matches each URL, domain, IP address and file hash against the feed indicators.
 4. **Suricata.** Suricata scans the pcap with ET Open and local rules. It is on by default.
@@ -199,7 +301,7 @@ Each hit adds points to a weighted score. A score of 70 or more is malicious. A 
 
 The report lists every contribution to the score. The Evidence button shows what each rule matched on. Sandboxer can recalculate any verdict from the stored hits, weights and thresholds.
 
-### 4.11 Suricata over HTTPS
+### 5.11 Suricata over HTTPS
 
 The session pcap holds HTTPS as encrypted data, so Suricata's HTTP rules match only plain HTTP traffic. Sandboxer solves this problem without a TLS proxy:
 
@@ -212,7 +314,7 @@ The session pcap holds HTTPS as encrypted data, so Suricata's HTTP rules match o
 
 A TLS proxy changes the TLS fingerprint that the site sees, so Sandboxer does not use one.
 
-### 4.12 Reports
+### 5.12 Reports
 
 - The report shows the verdict and the explanation first.
 - The report then shows screenshots, the video, a timeline with links to each event, and a network tab. It also shows the DOM, scripts, forms, the frame tree, domains and TLS.
@@ -221,9 +323,9 @@ A TLS proxy changes the TLS fingerprint that the site sees, so Sandboxer does no
 - Analysts can add notes and tags, and override the verdict.
 - Analysts can analyse a stored run again with new rules. Each analysis is a new version, and analysts can compare versions. Each version records the rule bundle and the detection-strings version that it used.
 - Analysts can print a report to PDF from the browser.
-- Export > All artifacts gives every stored artifact as one encrypted zip. Section 4.19 describes the bundle.
+- Export > All artifacts gives every stored artifact as one encrypted zip. Section 5.19 describes the bundle.
 
-### 4.13 IoC lookup
+### 5.13 IoC lookup
 
 - The lookup page accepts URLs, domains, IP addresses, file hashes and email addresses. The analyst can paste text, and the page finds the IoCs in it. It ignores normal prose.
 - The page first checks Sandboxer's own data through `/v1/intel/local`: the threat feeds, past analyses and the allowlist. No data leaves the server for this step.
@@ -234,7 +336,7 @@ A TLS proxy changes the TLS fingerprint that the site sees, so Sandboxer does no
 - VirusTotal pivots show related domains, IP addresses and files, with the full vendor details.
 - The analyst can filter and sort the results by verdict, copy the IoC list and detonate a URL or domain result.
 
-### 4.14 Feeds
+### 5.14 Feeds
 
 Sandboxer includes these feeds:
 
@@ -253,7 +355,7 @@ Sandboxer includes these feeds:
 - If a new download drops 90% of the indicators, Sandboxer refuses it.
 - Admin > Feeds shows the last error for each feed. "Run now" tries the feed again.
 
-### 4.15 Rules and bundles
+### 5.15 Rules and bundles
 
 - Rules live in Postgres: YARA, Suricata and behaviour rules.
 - Sandboxer publishes rules as versioned bundles. It checks each bundle before it goes live.
@@ -262,7 +364,7 @@ Sandboxer includes these feeds:
 - A detection engineer can disable a noisy rule, with a reason. Sandboxer then builds a new bundle.
 - Sandboxer turns off YARA `include` statements, so rule text cannot read files on the host.
 
-### 4.16 Detection strings
+### 5.16 Detection strings
 
 The detection logic uses 96 detection strings: keyword patterns, host lists, file types, ports and points. Before this release, only a developer could change them.
 
@@ -273,7 +375,7 @@ The detection logic uses 96 detection strings: keyword patterns, host lists, fil
 - Each change can be reverted to the default.
 - A detection engineer can also edit the body of each built-in behaviour or YARA rule. The edit stays until the engineer selects "Revert to built-in".
 
-### 4.17 Administration
+### 5.17 Administration
 
 Admin pages manage these items:
 
@@ -287,7 +389,7 @@ Admin pages manage these items:
 - Runtime settings: concurrency, quotas, time limits, retention, thresholds, embed origins and clipboard settings
 - The audit log
 
-### 4.18 API and integration
+### 5.18 API and integration
 
 - A REST API covers submission, status, reports, IoC export, the IoC lookup and administration.
 - The API documents itself at `/docs`, with the OpenAPI schema at `/openapi.json`.
@@ -295,7 +397,7 @@ Admin pages manage these items:
 - Webhooks notify a client when an analysis completes. Sandboxer signs each webhook with an HMAC of the time stamp and the body.
 - An embeddable widget lets an internal site submit URLs and show results. Admins set the allowed embed origins.
 
-### 4.19 Missed detections and artifact export
+### 5.19 Missed detections and artifact export
 
 Sometimes an analyst knows that a URL is malicious, but the verdict is benign or unknown. Sandboxer gives a direct path from that analyst to the detection engineer.
 
@@ -320,9 +422,9 @@ The `capture/` folder uses the runner's own layout. The detection engineer can r
 - The bundle has a size limit (`artifact_bundle_max_mb`, default 512 MB). Video, pcap and screenshots go in last, so they are the first files to be left out. The manifest lists each file that is not in the bundle.
 - Export > All artifacts gives the same bundle without the tag, the note or the missed-detection report.
 
-## 5. Detection content
+## 6. Detection content
 
-### 5.1 Summary
+### 6.1 Summary
 
 | Item | Count |
 | --- | --- |
@@ -334,7 +436,7 @@ The `capture/` folder uses the runner's own layout. The detection engineer can r
 
 Each rule has at least one true-positive test. Where it is important, a rule also has a test for the closest false positive.
 
-### 5.2 Coverage
+### 6.2 Coverage
 
 | Threat | Examples of what Sandboxer detects |
 | --- | --- |
@@ -350,7 +452,7 @@ Each rule has at least one true-positive test. Where it is important, a rule als
 
 `docs/detection-catalog.md` lists each rule, and `docs/detection-rules.md` explains how to write and tune rules.
 
-### 5.3 Validation against live samples
+### 6.3 Validation against live samples
 
 Several rounds of tests ran the rules against live phishing and malware samples. These live samples caused changes in this release:
 
@@ -360,14 +462,14 @@ Several rounds of tests ran the rules against live phishing and malware samples.
 - A kit with its own Turnstile gate failed the check and lost its capture. Sandboxer now passes the check in most tries and keeps the capture.
 - A benign site got a false internal-network-probe hit. Its DNS answer was an IPv4-mapped IPv6 address. Sandboxer now checks such an address as its IPv4 address, and mapped internal addresses stay blocked.
 
-When the rules miss a malicious URL, the analyst can now report it with its artifacts (section 4.19). Each report becomes input for the next detection round.
+When the rules miss a malicious URL, the analyst can now report it with its artifacts (section 5.19). Each report becomes input for the next detection round.
 
-## 6. Security
+## 7. Security
 
-### 6.1 Security controls
+### 7.1 Security controls
 
 - **Container hardening.** Non-root, read-only root filesystem, no capabilities, resource limits, optional gVisor.
-- **Network isolation.** The egress guard and the worker test, for IPv4 and IPv6 (sections 4.3 and 4.4).
+- **Network isolation.** The egress guard and the worker test, for IPv4 and IPv6 (sections 5.3 and 5.4).
 - **SSRF protection.** The submission guard and the redirect walker pin each request to an address that passed the check. Feed downloads and webhooks use the same guard.
 - **Authentication.** OIDC single sign-on, with group-to-role mapping. Service tokens for systems. Production refuses to start with dev authentication or a weak secret.
 - **Authorisation.** Four roles: analyst, senior analyst, detection engineer and admin. Restricted analyses are visible only to permitted users.
@@ -377,11 +479,11 @@ When the rules miss a malicious URL, the analyst can now report it with its arti
 - **Live-view protection.** A token-checked proxy, a strict content security policy and a type allowlist.
 - **Metrics.** In production, `/metrics` needs a token.
 
-### 6.2 Security review
+### 7.2 Security review
 
 A security review of the full code base took place on 2026-10-25. It found 24 issues. This release fixes 16 of them and partly fixes SR-09. Two informational findings have accepted risk. Five findings are open. `docs/security-review.md` gives the details.
 
-### 6.3 Security re-assessment
+### 7.3 Security re-assessment
 
 A re-assessment on 2026-11-22 checked the release build (`73a7bbf`). It covered the 22 commits after the LAN assessment, and it checked each earlier finding again. `docs/security-reassessment-2026-11-22.md` gives the details.
 
@@ -395,99 +497,6 @@ Two changes came after the re-assessment. A short check of each found no new fin
 
 - **Artifact bundle export.** It follows the rules for quarantined downloads: signed-in users only, visibility rules applied, encryption and an audit record.
 - **Linux host support.** The worker container runs with SELinux labels turned off (`label=disable`), so that it can use the Docker socket. This adds little risk, because socket access already gives root on the host (SR-19). The change applies to the worker only.
-
-## 7. Installation and configuration
-
-### 7.1 Requirements
-
-- Docker with Compose. The egress guard works on Docker Desktop and on Linux hosts that use Docker's iptables firewall. On Linux, both iptables backends (legacy and nf_tables) work, and SELinux can stay in enforcing mode.
-- Internet access for the worker and the session containers.
-- A free abuse.ch Auth-Key for URLhaus, ThreatFox and MalwareBazaar, from `https://auth.abuse.ch/`.
-- Optional: VirusTotal and AbuseIPDB API keys for enrichment.
-- Access to Docker Hub. Compose pulls the Suricata image (`jasonish/suricata:7.0`) and Postgres from Docker Hub.
-
-### 7.2 Procedure
-
-1. Get the release code from `https://github.com/G4LILEO0/Sandboxer.git`.
-2. Copy `.env.example` to `.env`.
-3. Set `SANDBOX_SECRET_KEY` to a random value of 32 or more characters.
-4. Set `SANDBOX_ABUSECH_AUTH_KEY`. Add the VirusTotal and AbuseIPDB keys if you have them.
-5. Build the session and pcap images: `docker compose --profile build build`
-6. Start the stack: `docker compose up --build`
-7. Open `http://127.0.0.1:8000/`.
-
-The API applies the database migrations each time it starts. In dev mode, a menu in the page header lets you act as any user and role.
-
-Build the session image again after each change to the runner. A missing session image looks like an egress error.
-
-### 7.3 Deployment on a Linux host
-
-1. Install Docker, with its default iptables firewall, and the Compose plugin. Clone the repository.
-2. Copy `.env.example` to `.env` and edit it. Set `SANDBOX_SECRET_KEY`, for example with `openssl rand -hex 32`.
-3. Run `sudo scripts/host-setup.sh --fix`.
-4. Build the images: `docker compose --profile build build`
-5. Start the stack: `docker compose up -d --build`
-6. Run `scripts/host-setup.sh` again. It tells you whether the egress guard installed its rules.
-7. Submit a test URL.
-
-`scripts/host-setup.sh` without `--fix` changes nothing. It checks Docker, Docker's firewall backend, rootless mode, `br_netfilter`, the iptables backend, the guard rules, firewalld, SELinux, `.env` and the images. For each problem that it does not fix, it gives the command to run.
-
-With `--fix`, the script loads the `br_netfilter` module and sets the bridge sysctls to 1. It also writes files in `/etc/modules-load.d/` and `/etc/sysctl.d/`, so that both settings stay after a reboot. Without `br_netfilter`, traffic between containers on the bridge does not go through the firewall rules.
-
-The stack handles these Linux differences automatically:
-
-- **SELinux.** The worker container runs with `label=disable`, so it can use the Docker socket. The Postgres init file uses the `:z` mount option.
-- **iptables backend.** The guard image contains both `iptables-nft` and `iptables-legacy`. The guard finds Docker's `DOCKER-USER` chain on either backend. `SANDBOX_EGRESS_IPTABLES` (`auto`, `nft` or `legacy`) can set the backend.
-- **Clear errors.** If the worker cannot reach Docker, it logs the cause in one line and stops. If no backend has the `DOCKER-USER` chain, the guard logs a "NOT isolated" error. The probe error names `br_netfilter` when the module is missing.
-- **Host ports.** On Linux, the isolation probe also tests the Docker host's own ports.
-
-### 7.4 Interim deployment on Windows workstations (WSL)
-
-Company workstations cannot use Docker Desktop. Until the server deployment, Sandboxer runs in Ubuntu under WSL 2, with Docker Engine installed inside Ubuntu. `docs/operations.md`, section "Windows workstations: WSL with Docker Engine", gives all commands.
-
-1. Install WSL and Ubuntu. In PowerShell as administrator, run `wsl --install -d Ubuntu-24.04`, then restart Windows.
-2. Set the memory and CPU for WSL in `%UserProfile%\.wslconfig`, for example `memory=8GB` and `processors=4`. Then run `wsl --shutdown`.
-3. In Ubuntu, make sure that `/etc/wsl.conf` has `systemd=true` in the `[boot]` section.
-4. Install Docker Engine from Docker's apt repository. Do not install Docker Desktop. Add your user to the `docker` group.
-5. Clone the repository into the Linux file system, for example `~/Sandboxer`. Do not use a folder under `/mnt/c`, because file access there is slow.
-6. Do steps 2 to 7 of section 7.3, including `sudo scripts/host-setup.sh --fix`.
-7. Open `http://localhost:8000/` in a Windows browser. WSL forwards `localhost` from Windows to Ubuntu.
-8. Set Admin > Configuration > `max_concurrent_sessions` to 1 or 2.
-
-Keep an Ubuntu window open while you use Sandboxer, because WSL can stop Ubuntu when all its windows close. If Docker shows iptables errors at start, switch Ubuntu to the legacy iptables backend. The egress guard works with either backend.
-
-### 7.5 Configuration
-
-Static settings are `SANDBOX_*` environment variables in `.env`. Admins change runtime settings in Admin > Configuration, and Postgres stores them. Appendix A lists the most important settings. `docs/operations.md` describes all settings.
-
-### 7.6 Single sign-on
-
-1. Set `SANDBOX_AUTH_MODE=oidc`.
-2. Set `SANDBOX_OIDC_ISSUER`, `SANDBOX_OIDC_CLIENT_ID`, `SANDBOX_OIDC_CLIENT_SECRET` and `SANDBOX_OIDC_REDIRECT_URL` (`https://<host>/auth/callback`).
-3. Map identity-provider groups to roles with `SANDBOX_OIDC_ROLE_MAP`, for example `{"sg-soc": "analyst", "sg-soc-leads": "senior_analyst"}`.
-
-### 7.7 LAN access
-
-By default, the API listens only on `127.0.0.1`, port 8000. Set `SANDBOX_API_BIND` and `SANDBOX_API_PORT` in `.env` to change this. The optional file `compose.lan.yaml` also publishes the API on a LAN address:
-
-`docker compose -f compose.yaml -f compose.lan.yaml up -d`
-
-Before you use this file, set `SANDBOX_LAN_IP` to the host's LAN address in `.env`. Compose refuses to start without it. `SANDBOX_LAN_PORT` sets the port on that address (default 8000).
-
-Do not use this file until a sign-in proxy is in front of the API and `SANDBOX_SECRET_KEY` has a random value. Section 9.2 explains why.
-
-### 7.8 Production checklist
-
-Before production, complete these steps. `docs/operations.md` gives the details.
-
-1. Keep the egress guard running, with `SANDBOX_EGRESS_GUARD=enforce`.
-2. Run the worker on a dedicated host or VM, and use gVisor where available.
-3. Set a long random `SANDBOX_SECRET_KEY`, the same on each API instance.
-4. Configure OIDC single sign-on.
-5. Check the licence and key for each feed.
-6. Get the legal and safety sign-off.
-7. Set `SANDBOX_NOVNC_DIR` so that the API serves the live-view page itself.
-8. Set `SANDBOX_METRICS_TOKEN`.
 
 ## 8. Operation
 

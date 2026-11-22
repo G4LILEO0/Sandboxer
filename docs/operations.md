@@ -1,6 +1,66 @@
 # Operations and security notes
 
-For whoever deploys and runs the sandbox. Read the "Before production" list first.
+For whoever deploys and runs the sandbox. Start with the installation steps below, then read the "Before production" list.
+
+## Windows workstations: WSL with Docker Engine
+
+Use this setup on a Windows workstation that cannot use Docker Desktop. Sandboxer runs in Ubuntu under WSL 2 (Windows Subsystem for Linux), with Docker Engine installed inside Ubuntu. This is an interim setup until the server deployment. It is slower than a server, because the WSL virtual machine gets only part of the workstation's memory and CPU.
+
+### Installation steps
+
+On a Windows workstation, do all steps. On a Linux server, start at step 6.
+
+**On Windows, in PowerShell as administrator**
+
+1. Run `wsl --install -d Ubuntu-24.04` (installs WSL 2 and Ubuntu. Restart Windows when it asks, then open Ubuntu and set a Linux user name and password).
+2. Run `notepad $env:USERPROFILE\.wslconfig` (sets the memory and CPU for WSL. Put `[wsl2]`, `memory=8GB` and `processors=4` on three lines, or as much as the workstation can spare, and save).
+3. Run `wsl --shutdown` (restarts WSL, so that it uses the new memory and CPU settings).
+
+**In Ubuntu**
+
+4. Run `cat /etc/wsl.conf` (checks that systemd is on. Docker Engine runs as a systemd service. The file must have `systemd=true` under `[boot]`).
+5. If step 4 did not show `systemd=true`, run `sudo nano /etc/wsl.conf`, add the two lines `[boot]` and `systemd=true`, then run `wsl --shutdown` in PowerShell (turns on systemd).
+6. Run `sudo apt-get update && sudo apt-get install -y git curl openssl` (installs the tools that the next steps use).
+7. Run `curl -fsSL https://get.docker.com | sh` (installs Docker Engine and the Compose plugin with Docker's official script. In WSL, the script shows a Docker Desktop message and waits 20 seconds. Let it continue).
+8. Run `sudo usermod -aG docker $USER` (lets your user run Docker without sudo. Close the terminal and open it again so that this applies).
+9. Run `docker run --rm hello-world` (checks that Docker works).
+10. Run `git clone https://github.com/G4LILEO0/Sandboxer.git ~/Sandboxer` (gets the code. In WSL, keep it in the Linux file system, not under `/mnt/c`, because file access there is slow).
+11. Run `cd ~/Sandboxer` (all the next commands run in this folder).
+12. Run `cp .env.example .env` (creates your settings file).
+13. Run `sed -i "s/^# SANDBOX_SECRET_KEY=.*/SANDBOX_SECRET_KEY=$(openssl rand -hex 32)/" .env` (sets a random key that signs cookies and links).
+14. Run `nano .env` (adds your keys. Set `SANDBOX_ABUSECH_AUTH_KEY`, and the VirusTotal and AbuseIPDB keys if you have them).
+15. Run `sudo scripts/host-setup.sh --fix` (turns on `br_netfilter`, so that the firewall also controls traffic between containers, and checks the host).
+16. Run `docker compose --profile build build` (builds the session browser image and the pcap image).
+17. Run `docker compose up -d --build` (starts the API, the worker, Postgres and the egress guard, and pulls the Suricata image).
+18. Run `scripts/host-setup.sh` (checks that the egress guard installed its firewall rules).
+19. Open `http://localhost:8000/` in a browser on the same computer (opens the Sandboxer UI. WSL forwards `localhost` from Windows to Ubuntu).
+20. In Admin > Configuration, set `max_concurrent_sessions` to 1 or 2 on a workstation (prevents too many sessions in the limited memory of WSL).
+
+### Troubleshooting
+
+- If `wsl --install` is blocked by company policy, ask IT to turn on the Windows features "Windows Subsystem for Linux" and "Virtual Machine Platform". Virtualisation must be on in the BIOS or UEFI.
+- `wsl -l -v` in PowerShell must show `VERSION 2`. If it shows 1, run `wsl --set-version Ubuntu-24.04 2`.
+- If Docker does not start and `sudo journalctl -u docker` shows iptables errors, run `sudo update-alternatives --set iptables /usr/sbin/iptables-legacy` and `sudo update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy`, then `sudo systemctl restart docker`. The egress guard works with either backend.
+- If `modprobe br_netfilter` fails in step 15, run `ls /proc/sys/net/bridge`. If that folder exists, the WSL kernel has the function built in, and the sysctls are enough.
+- If `http://localhost:8000/` does not open from Windows, check that `localhostForwarding` is not set to `false` in `.wslconfig`.
+- Do not use `compose.lan.yaml` on a workstation.
+
+### Daily use
+
+- Open Ubuntu before you use Sandboxer. Docker and the stack start with Ubuntu. Run `docker compose up -d` in `~/Sandboxer` if the stack is not running.
+- WSL can stop Ubuntu after all Ubuntu windows close. Keep an Ubuntu window open while you use Sandboxer.
+- After `wsl --shutdown` or a Windows restart, run `scripts/host-setup.sh` once to check the guard.
+
+### Performance in WSL
+
+Analysis in WSL is slower than on a server. Each session needs a full Chromium, a virtual screen, video capture and a pcap, inside the memory and CPU limits of the WSL virtual machine.
+
+- Set Admin > Configuration > `max_concurrent_sessions` to 1 or 2. The default of 4 needs about 8 GB for the sessions alone. Extra runs wait in the queue.
+- Give WSL more memory and CPUs in `.wslconfig` if the workstation can spare them.
+- Close other heavy programs while analyses run.
+- The server deployment removes this limit. Use the WSL setup for team use until then.
+
+WSL sessions normally have no public IPv6, so they run IPv4 only (`SANDBOX_SESSION_IPV6=auto`).
 
 ## Before production
 
@@ -103,108 +163,6 @@ echo 'net.bridge.bridge-nf-call-ip6tables = 1' | sudo tee -a /etc/sysctl.d/90-sa
 On start, the guard logs one line per backend for IPv4: `IPv4 rules installed with iptables-legacy`, or `IPv4 rules already in place with iptables-legacy, kept from an earlier run` when a recreated container finds its chains still in the kernel. The IPv6 rules are always rebuilt on start. On the host, `sudo iptables -S DOCKER-USER` should show `-A DOCKER-USER -i sbx-sessions -j SBX-EGRESS`, and `sudo iptables -S SBX-EGRESS` the drop rules.
 
 With firewalld, a `firewall-cmd --reload` can remove the guard's rules; the guard puts them back within 10 seconds. If SELinux denies the guard's iptables calls (`Permission denied` in its log while `docker info` shows SELinux on), add `security_opt: [label=disable]` to the `egress-guard` service as well.
-
-## Windows workstations: WSL with Docker Engine
-
-Use this setup on a Windows workstation that cannot use Docker Desktop. Sandboxer runs in Ubuntu under WSL 2 (Windows Subsystem for Linux), with Docker Engine installed inside Ubuntu. This is an interim setup until the server deployment. It is slower than a server, because the WSL virtual machine gets only part of the workstation's memory and CPU.
-
-### 1. Install WSL and Ubuntu
-
-1. Make sure that virtualisation is on in the BIOS or UEFI. Task Manager > Performance > CPU shows "Virtualization: Enabled".
-2. Open PowerShell as administrator and run:
-
-   ```powershell
-   wsl --install -d Ubuntu-24.04
-   ```
-
-3. Restart Windows when the installer asks.
-4. Open "Ubuntu 24.04" from the Start menu. Set a Linux user name and password.
-5. In PowerShell, check that the distribution uses WSL 2: `wsl -l -v` must show `VERSION 2`. If it shows 1, run `wsl --set-version Ubuntu-24.04 2`.
-
-If company policy blocks `wsl --install`, ask IT to turn on the Windows features "Windows Subsystem for Linux" and "Virtual Machine Platform".
-
-### 2. Give WSL enough memory and CPU
-
-By default, WSL gets half of the workstation's memory. Each session container can use up to 2 GB and 2 CPUs. Create `%UserProfile%\.wslconfig` in Windows, for example:
-
-```ini
-[wsl2]
-memory=8GB
-processors=4
-swap=4GB
-```
-
-Use as much as the workstation can spare. Leave at least 4 GB for Windows. Then run `wsl --shutdown` in PowerShell and open Ubuntu again.
-
-### 3. Turn on systemd
-
-Docker Engine runs as a systemd service. In Ubuntu, check `/etc/wsl.conf`. It must contain:
-
-```ini
-[boot]
-systemd=true
-```
-
-If you add it, run `wsl --shutdown` in PowerShell and open Ubuntu again. `systemctl is-system-running` then shows `running` or `degraded`.
-
-### 4. Install Docker Engine in Ubuntu
-
-Install Docker Engine from Docker's own apt repository. Do not install Docker Desktop.
-
-```sh
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl git
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo usermod -aG docker "$USER"
-```
-
-Close the Ubuntu window and open it again, so that the `docker` group applies. Then check: `docker run --rm hello-world`.
-
-If Docker does not start and its log (`sudo journalctl -u docker`) shows iptables errors, switch Ubuntu to the legacy iptables backend and restart Docker:
-
-```sh
-sudo update-alternatives --set iptables /usr/sbin/iptables-legacy
-sudo update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
-sudo systemctl restart docker
-```
-
-The egress guard works with either backend.
-
-### 5. Install and start Sandboxer
-
-1. Clone the repository into the Linux file system, for example `~/Sandboxer`. Do not use a folder under `/mnt/c`. Docker builds and file access there are much slower.
-2. `cp .env.example .env` and edit it. Set `SANDBOX_SECRET_KEY` (`openssl rand -hex 32`) and `SANDBOX_ABUSECH_AUTH_KEY`.
-3. `sudo scripts/host-setup.sh --fix`. It turns on `br_netfilter` and keeps it on. If `modprobe br_netfilter` fails, run `ls /proc/sys/net/bridge`. If that folder exists, the WSL kernel has the function built in, and the sysctls are enough.
-4. `docker compose --profile build build`, then `docker compose up -d --build`.
-5. `scripts/host-setup.sh` again. It must report that the egress guard installed its rules.
-
-### 6. Open the UI from Windows
-
-Open `http://localhost:8000/` in a Windows browser. WSL forwards `localhost` from Windows to Ubuntu, and compose publishes the API on `127.0.0.1:8000` inside Ubuntu. If the page does not open, check that `localhostForwarding` is not set to `false` in `.wslconfig`.
-
-The UI is then available on this workstation only. Do not use `compose.lan.yaml` on a workstation.
-
-### 7. Daily use
-
-- Open Ubuntu before you use Sandboxer. Docker and the stack start with Ubuntu. Run `docker compose up -d` in `~/Sandboxer` if the stack is not running.
-- WSL can stop Ubuntu after all Ubuntu windows close. Keep an Ubuntu window open while you use Sandboxer.
-- After `wsl --shutdown` or a Windows restart, run `scripts/host-setup.sh` once to check the guard.
-
-### 8. Performance in WSL
-
-Analysis in WSL is slower than on a server. Each session needs a full Chromium, a virtual screen, video capture and a pcap, inside the memory and CPU limits of the WSL virtual machine.
-
-- Set Admin > Configuration > `max_concurrent_sessions` to 1 or 2. The default of 4 needs about 8 GB for the sessions alone. Extra runs wait in the queue.
-- Give WSL more memory and CPUs in `.wslconfig` if the workstation can spare them.
-- Close other heavy programs while analyses run.
-- The server deployment removes this limit. Use the WSL setup for team use until then.
-
-WSL sessions normally have no public IPv6, so they run IPv4 only (`SANDBOX_SESSION_IPV6=auto`).
 
 ## Bot checks (Cloudflare)
 
