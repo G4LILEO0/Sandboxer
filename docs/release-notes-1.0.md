@@ -23,6 +23,8 @@ Sandboxer has three modes of work:
 
 Release 1.0 is ready for team use on a single host. It is not ready for production. Section 9 gives the known limitations, and section 10 gives the work that is necessary before production.
 
+Until the server deployment, the team runs Sandboxer on Windows workstations in WSL 2 (Windows Subsystem for Linux), with Docker Engine inside Ubuntu. Company workstations cannot use Docker Desktop, because the company size rules out its free licence. The WSL virtual machine gets only part of the workstation's memory and CPU, so analysis in this setup is slow. Section 7.4 describes the setup, and section 9.3 describes the limitation.
+
 ### 1.1 Document structure
 
 | Section | Contents |
@@ -439,17 +441,32 @@ The stack handles these Linux differences automatically:
 - **Clear errors.** If the worker cannot reach Docker, it logs the cause in one line and stops. If no backend has the `DOCKER-USER` chain, the guard logs a "NOT isolated" error. The probe error names `br_netfilter` when the module is missing.
 - **Host ports.** On Linux, the isolation probe also tests the Docker host's own ports.
 
-### 7.4 Configuration
+### 7.4 Interim deployment on Windows workstations (WSL)
+
+Company workstations cannot use Docker Desktop. Until the server deployment, Sandboxer runs in Ubuntu under WSL 2, with Docker Engine installed inside Ubuntu. `docs/operations.md`, section "Windows workstations: WSL with Docker Engine", gives all commands.
+
+1. Install WSL and Ubuntu. In PowerShell as administrator, run `wsl --install -d Ubuntu-24.04`, then restart Windows.
+2. Set the memory and CPU for WSL in `%UserProfile%\.wslconfig`, for example `memory=8GB` and `processors=4`. Then run `wsl --shutdown`.
+3. In Ubuntu, make sure that `/etc/wsl.conf` has `systemd=true` in the `[boot]` section.
+4. Install Docker Engine from Docker's apt repository. Do not install Docker Desktop. Add your user to the `docker` group.
+5. Clone the repository into the Linux file system, for example `~/Sandboxer`. Do not use a folder under `/mnt/c`, because file access there is slow.
+6. Do steps 2 to 7 of section 7.3, including `sudo scripts/host-setup.sh --fix`.
+7. Open `http://localhost:8000/` in a Windows browser. WSL forwards `localhost` from Windows to Ubuntu.
+8. Set Admin > Configuration > `max_concurrent_sessions` to 1 or 2.
+
+Keep an Ubuntu window open while you use Sandboxer, because WSL can stop Ubuntu when all its windows close. If Docker shows iptables errors at start, switch Ubuntu to the legacy iptables backend. The egress guard works with either backend.
+
+### 7.5 Configuration
 
 Static settings are `SANDBOX_*` environment variables in `.env`. Admins change runtime settings in Admin > Configuration, and Postgres stores them. Appendix A lists the most important settings. `docs/operations.md` describes all settings.
 
-### 7.5 Single sign-on
+### 7.6 Single sign-on
 
 1. Set `SANDBOX_AUTH_MODE=oidc`.
 2. Set `SANDBOX_OIDC_ISSUER`, `SANDBOX_OIDC_CLIENT_ID`, `SANDBOX_OIDC_CLIENT_SECRET` and `SANDBOX_OIDC_REDIRECT_URL` (`https://<host>/auth/callback`).
 3. Map identity-provider groups to roles with `SANDBOX_OIDC_ROLE_MAP`, for example `{"sg-soc": "analyst", "sg-soc-leads": "senior_analyst"}`.
 
-### 7.6 LAN access
+### 7.7 LAN access
 
 By default, the API listens only on `127.0.0.1`, port 8000. Set `SANDBOX_API_BIND` and `SANDBOX_API_PORT` in `.env` to change this. The optional file `compose.lan.yaml` also publishes the API on a LAN address:
 
@@ -459,7 +476,7 @@ Before you use this file, set `SANDBOX_LAN_IP` to the host's LAN address in `.en
 
 Do not use this file until a sign-in proxy is in front of the API and `SANDBOX_SECRET_KEY` has a random value. Section 9.2 explains why.
 
-### 7.7 Production checklist
+### 7.8 Production checklist
 
 Before production, complete these steps. `docs/operations.md` gives the details.
 
@@ -514,6 +531,7 @@ After you change built-in rules, wait for the bundle build to finish before you 
 - The database and end-to-end tests need a Postgres test database (`TEST_DATABASE_URL`, with a name that ends in `_test`). Without it, only the unit tests run.
 - The OIDC tests check only the token format. Sign-in against the corporate identity provider is not tested.
 - 726 unit tests passed. Two tests failed only because the test environment has no browser driver. They must skip in that case, as the other browser tests do.
+- Nobody tested the WSL setup steps in this document on a company workstation. They follow the Linux deployment, which the WSL Ubuntu setup uses.
 - The Linux fixes were tested on Docker Desktop. SELinux and legacy iptables have tests with stub programs, and logs from an openSUSE host showed the problems. Nobody ran the full stack on an SELinux host after the fixes.
 - CI fails on GitHub on one import-order finding from `ruff` in `sandbox/api/report.py`.
 - GitHub has all the code of this build.
@@ -532,6 +550,7 @@ After you change built-in rules, wait for the bundle build to finish before you 
 
 ### 9.3 Scope and accuracy
 
+- **Slow analysis in the interim WSL setup.** The WSL virtual machine gets only part of the workstation's memory and CPU. Each session needs a full Chromium, a virtual screen, video capture and a pcap. Thus runs take longer, and fewer runs can go at the same time. Set `max_concurrent_sessions` to 1 or 2, and give WSL as much memory as the workstation can spare. The server deployment removes this limit.
 - Verdict accuracy is not measured yet. A labelled URL set does not exist yet.
 - No load test at 6 concurrent sessions took place, and the session start time is not measured.
 - DNS from sessions goes to the host's resolver. A page can resolve internal names, but it cannot connect to them.
@@ -547,7 +566,7 @@ After you change built-in rules, wait for the bundle build to finish before you 
 | --- | --- | --- |
 | Consolidate | Fix the CI finding, merge into `main` and protect `main` | CI passes on each merge |
 | Harden | Serve noVNC from the API. Make gVisor and a seccomp profile mandatory. Put a socket proxy in front of the worker. Close SR-20 to SR-22, SR-25 and SR-26. | No open security finding without a fix or an accepted risk |
-| Integrate | Production host, OIDC with the corporate identity provider, monitoring, backups with a restore test | Analysts sign in on the production URL |
+| Integrate | Move from the interim WSL workstations to the production server. OIDC with the corporate identity provider, monitoring, backups with a restore test. | Analysts sign in on the production URL, with no WSL resource limit |
 | Prove | Labelled set of 300 or more URLs, accuracy check on each bundle, load test, two-week pilot | Measured accuracy and start time |
 | Go live | Legal and safety sign-off, acceptance checklist, analyst training | Use by all 13 analysts |
 

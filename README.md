@@ -29,6 +29,20 @@ Tests: `pytest` runs unit tests anywhere. With `TEST_DATABASE_URL` pointing at a
 
 SELinux can stay enforcing, and the iptables backend can be legacy or nf_tables: the stack handles both. Details are in [docs/operations.md](docs/operations.md#linux-hosts-selinux-and-the-iptables-backend).
 
+## Run on a Windows workstation (WSL, no Docker Desktop)
+
+Work laptops that cannot use Docker Desktop run Sandboxer in Ubuntu under WSL 2, with Docker Engine inside Ubuntu. This is the interim setup until the server deployment. It is slower than a server because of the WSL memory and CPU limits.
+
+1. In PowerShell as administrator: `wsl --install -d Ubuntu-24.04`, then restart Windows.
+2. Give WSL memory and CPUs in `%UserProfile%\.wslconfig` (for example `memory=8GB`, `processors=4`), then `wsl --shutdown`.
+3. In Ubuntu: make sure `/etc/wsl.conf` has `systemd=true` under `[boot]`.
+4. Install Docker Engine from Docker's apt repository (not Docker Desktop), and add your user to the `docker` group.
+5. Clone the repository into `~/Sandboxer` (not under `/mnt/c`), then follow "Deploy on a Linux host" from step 2.
+6. Open http://localhost:8000/ in a Windows browser.
+7. Set Admin > Configuration > `max_concurrent_sessions` to 1 or 2.
+
+The full commands, the iptables and `br_netfilter` notes and the performance advice are in [docs/operations.md](docs/operations.md#windows-workstations-wsl-with-docker-engine).
+
 ## What it does
 
 | Area | Where |

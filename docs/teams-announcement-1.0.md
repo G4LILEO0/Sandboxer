@@ -13,6 +13,10 @@ What it does:
 
 If Sandboxer gives a wrong verdict for a malicious link, open the report and select "Report missed detection". Send me the zip that downloads. I use it to write new detection rules.
 
-Status: Release 1.0 is ready for team use on one host. It is not ready for production. The next steps are sign-in with corporate SSO, production hosting, accuracy tests and the legal sign-off.
+How to run it: Until the server is ready, Sandboxer runs on your Windows laptop in WSL (Ubuntu), with Docker Engine. We cannot use Docker Desktop. The setup steps are in the release notes, section 7.4.
+
+Limitation: WSL gets only part of the laptop's memory and CPU. Each analysis is slow, and only 1 or 2 can run at the same time. The server deployment removes this limit.
+
+Status: Release 1.0 is ready for team use. It is not ready for production. The next steps are the server, sign-in with corporate SSO, accuracy tests and the legal sign-off.
 
 I attached the release notes and the executive summary. Please send me your questions and feedback.
