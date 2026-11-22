@@ -31,7 +31,16 @@ def test_blocks_internal(address):
     assert guard.blocked_reason(address) is not None
 
 
-@pytest.mark.parametrize("address", ["93.184.216.34", "1.1.1.1", "2606:4700:4700::1111"])
+@pytest.mark.parametrize(
+    "address",
+    [
+        "93.184.216.34",
+        "1.1.1.1",
+        "2606:4700:4700::1111",
+        # IPv4-mapped public address: it goes out as plain IPv4, so it is allowed.
+        "::ffff:162.247.243.29",
+    ],
+)
 def test_allows_public(address):
     assert guard.blocked_reason(address) is None
 
