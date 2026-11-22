@@ -148,3 +148,46 @@ def test_compose_lets_the_worker_use_the_socket_under_selinux():
     assert "label=disable" in services["worker"]["security_opt"]
     assert not any(":z" in v or ":Z" in v for v in services["worker"]["volumes"])
     assert "SANDBOX_EGRESS_IPTABLES" in services["egress-guard"]["environment"]
+
+
+# --- what a failed probe tells the operator -------------------------------------------
+
+
+def test_only_the_api_leaking_points_at_br_netfilter():
+    backend = _backend("enforce", lambda: (["172.31.213.2:8000"], True, False))
+    with pytest.raises(EgressNotIsolated, match="br_netfilter") as info:
+        backend._check_egress()
+    assert "host-setup.sh --fix" in str(info.value)
+
+
+def test_host_leaks_point_at_the_egress_guard():
+    backend = _backend(
+        "enforce", lambda: (["172.31.213.2:8000", "host.docker.internal:5432"], True, False)
+    )
+    with pytest.raises(EgressNotIsolated) as info:
+        backend._check_egress()
+    assert "br_netfilter" not in str(info.value)
+    assert "docker compose logs egress-guard" in str(info.value)
+
+
+def test_probe_can_resolve_the_docker_host_on_linux():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "sandbox" / "orchestrator" / "docker_backend.py"
+    ).read_text()
+    assert '"host.docker.internal": "host-gateway"' in source
+
+
+def test_host_setup_script_parses():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "host-setup.sh"
+    if not script.exists():
+        pytest.skip("scripts/ not in this checkout")
+    sh = shutil.which("sh")
+    if not sh:
+        pytest.skip("no POSIX sh")
+    subprocess.run([sh, "-n", str(script)], check=True)  # noqa: S603
