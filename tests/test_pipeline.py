@@ -261,6 +261,77 @@ async def test_quarantine_download_needs_confirmation(env):
     assert "sandbox" in shown.headers["content-security-policy"]
 
 
+async def test_missed_detection_bundle(env):
+    client, ctx, worker, _ = env
+    created = await _submit(client)
+    aid = created["id"]
+    url = f"/v1/analyses/{aid}/artifact-bundle"
+    body = {"reason": "fake Microsoft login", "missed_detection": True}
+    # Not while the capture runs.
+    refused = await client.post(url, json=body, headers=ALICE)
+    assert refused.status_code == 409
+    await _drain(worker)
+
+    assert (await client.post(url, json={"reason": "x"}, headers=ALICE)).status_code == 422
+    resp = await client.post(url, json=body, headers=ALICE)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "application/zip"
+    assert f"{aid}-missed-detection.zip" in resp.headers["content-disposition"]
+    with pyzipper.AESZipFile(io.BytesIO(resp.content)) as zf:
+        zf.setpassword(b"infected")
+        names = set(zf.namelist())
+        manifest = json.loads(zf.read(f"{aid}/manifest.json"))
+        report = json.loads(zf.read(f"{aid}/report.json"))
+        events = json.loads(zf.read(f"{aid}/events.json"))
+        download = next(f for f in manifest["files"] if f["kind"] == "download")
+        assert zf.read(f"{aid}/{download['path']}").startswith(b"MZ-fixture")
+    assert {f"{aid}/README.txt", f"{aid}/verdict.json", f"{aid}/capture/network.har"} <= names
+    assert {"capture_result", "har", "dom", "script", "download"} <= {
+        f["kind"] for f in manifest["files"]
+    }
+    assert manifest["missed_detection"]["reported_by"] == "alice@example.org"
+    assert manifest["missed_detection"]["expected_verdict"] == "malicious"
+    assert report["id"] == aid and report["rule_hits"] and events
+
+    # The analysis is marked for the detection engineer, once, and the export is audited.
+    assert (await client.post(url, json=body, headers=BOB)).status_code == 200
+    detail = (await client.get(f"/v1/analyses/{aid}", headers=ENGINEER)).json()
+    assert "missed-detection" in detail["tags"]
+    found = (
+        await client.get("/v1/analyses", params={"tag": "missed-detection"}, headers=ENGINEER)
+    ).json()
+    assert [i["id"] for i in found["items"]] == [aid]
+    notes = (await client.get(f"/v1/analyses/{aid}/notes", headers=ALICE)).json()
+    assert sum("Missed detection reported" in n["body"] for n in notes) == 2
+    async with ctx.sessionmaker() as db:
+        actions = (
+            (await db.execute(text("SELECT action FROM audit_log WHERE target = :t"), {"t": aid}))
+            .scalars()
+            .all()
+        )
+    assert actions.count("analysis.missed_detection") == 2
+    assert actions.count("analysis.export_bundle") == 2
+
+    # A plain export does not mark anything.
+    other = await _submit(client, url="https://public.example/plain")
+    await _drain(worker)
+    plain = await client.post(
+        f"/v1/analyses/{other['id']}/artifact-bundle", json={"reason": "for a rule"}, headers=ALICE
+    )
+    assert plain.status_code == 200 and "-artifacts.zip" in plain.headers["content-disposition"]
+    detail = (await client.get(f"/v1/analyses/{other['id']}", headers=ALICE)).json()
+    assert "missed-detection" not in detail["tags"]
+
+    # Same visibility as the report.
+    hidden = await _submit(
+        client, url="https://public.example/hidden", restricted_to=["alice@example.org"]
+    )
+    await _drain(worker)
+    assert (
+        await client.post(f"/v1/analyses/{hidden['id']}/artifact-bundle", json=body, headers=CAROL)
+    ).status_code == 404
+
+
 async def test_rule_hit_evidence(env):
     client, ctx, worker, _ = env
     created = await _submit(client, restricted_to=["alice@example.org"])

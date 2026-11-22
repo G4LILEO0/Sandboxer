@@ -47,6 +47,7 @@
       <div class="head-actions no-print">
         <button class="copy-btn" id="btn-reanalyse" title="Run the analysis again on the stored capture with the current rules">Re-analyse</button>
         <button class="copy-btn danger" id="btn-cancel" hidden>Cancel analysis</button>
+        <button class="copy-btn" id="btn-missed" type="button" hidden title="You think this is malicious but the sandbox missed it: mark the analysis and download every artifact for the detection engineer">Report missed detection</button>
         <details class="menu" id="export-menu">
           <summary class="copy-btn">Export</summary>
           <div class="menu-body">
@@ -58,6 +59,7 @@
               <button class="copy-btn" id="btn-iocs" type="button">Download</button>
             </div>
             <button class="copy-btn quiet" id="btn-json" type="button">Full report as JSON</button>
+            <button class="copy-btn quiet" id="btn-bundle" type="button" title="Every artifact, the report, timeline and verdict details as one encrypted zip (password infected)">All artifacts (encrypted zip)</button>
             <button class="copy-btn quiet" id="btn-print" type="button" title="Use your browser's Save as PDF">Print or save as PDF</button>
             <button class="copy-btn quiet" id="btn-embed" type="button" title="A short-lived link for embedding this report elsewhere">Copy embed link</button>
           </div>

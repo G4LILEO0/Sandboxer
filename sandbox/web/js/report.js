@@ -120,6 +120,9 @@ function renderHeader() {
   notes.textContent = r && r.summary.notes.length ? r.summary.notes.join(' ') : '';
   notes.hidden = !notes.textContent;
   section('btn-cancel').hidden = !['queued', 'running'].includes(d.status);
+  const captured = !['queued', 'running'].includes(d.status);
+  section('btn-missed').hidden = !captured;
+  section('btn-bundle').hidden = !captured;
   const versions = section('r-version');
   versions.closest('label').hidden = !r || r.versions.length < 2;
   if (r && versions.options.length !== r.versions.length) {
@@ -871,6 +874,67 @@ section('btn-cancel').addEventListener('click', async () => {
   const res = await Api.post(`/v1/analyses/${encodeURIComponent(analysisId)}/cancel`);
   if (res.ok) load(); else Api.toast(res.error, true);
 });
+// --- artifact bundle / missed detection ------------------------------------------
+// One encrypted zip (password "infected") with every artifact, the report, timeline and
+// verdict details. "Report missed detection" also tags the analysis and adds a note so
+// the detection engineer can find it.
+
+function bundleDialog(missed) {
+  const d = state.detail;
+  const flagged = ['malicious', 'suspicious'].includes(d.verdict);
+  const form = el('form', { className: 'bundle-form', method: 'dialog' });
+  const expected = el('select', { name: 'expected', ariaLabel: 'Expected verdict' },
+    el('option', { value: 'malicious', textContent: 'Malicious' }), el('option', { value: 'suspicious', textContent: 'Suspicious' }));
+  const reason = el('textarea', { name: 'reason', rows: 4, required: true, minLength: 3, maxLength: 2000, ariaLabel: 'Reason',
+    placeholder: missed ? 'What makes it malicious? e.g. fake Microsoft login after the captcha, posts credentials to a .xyz host' : 'Why you need the artifacts' });
+  const submit = el('button', { className: `copy-btn ${missed ? 'danger' : ''}`, type: 'submit', textContent: missed ? 'Report and download' : 'Download' });
+  const cancel = el('button', { className: 'copy-btn quiet', type: 'button', textContent: 'Cancel', onclick: () => dlg.close() });
+  form.append(
+    missed ? el('p', { className: 'small' }, `The sandbox said `, Api.verdictBadge(d.verdict), ` (score ${d.score ?? 0}). This tags the analysis `,
+      el('span', { className: 'monospace', textContent: 'missed-detection' }), ', adds your reason as a note, and downloads every artifact for the detection engineer.') : '',
+    missed && flagged ? el('p', { className: 'small muted', textContent: 'The verdict already flags this URL. Report it only if the detection was wrong or incomplete.' }) : '',
+    el('p', { className: 'small notice', textContent: 'The zip holds the captured pages, scripts and any files the site delivered. It is AES-encrypted with the password "infected". Extract it only in an analysis VM. The audit log records the export.' }),
+    missed ? el('label', { className: 'small' }, 'Expected verdict ', expected) : '',
+    el('label', { className: 'small bundle-reason' }, 'Reason', reason),
+    el('div', { className: 'bundle-actions' }, cancel, submit));
+  const dlg = el('dialog', { className: 'evidence' },
+    el('div', { className: 'evidence-head' }, el('h2', { textContent: missed ? 'Report missed detection' : 'Download all artifacts' })),
+    el('div', { className: 'evidence-body' }, form));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (reason.value.trim().length < 3) { reason.focus(); return; }
+    submit.disabled = true; submit.textContent = 'Building archive…';
+    const ok = await downloadBundle({ reason: reason.value.trim(), missed_detection: missed, expected_verdict: expected.value });
+    submit.disabled = false; submit.textContent = missed ? 'Report and download' : 'Download';
+    if (ok) { dlg.close(); if (missed) load(); }
+  });
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
+  document.body.appendChild(dlg);
+  dlg.showModal();
+  reason.focus();
+}
+
+async function downloadBundle(body) {
+  const res = await Api.post(`/v1/analyses/${encodeURIComponent(analysisId)}/artifact-bundle`, body, { raw: true });
+  if (!res.ok) {
+    let msg = res.error || `HTTP ${res.status}`;
+    if (res.resp) { try { const j = await res.resp.json(); msg = (j.detail && j.detail.detail) || j.detail || j.error || msg; if (typeof msg !== 'string') msg = JSON.stringify(msg); } catch (e) { /* not JSON */ } }
+    Api.toast(`Export failed: ${msg}`, true);
+    return false;
+  }
+  const blob = await res.resp.blob();
+  const cd = res.resp.headers.get('content-disposition') || '';
+  const name = (cd.match(/filename="?([^";]+)"?/) || [])[1] || `${analysisId}-artifacts.zip`;
+  const a = el('a', { href: URL.createObjectURL(blob), download: name });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  Api.toast(`${body.missed_detection ? 'Reported. ' : ''}Archive password: infected`);
+  return true;
+}
+
+section('btn-missed').addEventListener('click', () => bundleDialog(true));
+section('btn-bundle').addEventListener('click', () => bundleDialog(false));
 section('btn-json').addEventListener('click', () => Api.download(`${analysisId}.json`, JSON.stringify(state.report, null, 2), 'application/json'));
 section('btn-print').addEventListener('click', () => window.print());
 section('btn-iocs').addEventListener('click', async () => {

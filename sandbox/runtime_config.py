@@ -30,6 +30,9 @@ DEFAULTS: dict[str, Any] = {
     "embed_token_ttl_s": 900,
     "stream_token_ttl_s": 120,
     "download_url_ttl_s": 300,
+    # Artifact bundle export (missed-detection hand-off): files beyond this total are
+    # left out and listed in the manifest. Video and pcap go last.
+    "artifact_bundle_max_mb": 512,
     # Retention in days per artifact kind (ADM-3); "*" covers kinds not listed.
     "retention_days": {"*": 90, "quarantine": 30, "video": 30, "pcap": 30},
     "events_retention_days": 180,
