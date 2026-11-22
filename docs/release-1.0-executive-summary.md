@@ -40,7 +40,9 @@ Release 1.0 contains all planned MVP features. It is ready for use by the team o
 | Area | Status |
 | --- | --- |
 | MVP features | Complete |
-| Security review | 16 of 24 findings fixed. 1 partly fixed, 2 accepted, 5 open. |
+| Security review (2026-10-25) | 16 of 24 findings fixed. 1 partly fixed, 2 accepted, 5 open. |
+| Security re-assessment (2026-11-22) | Earlier fixes still in place. No new High finding. 4 new findings: 1 Medium, 1 Low, 2 Info. |
+| Tests | 657 unit tests passed. The database tests need a test database and did not run. |
 | Detection tests | Each rule has at least one positive test. Live samples proved the latest rule changes. |
 | Accuracy measurement | Not started. A labelled set of URLs is necessary. |
 | Load test | Not started |
@@ -54,6 +56,8 @@ Release 1.0 contains all planned MVP features. It is ready for use by the team o
 | Risk | Effect | Mitigation |
 | --- | --- | --- |
 | Open platform findings (browser sandbox, worker privileges) | A browser exploit can compromise the host | Close these findings before production use |
+| No sign-in on the local build | Anyone who reaches it on the LAN is an admin | Keep it on the local computer until sign-in is in place |
+| IPv6 on a new host | Sessions can reach office devices over IPv6 if the office prefix is not set | Set the office IPv6 prefix before use on a host with public IPv6 |
 | No legal sign-off | Go-live cannot start | Start the legal and safety review now |
 | No measured accuracy | Verdict quality is not proven | Collect labelled URLs from MSOC tickets now |
 | Upstream network filters | Some malicious sites do not load in a session | Analysts test the connection from the host before they report a sandbox fault |
@@ -61,7 +65,7 @@ Release 1.0 contains all planned MVP features. It is ready for use by the team o
 
 ## 6. Next steps
 
-1. Publish the code on GitHub and fix the continuous integration finding.
+1. Fix the continuous integration finding. Most of the code is on GitHub already.
 2. Close the open platform security findings.
 3. Choose the production host and connect corporate sign-on.
 4. Build a labelled set of 300 or more URLs and measure verdict accuracy.

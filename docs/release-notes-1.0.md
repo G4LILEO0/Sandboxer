@@ -5,7 +5,7 @@
 | Product | Sandboxer, the MSOC URL sandbox |
 | Version | 1.0 (MVP), first release |
 | Release date | 2026-11-22 |
-| Build | Branch `ioc-lookup-on-main` at commit `267cf84` |
+| Build | Branch `ioc-lookup-on-main` at commit `73a7bbf` |
 | Audience | MSOC analysts, detection engineers, platform owners and security reviewers |
 | Companion document | Sandboxer 1.0 executive summary |
 
@@ -31,13 +31,13 @@ Release 1.0 is ready for team use on a single host. It is not ready for producti
 | 3 | Architecture and components |
 | 4 | Features, area by area |
 | 5 | Detection content |
-| 6 | Security controls and the security review |
+| 6 | Security controls, the security review and the re-assessment |
 | 7 | Installation and configuration |
 | 8 | Operation and day-to-day tasks |
 | 9 | Known limitations |
 | 10 | Roadmap |
 | Appendix A | Settings reference |
-| Appendix B | Security review findings |
+| Appendix B | Security findings |
 
 ## 2. Highlights
 
@@ -50,7 +50,7 @@ Release 1.0 is ready for team use on a single host. It is not ready for producti
 - Live sessions with noVNC, read-only observers, a timeline, a video and audited clipboard transfer.
 - IoC lookup that checks local data first, then VirusTotal and AbuseIPDB.
 - OIDC single sign-on, four roles, service tokens with scopes, and an append-only audit log.
-- A full security review before release, with 16 of 24 findings fixed.
+- A full security review and a re-assessment before release. 16 of 24 findings are fixed, and the re-assessment found no new High finding.
 
 ## 3. Architecture
 
@@ -203,6 +203,8 @@ The session pcap holds HTTPS as encrypted data, so Suricata's HTTP rules match o
 - Suricata reads both pcap files in one run.
 - The report marks alerts from the second pcap as `decrypted_https` and shows the request URL.
 - A re-analysis rebuilds the second pcap from the stored HAR.
+- Each alert shows what triggered it: the rule source, revision, action, metadata and number of hits. For each flow, it also shows the HTTP, TLS or DNS details and the first 2 KB of the matched payload.
+- The report shows one card for each rule. A rule about unencrypted traffic that fires only on a rebuilt HTTPS flow is marked "not applicable" and adds no points.
 
 A TLS proxy changes the TLS fingerprint that the site sees, so Sandboxer does not use one.
 
@@ -344,7 +346,17 @@ Several rounds of tests ran the rules against live phishing and malware samples.
 
 ### 6.2 Security review
 
-A security review of the full code base took place before this release. It found 24 issues. This release fixes 16 of them and partly fixes SR-09. Two informational findings have accepted risk. Five findings are open. Appendix B lists all findings, and `docs/security-review.md` gives the details.
+A security review of the full code base took place on 2026-10-25. It found 24 issues. This release fixes 16 of them and partly fixes SR-09. Two informational findings have accepted risk. Five findings are open. `docs/security-review.md` gives the details.
+
+### 6.3 Security re-assessment
+
+A re-assessment on 2026-11-22 checked the release build (`73a7bbf`). It covered the 22 commits after the LAN assessment, and it checked each earlier finding again. `docs/security-reassessment-2026-11-22.md` gives the details.
+
+- All earlier fixes are still in place. The status of the 24 earlier findings did not change.
+- No new High finding.
+- Two open findings have a wider effect. SR-21: the new detection-string test endpoint runs patterns with no time limit in the API. SR-22: VirusTotal pivots use more vendor quota.
+- Four new findings: SR-25 (Low), SR-26 (Medium), SR-27 (Info) and SR-28 (Info). Appendix B lists them.
+- The local stack still uses dev authentication and the default signing secret. Do not publish it on the LAN until LAN findings C-1 and C-2 have a fix.
 
 ## 7. Installation and configuration
 
@@ -441,8 +453,9 @@ After you change built-in rules, wait for the bundle build to finish before you 
 - Some tests need Patchright and its Chromium. Where they are not installed, pytest skips these tests. The session image contains them.
 - The database and end-to-end tests need a Postgres test database (`TEST_DATABASE_URL`, with a name that ends in `_test`). Without it, only the unit tests run.
 - The OIDC tests check only the token format. Sign-in against the corporate identity provider is not tested.
-- CI fails on GitHub. The last run (2026-11-21) failed on one import-order finding from `ruff` in `sandbox/api/report.py`.
-- The last seven commits of this build are not on GitHub yet.
+- In the API image, 657 unit tests passed and 53 skipped because there was no Postgres test database. Two tests failed only because the API image has no browser driver. They must skip in that case, as the other browser tests do.
+- CI fails on GitHub. The last run (2026-11-22) failed on one import-order finding from `ruff` in `sandbox/api/report.py`.
+- GitHub has the code up to commit `187915a`. The last commit of this build (`73a7bbf`) is not on GitHub yet.
 
 ### 9.2 Security
 
@@ -452,7 +465,9 @@ After you change built-in rules, wait for the bundle build to finish before you 
 - SR-18 is open. Chromium runs without its own sandbox. Docker Desktop on Windows cannot run gVisor.
 - SR-19 is open. The worker uses the Docker socket, which gives root access to the host.
 - On Docker Desktop, the guard cannot see the IPv6 addresses of the Windows host. If the office LAN has public IPv6, put its prefix in `SANDBOX_EGRESS_BLOCKED6`. Without this setting, a session can connect to the Windows host and to other devices on the office LAN over IPv6.
-- SR-20 to SR-22 are open and low. An admin cannot revoke a session. Rule regexes have no time limit. The IoC lookup has no per-user rate limit.
+- SR-20 to SR-22 are open and low. An admin cannot revoke a session. Rule regexes and detection strings have no time limit. The IoC lookup has no per-user rate limit.
+- SR-25 is new and low. A detonated page can send any number of hook reports and can make false ones. The session's 1 GB output limit bounds the effect.
+- SR-28 is new and informational. If you change `SANDBOX_POSTGRES_BIND` or `SANDBOX_API_BIND` from `127.0.0.1`, Postgres (with default credentials) or the API (with dev authentication) is open to the network.
 
 ### 9.3 Scope and accuracy
 
@@ -470,7 +485,7 @@ After you change built-in rules, wait for the bundle build to finish before you 
 | Phase | Work | Result |
 | --- | --- | --- |
 | Consolidate | Push the code to GitHub, fix the CI finding, protect `main` | CI passes on each merge |
-| Harden | Serve noVNC from the API, make gVisor and a seccomp profile mandatory, put a socket proxy in front of the worker, close SR-20 to SR-22 | No open security finding without a fix or an accepted risk |
+| Harden | Serve noVNC from the API. Make gVisor and a seccomp profile mandatory. Put a socket proxy in front of the worker. Close SR-20 to SR-22, SR-25 and SR-26. | No open security finding without a fix or an accepted risk |
 | Integrate | Production host, OIDC with the corporate identity provider, monitoring, backups with a restore test | Analysts sign in on the production URL |
 | Prove | Labelled set of 300 or more URLs, accuracy check on each bundle, load test, two-week pilot | Measured accuracy and start time |
 | Go live | Legal and safety sign-off, acceptance checklist, analyst training | Use by all 13 analysts |
@@ -500,7 +515,7 @@ After you change built-in rules, wait for the bundle build to finish before you 
 | `SANDBOX_LAN_IP` | none | The LAN address for `compose.lan.yaml`. Compose refuses to start that file without it. |
 | `SANDBOX_LAN_PORT` | `8000` | The port on the LAN address. |
 
-## Appendix B. Security review findings
+## Appendix B. Security findings
 
 | ID | Severity | Finding | Status |
 | --- | --- | --- | --- |
@@ -523,8 +538,12 @@ After you change built-in rules, wait for the bundle build to finish before you 
 | SR-15 | Low | Decompression bombs in downloads and feed archives | Fixed |
 | SR-16 | Low | Webhook URL not checked on client update | Fixed |
 | SR-20 | Low | SSO sessions cannot be revoked | Open |
-| SR-21 | Low | Rule regexes have no time limit | Open |
-| SR-22 | Low | No per-user rate limit on the IoC lookup | Open |
+| SR-21 | Low | Rule regexes and detection strings have no time limit | Open, wider |
+| SR-22 | Low | No per-user rate limit on the IoC lookup | Open, wider |
 | SR-17 | Info | Embed screenshot served without the sandbox CSP | Fixed |
 | SR-23 | Info | Compose defaults for local development | Accepted |
 | SR-24 | Info | VNC password limited to 8 characters | Accepted |
+| SR-26 | Medium | IPv6 isolation on Docker Desktop needs the office LAN prefix in `SANDBOX_EGRESS_BLOCKED6` | New, open (sessions are IPv4 only on this host) |
+| SR-25 | Low | No limit on the number or size of page-hook reports | New, open |
+| SR-27 | Info | Third-party browser driver (Patchright, pinned) | New, track releases |
+| SR-28 | Info | Compose port variables can expose Postgres or the API | New, documented |
