@@ -5,6 +5,7 @@ Runs after every detonation and on demand over stored artifacts with the current
 so earlier verdicts stay reproducible (ANA-11).
 """
 
+import asyncio
 import json
 import logging
 import tempfile
@@ -517,7 +518,9 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
                 )
                 ok, output = False, f"could not run: {exc}"
             if ok:
-                suricata_alerts = parse_alerts(output)
+                suricata_alerts = await asyncio.to_thread(
+                    parse_alerts, output, bundle.suricata_path
+                )
             else:
                 notes.append(f"Suricata failed: {output[-300:]}")
         elif not ctx.settings.suricata_image:
