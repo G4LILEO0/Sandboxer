@@ -492,3 +492,24 @@ def test_magic_typing_detects_iso_in_download_head():
     head = b"\x00" * 0x8001 + b"CD001"
     assert _magic_type(head) == "iso"
     assert _magic_type(b"MSCF\x00") == "cab"
+
+
+def test_not_applicable_suricata_alert_is_not_scored():
+    alert = {"sid": 1, "signature": "Password sent unencrypted", "severity": 1}
+
+    def run():
+        return score(
+            rule_hits=[],
+            indicator_hits=[],
+            suricata_alerts=[alert],
+            weights={"suricata:alert": (20, 45)},
+            thresholds={"malicious": 70, "suspicious": 30},
+            allowlisted=False,
+            capture_ok=True,
+        )
+
+    assert run().score == 20
+    alert["not_applicable"] = "HTTPS on the wire"
+    scored = run()
+    assert scored.score == 0
+    assert scored.contributions[0].detail["not_applicable"] == "HTTPS on the wire"

@@ -195,3 +195,8 @@ body.embed { background: var(--surface); }
   .block, .report-head { break-inside: avoid; border-color: #bbb; }
   .timeline { max-height: none; overflow: visible; }
 }
+
+.ids-alert { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); margin-bottom: 10px; }
+.ids-head { margin-bottom: 6px; }
+.ids-flow { padding: 6px 0 6px 10px; border-left: 2px solid var(--line); margin: 6px 0; }
+.ids-flow pre { margin-top: 4px; padding: 6px 8px; background: var(--sunken); border-radius: var(--r-sm); white-space: pre-wrap; word-break: break-all; }

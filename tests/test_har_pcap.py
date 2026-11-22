@@ -1,6 +1,7 @@
 """Plaintext pcap of HTTPS requests rebuilt from the HAR, for Suricata (ANA-2)."""
 
 import base64
+import json
 import shutil
 import struct
 import subprocess
@@ -168,6 +169,76 @@ def test_parse_alerts_marks_rebuilt_flows():
     assert by_sid[1]["flows"][0]["decrypted_https"] is True
     assert by_sid[1]["flows"][0]["url"] == "https://evil.test/login"
     assert "decrypted_https" not in by_sid[2]["flows"][0]
+
+
+def test_parse_alerts_keeps_what_matched(tmp_path):
+    """An alert carries the rule text, the app-layer details and the matched payload."""
+    rules = tmp_path / "r.rules"
+    rules.write_text(
+        '# alert http any any -> any any (msg:"old"; sid:2006380; rev:1;)\n'
+        'alert http any any -> any any (msg:"other"; sid:12006380; rev:1;)\n'
+        'alert http $HOME_NET any -> any any (msg:"ET INFO Outgoing Basic Auth Base64 HTTP '
+        'Password detected unencrypted"; sid:2006380; rev:18;)\n'
+    )
+    event = {
+        "event_type": "alert",
+        "timestamp": "2026-11-22T17:25:20.447899+0000",
+        "src_ip": "10.250.0.2",
+        "src_port": 49475,
+        "dest_ip": "198.18.198.0",
+        "dest_port": 80,
+        "proto": "TCP",
+        "app_proto": "http",
+        "direction": "to_server",
+        "alert": {
+            "signature_id": 2006380,
+            "gid": 1,
+            "rev": 18,
+            "action": "allowed",
+            "signature": "ET INFO Outgoing Basic Auth Base64 HTTP Password detected unencrypted",
+            "category": "Potential Corporate Privacy Violation",
+            "severity": 1,
+            "metadata": {"confidence": ["Medium"], "signature_severity": ["Informational"]},
+        },
+        "http": {
+            "hostname": "dh.example",
+            "url": "/config.json",
+            "http_method": "GET",
+            "status": 200,
+            "http_user_agent": "UA",
+        },
+        "payload_printable": "GET /config.json HTTP/1.1\r\nauthorization: Basic eDo=\r\n"
+        + "x" * 5000,
+    }
+    eve = "\n".join(json.dumps(event) for _ in range(12))
+    (alert,) = parse_alerts(eve, rules)
+    assert alert["rule"].endswith("sid:2006380; rev:18;)")
+    assert alert["rev"] == 18 and alert["count"] == 12 and len(alert["flows"]) == 10
+    assert alert["metadata"]["signature_severity"] == "Informational"
+    flow = alert["flows"][0]
+    assert flow["http"]["method"] == "GET" and flow["http"]["user_agent"] == "UA"
+    assert flow["payload"].startswith("GET /config.json") and flow["payload_truncated"]
+    assert len(flow["payload"]) == 2048
+    # The request was HTTPS on the wire, so an "unencrypted" rule does not apply.
+    assert "HTTPS" in alert["not_applicable"]
+
+
+def test_parse_alerts_cleartext_rule_on_real_http_still_applies():
+    eve = json.dumps(
+        {
+            "event_type": "alert",
+            "src_ip": "172.31.213.5",
+            "src_port": 5000,
+            "dest_ip": "203.0.113.7",
+            "dest_port": 80,
+            "proto": "TCP",
+            "http": {"hostname": "plain.test", "url": "/"},
+            "alert": {"signature_id": 9, "signature": "Password sent unencrypted", "severity": 1},
+        }
+    )
+    (alert,) = parse_alerts(eve)
+    assert "not_applicable" not in alert
+    assert alert["flows"][0]["url"] == "http://plain.test/"
 
 
 @pytest.mark.skipif(shutil.which("suricata") is None, reason="needs a local suricata binary")

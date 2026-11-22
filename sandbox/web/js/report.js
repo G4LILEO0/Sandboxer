@@ -747,10 +747,52 @@ function renderDomains(r) {
       el('td', { className: age !== null && age !== undefined && age < 30 ? 'small warn-text' : 'small', textContent: age === null || age === undefined ? '' : `${age} days` }),
       el('td', { className: 'small', textContent: notes.join('; ') }));
   })) : empty('No contacted hosts recorded.'));
-  const ids = net.suricata_alerts || [];
-  section('r-ids').replaceChildren(ids.length ? table(['SID', 'Signature', 'Category', 'Flows'], ids.map((a) => el('tr', {},
-    el('td', { textContent: a.sid }), el('td', { textContent: a.signature }), el('td', { className: 'small', textContent: a.category }),
-    el('td', { className: 'small monospace', textContent: a.flows.map((f) => (f.decrypted_https ? `HTTPS (decrypted) ${f.url || f.dest}` : `${f.src} → ${f.dest}`)).join('\n') })))) : empty('No IDS alerts (or Suricata is not configured).'));
+  renderIdsAlerts(net.suricata_alerts || []);
+}
+
+// One card per Suricata rule that fired: the rule, why it scored what it did, and for
+// each matched flow the endpoints, the HTTP/TLS/DNS details and the payload that matched.
+function idsFlow(f) {
+  const where = f.decrypted_https
+    ? `HTTPS (decrypted from the HAR) ${Api.defang(f.url || f.dest)}`
+    : `${f.proto || ''} ${f.src} → ${f.dest}${f.url ? `  ${Api.defang(f.url)}` : ''}`;
+  const http = f.http || {};
+  const lines = [
+    http.method || http.status ? `HTTP ${[http.method, http.protocol, http.status].filter(Boolean).join(' ')}` : '',
+    http.hostname && !f.url ? `Host: ${Api.defang(http.hostname)}${http.url || ''}` : '',
+    http.content_type ? `Content-Type: ${http.content_type}` : '',
+    http.referer ? `Referer: ${Api.defang(http.referer)}` : '',
+    http.user_agent ? `User-Agent: ${http.user_agent}` : '',
+    f.tls ? `TLS ${[f.tls.version, f.tls.sni && `SNI ${Api.defang(f.tls.sni)}`, f.tls.ja3 && `JA3 ${f.tls.ja3}`].filter(Boolean).join(' · ')}` : '',
+    f.dns ? `DNS query ${Api.defang(f.dns.query)}${f.dns.type ? ` (${f.dns.type})` : ''}` : '',
+  ].filter(Boolean);
+  return el('div', { className: 'ids-flow' },
+    el('div', { className: 'small monospace', textContent: where }),
+    el('div', { className: 'small muted', textContent: [Api.fmtTime(f.ts), f.app_proto && f.app_proto !== 'failed' ? f.app_proto : '', f.direction ? `direction ${f.direction}` : ''].filter(Boolean).join(' · ') }),
+    lines.length ? el('pre', { className: 'small monospace', textContent: lines.join('\n') }) : '',
+    f.payload ? el('details', {}, el('summary', { className: 'small', textContent: `Matched payload${f.payload_truncated ? ' (first 2 KB)' : ''}` }),
+      el('pre', { className: 'small', textContent: f.payload })) : '');
+}
+
+function renderIdsAlerts(ids) {
+  if (!ids.length) { section('r-ids').replaceChildren(empty('No IDS alerts (or Suricata is not configured).')); return; }
+  const weights = new Map(((state.report && state.report.contributions) || [])
+    .filter((c) => c.source === 'suricata').map((c) => [c.name, c.weight]));
+  section('r-ids').replaceChildren(...ids.map((a) => {
+    const weight = weights.get(`sid:${a.sid}`);
+    const meta = Object.entries(a.metadata || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+    const flows = a.flows || [];
+    return el('div', { className: 'ids-alert' },
+      el('div', { className: 'ids-head' },
+        el('strong', { textContent: a.signature || `sid ${a.sid}` }),
+        el('span', { className: 'small muted', textContent: ` sid ${a.sid}${a.rev ? ` rev ${a.rev}` : ''} · ${a.category || 'uncategorised'} · severity ${a.severity ?? '?'}${a.count > 1 ? ` · ${a.count} hits` : ''}` }),
+        weight === undefined ? '' : el('span', { className: weight > 0 ? 'small warn-text' : 'small muted', textContent: weight > 0 ? `  +${weight} to score` : '  not scored' })),
+      a.not_applicable ? el('p', { className: 'small warn-text', textContent: `Likely false positive: ${a.not_applicable}` }) : '',
+      ...flows.map(idsFlow),
+      a.count > flows.length ? empty(`${a.count - flows.length} more hits not shown.`) : '',
+      a.rule ? details('Rule', a.rule) : '',
+      meta ? details('Rule metadata', meta) : '');
+  }));
 }
 
 // --- IOCs, notes, tags -------------------------------------------------------------
