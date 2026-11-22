@@ -1,17 +1,21 @@
 """Analyses: submit, search, status, report, timeline, network, IOCs, tags, overrides,
 notes, re-analysis (SUB, ORC-3, REP, ANA-9, ANA-12, ANA-13, section 7)."""
 
+import asyncio
 import csv
 import io
 import json
 import math
+import os
+import tempfile
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from sqlalchemy import and_, delete, exists, func, or_, select
+from starlette.background import BackgroundTask
 
 from sandbox.api.access import get_visible, visible_clause
 from sandbox.api.auth import (
@@ -33,6 +37,7 @@ from sandbox.api.schemas import (
     AnalysisSummary,
     BulkCreate,
     BulkResult,
+    BundleBody,
     ErrorBody,
     Mode,
     NoteBody,
@@ -59,7 +64,7 @@ from sandbox.db.models import (
 )
 from sandbox.ids import new_id
 from sandbox.orchestrator import jobs
-from sandbox.runtime_config import get_all
+from sandbox.runtime_config import get_all, get_config
 
 router = APIRouter(prefix="/v1/analyses", tags=["analyses"])
 
@@ -883,6 +888,153 @@ async def add_note(
         "body": note.body,
         "created_at": note.created_at.isoformat(),
     }
+
+
+@router.post("/{analysis_id}/artifact-bundle", responses={409: {"model": ErrorBody}})
+async def artifact_bundle(
+    analysis_id: str,
+    body: BundleBody,
+    request: Request,
+    principal: UserOnly,
+    db: Db,
+    store: Store,
+) -> FileResponse:
+    """Every stored artifact, the report, the timeline and the verdict details as one
+    AES-encrypted zip (password ``infected``) with a manifest and README.
+
+    With ``missed_detection`` the analysis is also marked as a detection the sandbox
+    missed: an analyst tag, a note with the expected verdict and reason, and an audit
+    record, so a detection engineer can find it (``?tag=missed-detection``). The bundle
+    includes quarantined downloads, so like a quarantined download it is for users
+    only, needs a reason and is audited."""
+    from sandbox.api.bundle import MISSED_TAG, BundleFile, write_bundle
+    from sandbox.api.report import artifact_dict
+
+    analysis = await get_visible(db, principal, analysis_id)
+    if analysis.status in ("queued", "running"):
+        raise _error(409, "not_ready", "The capture is still running; export it once it ends")
+    reason = body.reason.strip()
+    missed = None
+    if body.missed_detection:
+        missed = {
+            "reported_by": principal.subject,
+            "reported_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "expected_verdict": body.expected_verdict,
+            "automatic_verdict": analysis.verdict,
+            "score": analysis.score,
+            "version": analysis.version,
+            "reason": reason,
+        }
+        has_tag = await db.scalar(
+            select(AnalysisTag.id).where(
+                AnalysisTag.analysis_id == analysis.id,
+                AnalysisTag.origin == "analyst",
+                AnalysisTag.tag == MISSED_TAG,
+            )
+        )
+        if not has_tag:
+            db.add(
+                AnalysisTag(
+                    analysis_id=analysis.id,
+                    tag=MISSED_TAG,
+                    origin="analyst",
+                    added_by=principal.subject,
+                )
+            )
+        db.add(
+            Note(
+                id=new_id("nt"),
+                analysis_id=analysis.id,
+                author=principal.subject,
+                body=f"Missed detection reported. Expected verdict: {body.expected_verdict} "
+                f"(automatic: {analysis.verdict or 'none'}, score {analysis.score}). "
+                f"Reason: {reason}",
+            )
+        )
+        await db.flush()
+    report = json.loads(json.dumps(await build_report(db, analysis), default=str))
+    rows = list(
+        await db.scalars(
+            select(Event).where(Event.analysis_id == analysis.id).order_by(Event.ts, Event.id)
+        )
+    )
+    events = json.loads(
+        json.dumps(
+            [
+                {"id": e.id, "ts": e.ts, "kind": e.kind, "source": e.source, "payload": e.payload}
+                for e in rows
+            ],
+            default=str,
+        )
+    )
+    artifacts = list(
+        await db.scalars(
+            select(Artifact)
+            .where(Artifact.analysis_id == analysis.id)
+            .order_by(Artifact.kind, Artifact.name)
+        )
+    )
+    files = [
+        BundleFile(
+            json.loads(json.dumps(artifact_dict(a), default=str)),
+            a.object_key,
+            store.path(a.object_key) if store.exists(a.object_key) else None,
+        )
+        for a in artifacts
+    ]
+    max_bytes = int(await get_config(db, "artifact_bundle_max_mb")) * 1024 * 1024
+    fd, tmp = tempfile.mkstemp(prefix="bundle-", suffix=".zip")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            manifest = await asyncio.to_thread(
+                write_bundle,
+                fh,
+                report=report,
+                events=events,
+                files=files,
+                exported_by=principal.subject,
+                missed_detection=missed,
+                max_bytes=max_bytes,
+            )
+    except BaseException:
+        os.unlink(tmp)
+        raise
+    detail = {
+        "files": len(manifest["files"]),
+        "skipped": len(manifest["skipped"]),
+        "quarantined": [f["sha256"] for f in manifest["files"] if f["quarantined"]],
+        "reason": reason,
+    }
+    if missed:
+        record_audit(
+            db,
+            actor=principal.subject,
+            action="analysis.missed_detection",
+            target=analysis.id,
+            source_ip=_source_ip(request),
+            detail={k: missed[k] for k in ("expected_verdict", "automatic_verdict", "reason")},
+        )
+    record_audit(
+        db,
+        actor=principal.subject,
+        action="analysis.export_bundle",
+        target=analysis.id,
+        source_ip=_source_ip(request),
+        detail=detail,
+    )
+    await db.commit()
+    suffix = "missed-detection" if missed else "artifacts"
+    return FileResponse(
+        tmp,
+        media_type="application/zip",
+        filename=f"{analysis.id}-{suffix}.zip",
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+            "X-Archive-Password": "infected",
+        },
+        background=BackgroundTask(os.unlink, tmp),
+    )
 
 
 @router.post("/{analysis_id}/reanalyse", status_code=202)

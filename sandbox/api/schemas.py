@@ -133,6 +133,17 @@ class NoteBody(BaseModel):
     body: str = Field(min_length=1, max_length=10000)
 
 
+class BundleBody(BaseModel):
+    """Export every artifact as one encrypted zip; ``missed_detection`` also marks the
+    analysis as a detection the sandbox missed, for a detection engineer to pick up."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=3, max_length=2000)
+    missed_detection: bool = False
+    expected_verdict: Literal["malicious", "suspicious"] = "malicious"
+
+
 class ExtendBody(BaseModel):
     seconds: int | None = Field(None, ge=30, le=3600)
 
