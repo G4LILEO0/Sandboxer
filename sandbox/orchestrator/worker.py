@@ -173,6 +173,16 @@ async def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     ctx = WorkerContext.create(settings)
+    check_access = getattr(ctx.backend, "check_access", None)
+    if check_access is not None:
+        from sandbox.orchestrator.docker_backend import DockerUnavailable
+
+        try:
+            await asyncio.to_thread(check_access)
+        except DockerUnavailable as exc:
+            log.error("worker cannot start: %s", exc)
+            await ctx.close()
+            raise SystemExit(2) from None
     worker = Worker(ctx)
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
