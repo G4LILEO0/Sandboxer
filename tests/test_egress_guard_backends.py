@@ -57,6 +57,7 @@ def _sh() -> str:
 
 def _run(tmp_path: Path, docker: str, installed=BINARIES, backend: str | None = None):
     sh = _sh()
+    tmp_path.mkdir(parents=True, exist_ok=True)
     bin_dir = tmp_path / "bin"
     state = tmp_path / "state"
     bin_dir.mkdir()
@@ -82,6 +83,7 @@ def _run(tmp_path: Path, docker: str, installed=BINARIES, backend: str | None = 
     }
     if backend:
         env["SANDBOX_EGRESS_IPTABLES"] = backend
+    (tmp_path / "env").write_text(repr(env))
     result = subprocess.run(  # noqa: S603
         [sh, str(GUARD)], env=env, capture_output=True, text=True, timeout=60
     )
@@ -94,6 +96,17 @@ def _run(tmp_path: Path, docker: str, installed=BINARIES, backend: str | None = 
     return result, calls, hooked
 
 
+def _rerun(tmp_path: Path, docker: str):
+    """Start the guard again on the state an earlier _run left behind."""
+    import ast
+
+    env = ast.literal_eval((tmp_path / "env").read_text())
+    env["STUB_DOCKER"] = docker
+    return subprocess.run(  # noqa: S603
+        [_sh(), str(GUARD)], env=env, capture_output=True, text=True, timeout=60
+    )
+
+
 def test_legacy_host_gets_rules_on_the_legacy_backend(tmp_path):
     """openSUSE: the host's iptables is legacy, DOCKER-USER exists only there."""
     result, calls, hooked = _run(tmp_path, docker="iptables-legacy ip6tables-legacy")
@@ -102,7 +115,7 @@ def test_legacy_host_gets_rules_on_the_legacy_backend(tmp_path):
     assert hooked("ip6tables-legacy", "DOCKER-USER")
     assert "iptables-nft -w -N" not in calls
     assert "ip6tables-nft -w -N" not in calls
-    assert "rules installed with iptables-legacy" in result.stdout
+    assert "IPv4 rules installed with iptables-legacy" in result.stdout
 
 
 def test_nft_host_gets_rules_on_the_nft_backend(tmp_path):
@@ -156,3 +169,23 @@ def test_bad_backend_setting_is_refused(tmp_path):
 def test_image_ships_both_backends():
     dockerfile = (ROOT / "docker" / "egress.Dockerfile").read_text()
     assert "iptables-legacy" in dockerfile
+
+
+def test_rules_kept_from_an_earlier_run_are_reported(tmp_path):
+    """A recreated guard finds its IPv4 chains already there and must still say so."""
+    first, _, _ = _run(tmp_path / "a", docker="iptables-legacy ip6tables-legacy")
+    assert "IPv4 rules installed" in first.stdout
+    # Same state directory, second container start.
+    second = _rerun(tmp_path / "a", docker="iptables-legacy ip6tables-legacy")
+    assert "IPv4 rules already in place with iptables-legacy" in second.stdout
+
+
+def test_br_netfilter_off_gives_the_host_commands(tmp_path):
+    result, _, _ = _run(tmp_path, docker="iptables-nft ip6tables-nft")
+    # No /proc/sys/net/bridge in the test namespace, or br_netfilter is on: either way the
+    # state is reported once, and when off it carries the fix.
+    lines = [line for line in result.stdout.splitlines() if "br_netfilter" in line]
+    assert len(lines) == 1
+    if "is off" in lines[0]:
+        assert "modprobe br_netfilter" in lines[0]
+        assert "net.bridge.bridge-nf-call-ip6tables=1" in lines[0]

@@ -33,7 +33,7 @@ Sessions reach public IPv6 sites when the Docker host has IPv6 routing. Check it
 
 - On Docker Desktop, the Windows host needs a global IPv6 address and a default route (`Get-NetIPAddress -AddressFamily IPv6` shows more than `fe80::` addresses). Docker Desktop's network setting must allow IPv6 (dual IPv4/IPv6).
 - On Linux, Docker needs `ip6tables` (the default since Docker 27) so that it adds the NAT66 rule and the `DOCKER-USER` chain. Without `DOCKER-USER` in ip6tables, the guard hooks its rules into `FORWARD` instead.
-- `net.bridge.bridge-nf-call-ip6tables` must be `1`, or session-to-session and session-to-API IPv6 on the bridge bypasses the rules. The guard logs a warning if it is not `1`.
+- `net.bridge.bridge-nf-call-ip6tables` must be `1`, or session-to-session and session-to-API IPv6 on the bridge bypasses the rules. The guard logs a warning if it is not `1`. See [br_netfilter](#br_netfilter).
 - On Docker Desktop, the guard runs inside Docker's Linux VM and cannot see the Windows host's addresses. If the office LAN has public IPv6, put its prefix (and the Windows host's addresses, if they are outside it) in `SANDBOX_EGRESS_BLOCKED6` in `.env`, space-separated. On Linux, the guard finds the host's prefixes itself and updates the rules when they change.
 
 Without IPv6 routing, the system degrades cleanly: sessions are IPv4-only and analyses run as before. The pcap records IPv6 packets when a session has IPv6. Suricata runs with `HOME_NET` extended by `fc00::/7`, so `$HOME_NET -> $EXTERNAL_NET` rules match the sessions' IPv6 flows.
@@ -66,9 +66,34 @@ The image now has both backends. With `SANDBOX_EGRESS_IPTABLES=auto` (the defaul
 
 Check it after `docker compose up -d --build egress-guard`:
 
-- `docker compose logs egress-guard` shows `rules installed with iptables-legacy` (or `-nft`).
+- `docker compose logs egress-guard` shows `IPv4 rules installed with iptables-legacy` (or `-nft`, or `already in place`).
 - On the host, `sudo iptables -L DOCKER-USER -n` shows the `SBX-EGRESS` jump.
 - If the guard cannot find `DOCKER-USER` in any backend, it logs `error: no iptables backend has Docker's DOCKER-USER chain, so sessions are NOT isolated`, with the reason for each backend. The usual causes are Docker's firewall being off (`"iptables": false`) or Docker's own nftables backend (`Firewall Backend: nftables` in `docker info`), which has no `DOCKER-USER` chain. In those cases, firewall the session bridge in the host firewall instead, as described in "Before production".
+
+### br_netfilter
+
+Traffic between two containers on the session bridge (a session to the API, a session to another session) never leaves the bridge. It meets iptables only when the `br_netfilter` kernel module is loaded and `net.bridge.bridge-nf-call-iptables` and `net.bridge.bridge-nf-call-ip6tables` are `1`. Recent Docker versions no longer load the module on their own, and openSUSE does not load it by default. Without it, the guard's rules still stop sessions reaching the host, the LAN and the internet's private ranges, but not the API or other sessions. The worker's probe then finds the API reachable and refuses sessions. The guard logs `warning: br_netfilter is off on this host`.
+
+Turn it on now:
+
+```sh
+sudo modprobe br_netfilter
+sudo sysctl -w net.bridge.bridge-nf-call-iptables=1 net.bridge.bridge-nf-call-ip6tables=1
+```
+
+Keep it after a reboot:
+
+```sh
+echo br_netfilter | sudo tee /etc/modules-load.d/sandbox-br_netfilter.conf
+echo 'net.bridge.bridge-nf-call-iptables = 1' | sudo tee /etc/sysctl.d/90-sandbox-bridge.conf
+echo 'net.bridge.bridge-nf-call-ip6tables = 1' | sudo tee -a /etc/sysctl.d/90-sandbox-bridge.conf
+```
+
+The guard checks the setting on every pass and logs `br_netfilter is on` once it is. After a reboot, check it with `sysctl net.bridge.bridge-nf-call-iptables`.
+
+### Reading the guard's log
+
+On start, the guard logs one line per backend for IPv4: `IPv4 rules installed with iptables-legacy`, or `IPv4 rules already in place with iptables-legacy, kept from an earlier run` when a recreated container finds its chains still in the kernel. The IPv6 rules are always rebuilt on start. On the host, `sudo iptables -S DOCKER-USER` should show `-A DOCKER-USER -i sbx-sessions -j SBX-EGRESS`, and `sudo iptables -S SBX-EGRESS` the drop rules.
 
 With firewalld, a `firewall-cmd --reload` can remove the guard's rules; the guard puts them back within 10 seconds. If SELinux denies the guard's iptables calls (`Permission denied` in its log while `docker info` shows SELinux on), add `security_opt: [label=disable]` to the `egress-guard` service as well.
 

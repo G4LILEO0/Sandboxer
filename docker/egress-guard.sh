@@ -100,13 +100,26 @@ v6_of() {
     echo "ip6tables${1#iptables}"
 }
 
-# Bridged traffic between containers only meets iptables with br_netfilter on (Docker
-# turns it on itself; the worker's probe catches the case where it is off).
-for family in iptables ip6tables; do
-    if [ "$(cat /proc/sys/net/bridge/bridge-nf-call-$family 2>/dev/null)" != "1" ]; then
-        log "warning: net.bridge.bridge-nf-call-$family is not 1; session-to-API traffic on the bridge may bypass these rules"
-    fi
-done
+# Bridged traffic between containers on one bridge (session to API, session to
+# session) only meets iptables when the br_netfilter module is loaded and these sysctls
+# are 1. Recent Docker versions no longer load it on their own. Checked on every pass,
+# logged when it changes; the worker's probe refuses sessions while it is off.
+BRIDGE_NF=""
+check_bridge_nf() {
+    state=""
+    for family in iptables ip6tables; do
+        value="$(cat /proc/sys/net/bridge/bridge-nf-call-$family 2>/dev/null || echo missing)"
+        state="$state net.bridge.bridge-nf-call-$family=$value"
+    done
+    [ "$state" = "$BRIDGE_NF" ] && return 0
+    BRIDGE_NF="$state"
+    case "$state" in
+        *"=missing"* | *"=0"*)
+            log "warning: br_netfilter is off on this host ($(echo $state)). Traffic between containers on $BRIDGE (session to API, session to session) skips these rules, so the worker's probe will refuse sessions. On the host run: sudo modprobe br_netfilter && sudo sysctl -w net.bridge.bridge-nf-call-iptables=1 net.bridge.bridge-nf-call-ip6tables=1 (to keep it after a reboot, see docs/operations.md)"
+            ;;
+        *) log "br_netfilter is on ($(echo $state))" ;;
+    esac
+}
 
 # The host's global IPv6 addresses and the on-link prefixes they sit in (the office
 # LAN), excluding the session bridge's own prefix (already inside fc00::/7 or the
@@ -174,6 +187,7 @@ V6_SIGNATURE=""
 V6_MIN_DROPS="$(echo $BLOCKED6 | wc -w)"
 LAST_ERROR=""
 BOTH_WARNED=""
+FIRST_PASS=1
 
 # Log a problem once, not on every re-check, until it changes.
 problem() {
@@ -224,6 +238,7 @@ ensure_v6() {
 }
 
 ensure() {
+    check_bridge_nf
     IPTS="$(pick iptables)"
     if [ -z "$IPTS" ]; then
         problem "error: no iptables backend has Docker's DOCKER-USER chain, so sessions are NOT isolated ($(why_not iptables)). Check that Docker's firewall is on and uses iptables: 'docker info | grep -i firewall' should show 'iptables' (Docker's nftables backend has no DOCKER-USER chain; firewall the session bridge on the host instead). Compare 'sudo iptables --version' on the host with SANDBOX_EGRESS_IPTABLES ($BACKEND). Retrying every ${INTERVAL}s"
@@ -243,13 +258,16 @@ ensure() {
             || [ "$("$IPT" -w -S SBX-EGRESS | grep -c DROP)" -lt 15 ] \
             || ! "$IPT" -w -n -L SBX-INPUT >/dev/null 2>&1; then
             build_v4 "$IPT"
-            log "rules installed with $IPT (bridge $BRIDGE, api $API_IP)"
+            log "IPv4 rules installed with $IPT (bridge $BRIDGE, api $API_IP)"
+        elif [ -n "$FIRST_PASS" ]; then
+            log "IPv4 rules already in place with $IPT, kept from an earlier run (bridge $BRIDGE, api $API_IP)"
         fi
         hook "$IPT" DOCKER-USER SBX-EGRESS
         hook "$IPT" INPUT SBX-INPUT
     done
     ensure_v6 "$IPTS"
     LAST_ERROR=""
+    FIRST_PASS=""
     return 0
 }
 
