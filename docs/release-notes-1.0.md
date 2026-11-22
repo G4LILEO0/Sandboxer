@@ -5,7 +5,7 @@
 | Product | Sandboxer, the MSOC URL sandbox |
 | Version | 1.0 (MVP), first release |
 | Release date | 2026-11-22 |
-| Build | Branch `ioc-lookup-on-main` at commit `73a7bbf` |
+| Build | Branch `ioc-lookup-on-main` at commit `ada3268` |
 | Audience | MSOC analysts, detection engineers, platform owners and security reviewers |
 | Companion document | Sandboxer 1.0 executive summary |
 
@@ -49,6 +49,8 @@ Release 1.0 is ready for team use on a single host. It is not ready for producti
 - Automated runs that pass live Cloudflare Turnstile checks in most tries, and that report "unknown" when they cannot.
 - Live sessions with noVNC, read-only observers, a timeline, a video and audited clipboard transfer.
 - IoC lookup that checks local data first, then VirusTotal and AbuseIPDB.
+- A "Report missed detection" button. When the rules miss a malicious URL, the analyst exports all artifacts as one encrypted bundle for the detection engineer.
+- Deployment on Linux hosts with SELinux and either iptables backend, with a host setup script that checks and fixes the host.
 - OIDC single sign-on, four roles, service tokens with scopes, and an append-only audit log.
 - A full security review and a re-assessment before release. 16 of 24 findings are fixed, and the re-assessment found no new High finding.
 
@@ -217,6 +219,7 @@ A TLS proxy changes the TLS fingerprint that the site sees, so Sandboxer does no
 - Analysts can add notes and tags, and override the verdict.
 - Analysts can analyse a stored run again with new rules. Each analysis is a new version, and analysts can compare versions. Each version records the rule bundle and the detection-strings version that it used.
 - Analysts can print a report to PDF from the browser.
+- Export > All artifacts gives every stored artifact as one encrypted zip. Section 4.19 describes the bundle.
 
 ### 4.13 IoC lookup
 
@@ -290,6 +293,31 @@ Admin pages manage these items:
 - Webhooks notify a client when an analysis completes. Sandboxer signs each webhook with an HMAC of the time stamp and the body.
 - An embeddable widget lets an internal site submit URLs and show results. Admins set the allowed embed origins.
 
+### 4.19 Missed detections and artifact export
+
+Sometimes an analyst knows that a URL is malicious, but the verdict is benign or unknown. Sandboxer gives a direct path from that analyst to the detection engineer.
+
+1. On the finished report, the analyst selects **Report missed detection**.
+2. The analyst selects the expected verdict (malicious or suspicious) and writes the reason.
+3. Sandboxer adds the `missed-detection` tag and a note with the reason. The audit log records the report.
+4. The browser downloads one zip with all artifacts of the analysis. The analyst gives the zip to the detection engineer.
+5. The detection engineer finds all reported analyses with the `missed-detection` tag filter.
+
+The zip has AES-256 encryption with the password `infected`, because it contains hostile pages, scripts and downloads. It contains:
+
+- `README.txt` with a warning about the content.
+- `manifest.json`, with the kind, SHA-256, size and artifact ID of each file, and the missed-detection report.
+- `verdict.json`, with the verdict, score, thresholds, contributions, rule hits, indicator hits, IDS alerts and overrides.
+- `report.json` and `events.json` (the timeline).
+- `capture/`, with the HAR, pcap, DOM snapshots, scripts, screenshots, video and quarantined downloads.
+
+The `capture/` folder uses the runner's own layout. The detection engineer can run the built-in rules on it again: `python -m sandbox.analysis.local <analysis id>/capture`.
+
+- Only signed-in users can export a bundle. Service tokens cannot, because the bundle contains quarantined files.
+- The audit log records each export, with the SHA-256 of each quarantined file in it.
+- The bundle has a size limit (`artifact_bundle_max_mb`, default 512 MB). Video, pcap and screenshots go in last, so they are the first files to be left out. The manifest lists each file that is not in the bundle.
+- Export > All artifacts gives the same bundle without the tag, the note or the missed-detection report.
+
 ## 5. Detection content
 
 ### 5.1 Summary
@@ -328,6 +356,9 @@ Several rounds of tests ran the rules against live phishing and malware samples.
 - A fake CAPTCHA in a cross-site iframe lost its clipboard write. Sandboxer now collects hook reports from all frames.
 - A Microsoft account-picker clone behind a Turnstile gate scored benign. It now scores malicious.
 - A kit with its own Turnstile gate failed the check and lost its capture. Sandboxer now passes the check in most tries and keeps the capture.
+- A benign site got a false internal-network-probe hit. Its DNS answer was an IPv4-mapped IPv6 address. Sandboxer now checks such an address as its IPv4 address, and mapped internal addresses stay blocked.
+
+When the rules miss a malicious URL, the analyst can now report it with its artifacts (section 4.19). Each report becomes input for the next detection round.
 
 ## 6. Security
 
@@ -339,7 +370,7 @@ Several rounds of tests ran the rules against live phishing and malware samples.
 - **Authentication.** OIDC single sign-on, with group-to-role mapping. Service tokens for systems. Production refuses to start with dev authentication or a weak secret.
 - **Authorisation.** Four roles: analyst, senior analyst, detection engineer and admin. Restricted analyses are visible only to permitted users.
 - **Signed links.** Sandboxer signs live-view, embed and download links, and the links expire after a short time. Logs do not contain the tokens.
-- **Quarantine.** Sandboxer stores downloads read-only and never runs them. Analysts get them as encrypted ZIP files. Size limits protect against decompression bombs.
+- **Quarantine.** Sandboxer stores downloads read-only and never runs them. Analysts get them as encrypted ZIP files, alone or in an artifact bundle. Service tokens cannot download them. Size limits protect against decompression bombs.
 - **Audit.** An append-only audit log records each important action, including clipboard copies and setting changes.
 - **Live-view protection.** A token-checked proxy, a strict content security policy and a type allowlist.
 - **Metrics.** In production, `/metrics` needs a token.
@@ -358,11 +389,16 @@ A re-assessment on 2026-11-22 checked the release build (`73a7bbf`). It covered 
 - Four new findings: SR-25 (Low), SR-26 (Medium), SR-27 (Info) and SR-28 (Info). Appendix B lists them.
 - The local stack still uses dev authentication and the default signing secret. Do not publish it on the LAN until LAN findings C-1 and C-2 have a fix.
 
+Two changes came after the re-assessment. A short check of each found no new finding:
+
+- **Artifact bundle export.** It follows the rules for quarantined downloads: signed-in users only, visibility rules applied, encryption and an audit record.
+- **Linux host support.** The worker container runs with SELinux labels turned off (`label=disable`), so that it can use the Docker socket. This adds little risk, because socket access already gives root on the host (SR-19). The change applies to the worker only.
+
 ## 7. Installation and configuration
 
 ### 7.1 Requirements
 
-- Docker with Compose. The egress guard works on Docker Desktop and on Linux hosts that use Docker's iptables firewall.
+- Docker with Compose. The egress guard works on Docker Desktop and on Linux hosts that use Docker's iptables firewall. On Linux, both iptables backends (legacy and nf_tables) work, and SELinux can stay in enforcing mode.
 - Internet access for the worker and the session containers.
 - A free abuse.ch Auth-Key for URLhaus, ThreatFox and MalwareBazaar, from `https://auth.abuse.ch/`.
 - Optional: VirusTotal and AbuseIPDB API keys for enrichment.
@@ -382,17 +418,38 @@ The API applies the database migrations each time it starts. In dev mode, a menu
 
 Build the session image again after each change to the runner. A missing session image looks like an egress error.
 
-### 7.3 Configuration
+### 7.3 Deployment on a Linux host
+
+1. Install Docker, with its default iptables firewall, and the Compose plugin. Clone the repository.
+2. Copy `.env.example` to `.env` and edit it. Set `SANDBOX_SECRET_KEY`, for example with `openssl rand -hex 32`.
+3. Run `sudo scripts/host-setup.sh --fix`.
+4. Build the images: `docker compose --profile build build`
+5. Start the stack: `docker compose up -d --build`
+6. Run `scripts/host-setup.sh` again. It tells you whether the egress guard installed its rules.
+7. Submit a test URL.
+
+`scripts/host-setup.sh` without `--fix` changes nothing. It checks Docker, Docker's firewall backend, rootless mode, `br_netfilter`, the iptables backend, the guard rules, firewalld, SELinux, `.env` and the images. For each problem that it does not fix, it gives the command to run.
+
+With `--fix`, the script loads the `br_netfilter` module and sets the bridge sysctls to 1. It also writes files in `/etc/modules-load.d/` and `/etc/sysctl.d/`, so that both settings stay after a reboot. Without `br_netfilter`, traffic between containers on the bridge does not go through the firewall rules.
+
+The stack handles these Linux differences automatically:
+
+- **SELinux.** The worker container runs with `label=disable`, so it can use the Docker socket. The Postgres init file uses the `:z` mount option.
+- **iptables backend.** The guard image contains both `iptables-nft` and `iptables-legacy`. The guard finds Docker's `DOCKER-USER` chain on either backend. `SANDBOX_EGRESS_IPTABLES` (`auto`, `nft` or `legacy`) can set the backend.
+- **Clear errors.** If the worker cannot reach Docker, it logs the cause in one line and stops. If no backend has the `DOCKER-USER` chain, the guard logs a "NOT isolated" error. The probe error names `br_netfilter` when the module is missing.
+- **Host ports.** On Linux, the isolation probe also tests the Docker host's own ports.
+
+### 7.4 Configuration
 
 Static settings are `SANDBOX_*` environment variables in `.env`. Admins change runtime settings in Admin > Configuration, and Postgres stores them. Appendix A lists the most important settings. `docs/operations.md` describes all settings.
 
-### 7.4 Single sign-on
+### 7.5 Single sign-on
 
 1. Set `SANDBOX_AUTH_MODE=oidc`.
 2. Set `SANDBOX_OIDC_ISSUER`, `SANDBOX_OIDC_CLIENT_ID`, `SANDBOX_OIDC_CLIENT_SECRET` and `SANDBOX_OIDC_REDIRECT_URL` (`https://<host>/auth/callback`).
 3. Map identity-provider groups to roles with `SANDBOX_OIDC_ROLE_MAP`, for example `{"sg-soc": "analyst", "sg-soc-leads": "senior_analyst"}`.
 
-### 7.5 LAN access
+### 7.6 LAN access
 
 By default, the API listens only on `127.0.0.1`, port 8000. Set `SANDBOX_API_BIND` and `SANDBOX_API_PORT` in `.env` to change this. The optional file `compose.lan.yaml` also publishes the API on a LAN address:
 
@@ -402,7 +459,7 @@ Before you use this file, set `SANDBOX_LAN_IP` to the host's LAN address in `.en
 
 Do not use this file until a sign-in proxy is in front of the API and `SANDBOX_SECRET_KEY` has a random value. Section 9.2 explains why.
 
-### 7.6 Production checklist
+### 7.7 Production checklist
 
 Before production, complete these steps. `docs/operations.md` gives the details.
 
@@ -440,6 +497,9 @@ Before production, complete these steps. `docs/operations.md` gives the details.
 | A session is stuck | The reaper removes it after its time limit plus the grace period. |
 | A Cloudflare check blocks a run | Run the URL again as a live session and pass the check manually, or use another egress IP. |
 | A session cannot connect to a malicious site | Test a TCP connection from the host to the site. An upstream network filter can block known phishing IP addresses. |
+| The rules missed a malicious URL | The analyst selects Report missed detection and gives the zip to the detection engineer. |
+| The worker says "Egress isolation check failed" | Read the cause in the message. On Linux, run `scripts/host-setup.sh`. |
+| A detection engineer needs the reported misses | Filter the Sandbox list by the `missed-detection` tag. |
 
 After you change built-in rules, wait for the bundle build to finish before you analyse reports again.
 
@@ -453,9 +513,10 @@ After you change built-in rules, wait for the bundle build to finish before you 
 - Some tests need Patchright and its Chromium. Where they are not installed, pytest skips these tests. The session image contains them.
 - The database and end-to-end tests need a Postgres test database (`TEST_DATABASE_URL`, with a name that ends in `_test`). Without it, only the unit tests run.
 - The OIDC tests check only the token format. Sign-in against the corporate identity provider is not tested.
-- In the API image, 657 unit tests passed and 53 skipped because there was no Postgres test database. Two tests failed only because the API image has no browser driver. They must skip in that case, as the other browser tests do.
-- CI fails on GitHub. The last run (2026-11-22) failed on one import-order finding from `ruff` in `sandbox/api/report.py`.
-- GitHub has the code up to commit `187915a`. The last commit of this build (`73a7bbf`) is not on GitHub yet.
+- 726 unit tests passed. Two tests failed only because the test environment has no browser driver. They must skip in that case, as the other browser tests do.
+- The Linux fixes were tested on Docker Desktop. SELinux and legacy iptables have tests with stub programs, and logs from an openSUSE host showed the problems. Nobody ran the full stack on an SELinux host after the fixes.
+- CI fails on GitHub on one import-order finding from `ruff` in `sandbox/api/report.py`.
+- GitHub has all the code of this build.
 
 ### 9.2 Security
 
@@ -484,7 +545,7 @@ After you change built-in rules, wait for the bundle build to finish before you 
 
 | Phase | Work | Result |
 | --- | --- | --- |
-| Consolidate | Push the code to GitHub, fix the CI finding, protect `main` | CI passes on each merge |
+| Consolidate | Fix the CI finding, merge into `main` and protect `main` | CI passes on each merge |
 | Harden | Serve noVNC from the API. Make gVisor and a seccomp profile mandatory. Put a socket proxy in front of the worker. Close SR-20 to SR-22, SR-25 and SR-26. | No open security finding without a fix or an accepted risk |
 | Integrate | Production host, OIDC with the corporate identity provider, monitoring, backups with a restore test | Analysts sign in on the production URL |
 | Prove | Labelled set of 300 or more URLs, accuracy check on each bundle, load test, two-week pilot | Measured accuracy and start time |
@@ -514,6 +575,8 @@ After you change built-in rules, wait for the bundle build to finish before you 
 | `SANDBOX_POSTGRES_PORT` | `5432` | The host port for Postgres. |
 | `SANDBOX_LAN_IP` | none | The LAN address for `compose.lan.yaml`. Compose refuses to start that file without it. |
 | `SANDBOX_LAN_PORT` | `8000` | The port on the LAN address. |
+| `SANDBOX_EGRESS_IPTABLES` | `auto` | The iptables backend for the egress guard: `auto`, `nft` or `legacy`. |
+| `artifact_bundle_max_mb` (Admin > Configuration) | `512` | The maximum size of an artifact bundle, in MB. |
 
 ## Appendix B. Security findings
 

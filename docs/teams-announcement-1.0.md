@@ -11,6 +11,8 @@ What it does:
 - Lets you control the browser yourself in a live session.
 - Checks IoCs against our own data first, then VirusTotal and AbuseIPDB.
 
+If Sandboxer gives a wrong verdict for a malicious link, open the report and select "Report missed detection". Send me the zip that downloads. I use it to write new detection rules.
+
 Status: Release 1.0 is ready for team use on one host. It is not ready for production. The next steps are sign-in with corporate SSO, production hosting, accuracy tests and the legal sign-off.
 
 I attached the release notes and the executive summary. Please send me your questions and feedback.
