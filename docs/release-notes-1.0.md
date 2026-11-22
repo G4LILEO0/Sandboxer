@@ -1,0 +1,523 @@
+# Sandboxer 1.0 release notes
+
+| | |
+| --- | --- |
+| Product | Sandboxer, the MSOC URL sandbox |
+| Version | 1.0 (MVP), first release |
+| Release date | 2026-11-22 |
+| Build | Branch `ioc-lookup-on-main` at commit `267cf84` |
+| Audience | MSOC analysts, detection engineers, platform owners and security reviewers |
+| Companion document | Sandboxer 1.0 executive summary |
+
+## 1. Overview
+
+Sandboxer 1.0 is the first release of the MSOC URL sandbox. Sandboxer opens a suspicious link in a disposable, isolated browser and records all page activity. It then gives the analyst a report with a verdict and the evidence for that verdict.
+
+Each report gives one of four verdicts: malicious, suspicious, benign or unknown. The report lists each rule hit and the points that it added, so the analyst can see why the link got its verdict. The report also contains screenshots, a video, the network traffic, the IoCs and the MITRE ATT&CK techniques.
+
+Sandboxer has three modes of work:
+
+- **Automated runs.** Sandboxer opens the link, observes the page and scores the result with no analyst action.
+- **Live sessions.** The analyst controls the sandbox browser from the web UI.
+- **IoC lookup.** The analyst checks a URL, domain, IP address, file hash or email address without a detonation.
+
+Release 1.0 is ready for team use on a single host. It is not ready for production. Section 9 gives the known limitations, and section 10 gives the work that is necessary before production.
+
+### 1.1 Document structure
+
+| Section | Contents |
+| --- | --- |
+| 2 | Highlights of the release |
+| 3 | Architecture and components |
+| 4 | Features, area by area |
+| 5 | Detection content |
+| 6 | Security controls and the security review |
+| 7 | Installation and configuration |
+| 8 | Operation and day-to-day tasks |
+| 9 | Known limitations |
+| 10 | Roadmap |
+| Appendix A | Settings reference |
+| Appendix B | Security review findings |
+
+## 2. Highlights
+
+- Hardened, disposable browser container for each run, with network isolation for IPv4 and IPv6.
+- 85 built-in behaviour rules and 11 web YARA rules for current phishing and malware-delivery kits.
+- 96 detection strings that a detection engineer can edit, test and revert in the Admin UI.
+- Threat feed matching from six sources, optional Suricata scans of HTTP and HTTPS traffic, and optional VirusTotal enrichment.
+- Explainable verdicts. Each verdict lists every contribution to the score.
+- Automated runs that pass live Cloudflare Turnstile checks in most tries, and that report "unknown" when they cannot.
+- Live sessions with noVNC, read-only observers, a timeline, a video and audited clipboard transfer.
+- IoC lookup that checks local data first, then VirusTotal and AbuseIPDB.
+- OIDC single sign-on, four roles, service tokens with scopes, and an append-only audit log.
+- A full security review before release, with 16 of 24 findings fixed.
+
+## 3. Architecture
+
+### 3.1 Components
+
+Sandboxer runs as a set of Docker containers on one host.
+
+| Component | Function | Access that it needs |
+| --- | --- | --- |
+| `api` | FastAPI application. Serves the web UI, the REST API, the live-view proxy and the reports. | Postgres, read access to the artifact volumes, the session network for the live view |
+| `worker` | Runs the queue. Starts and supervises session containers, ingests the results, runs the analysis, runs feeds and scheduled jobs. | Postgres, read and write access to the artifact volumes, the Docker socket, internet access |
+| Session container | One disposable Chromium for each run. Sandboxer removes it after the run. | Internet only. The `egress-guard` service enforces this. |
+| pcap sidecar | Records the traffic of one session. | The network namespace of that session, and the `NET_RAW` capability only |
+| `egress-guard` | Puts the session firewall rules on the Docker host and keeps them in place. | The host network namespace and the `NET_ADMIN` capability only |
+| Postgres | Stores the queue, the analyses, rules, feeds, settings and the audit log. | Local volume |
+| Suricata (optional) | Scans the session pcap. | Read access to the pcap |
+
+### 3.2 Processing flow
+
+1. An analyst or a system submits a URL. The API normalises the URL, applies the SSRF guard and the quotas, and puts the run in the queue.
+2. A worker takes the run from the queue. It checks network isolation, then starts a session container and a pcap sidecar.
+3. The session runs Chromium. The runner records the page activity until the time limit, or until the analyst ends the session.
+4. The worker collects the results. It runs YARA, Suricata, feed matching, domain checks and the behaviour rules.
+5. The worker calculates the score and the verdict, extracts the IoCs and maps the findings to MITRE ATT&CK.
+6. The API shows the report. If a client registered a webhook, Sandboxer sends a signed notification.
+
+### 3.3 Technology
+
+- Python with FastAPI for the API. Postgres 16 for all state, with Alembic migrations.
+- Chromium, driven by Patchright, inside the session container. Patchright has the same interface as Playwright, but bot checks cannot see it.
+- A static HTML and JavaScript UI with no build step.
+- A filesystem artifact store behind an `ArtifactStore` interface. An S3-compatible store can replace it later.
+
+## 4. Features
+
+### 4.1 URL submission
+
+- Analysts submit URLs from the web UI, the API, a bulk list or an embeddable widget.
+- Each run has options: automated or live, the time limit (30 to 3600 seconds), the locale, the time zone and the screen size.
+- Four browser profiles are available: Chrome on Windows (the default), Chrome on macOS, Chrome on Linux and Chrome on Android.
+- Sandboxer normalises each URL with WHATWG-style parsing before the run. It handles punycode, spaced dots, ports and wrapped URLs.
+- The SSRF guard refuses internal and private addresses, so a submission cannot reach the company network.
+- Quotas limit the number of runs for each user. A per-analyst limit controls the number of live sessions.
+- Sandboxer can give a recent report for the same URL and not run the URL again.
+
+### 4.2 Isolated detonation
+
+- Each run gets a new container. Sandboxer removes the container after the run.
+- The container runs as non-root, with a read-only root filesystem, no Linux capabilities and resource limits. gVisor (`runsc`) is optional.
+- Automated runs use the full Chromium on a virtual screen (Xvfb), not a headless browser. The browser sends no "HeadlessChrome" value, and its user agent agrees with the Chromium version that runs.
+- The page hooks that record activity are hidden from common bot checks.
+- Sessions block service workers by default.
+- All outbound requests from Sandboxer send a desktop Chrome user agent. This includes feeds, webhooks, domain lookups and the redirect walker. Cloaking kits send non-browser clients to a decoy page, so this setting is important.
+
+### 4.3 Network isolation
+
+A detonated page must reach the internet and nothing else. The browser refuses internal addresses for each request. The network also enforces this rule, because DNS rebinding, WebRTC and other paths can avoid a check in the browser.
+
+- Sessions run on their own Docker bridge network (`sbx-sessions`, `172.31.213.0/24`).
+- The `egress-guard` service puts firewall rules on the Docker host. The rules block connections from sessions to private, loopback, link-local, cloud-metadata, CGNAT, multicast and reserved addresses, and to the host.
+- The API can open connections to sessions on the live-view port only. Sessions cannot open connections to the API.
+- The guard checks its rules every 10 seconds. If something removes a rule, the guard puts it back.
+- Before the worker starts sessions, it runs a test container. If the test container can reach the API, the host, the Docker API, Postgres or cloud metadata, the worker refuses to start sessions. The message is "Egress isolation check failed".
+- The worker keeps a passed test for 5 minutes.
+- The guard works on Docker Desktop and on Linux hosts that use Docker's iptables firewall.
+
+### 4.4 IPv6 support
+
+- Sessions can reach public IPv6 sites. The session network has an IPv6 subnet (`fd5b:d213:5e55::/64`), and Docker translates it to the host's IPv6 address (NAT66).
+- The guard applies the IPv4 blocks to IPv6 too. It blocks ULA (`fc00::/7`), link-local (`fe80::/10`), site-local, loopback, IPv4-mapped and translated addresses, NAT64, 6to4, Teredo, multicast, and the documentation and reserved ranges.
+- The guard also blocks the IPv6 metadata address `fd00:ec2::254`, the host's own IPv6 addresses and the host's IPv6 LAN prefixes. It blocks all IPv6 that is not global unicast (`2000::/3`).
+- The worker test container also tries the API and cloud metadata over IPv6.
+- If the host has no IPv6 route to the internet, sessions use IPv4 only. If the worker cannot reach a public IPv6 address, new sessions start with IPv6 off. Thus a page does not wait for an IPv6 connection that cannot work.
+- When IPv6 becomes available, the worker turns it on again within 5 minutes.
+- The pcap records IPv6 traffic, and Suricata treats the session IPv6 range as the home network.
+
+### 4.5 Capture
+
+During each run, Sandboxer records the following:
+
+- The redirect chain, including HTTP redirects, meta refresh and JavaScript redirects.
+- A HAR file with response bodies, a CDP request log with initiator data, and a pcap of all IPv4 and IPv6 traffic.
+- Screenshots, DOM snapshots, scripts, forms and the frame tree.
+- Console messages, dialogs, popups, WebSocket frames and clipboard writes.
+- TLS certificates and DNS answers for each host.
+- Page hook reports from all frames, including cross-site iframes. Fake CAPTCHA kits often put the clipboard write in such an iframe.
+- Downloads. Sandboxer puts each download into quarantine with its hashes. It stores the file read-only and never runs it.
+- Download attempts that deliver no file. Some kits click a download link while the server holds the response. Sandboxer records each attempt with a status: requested, no response, failed or complete.
+
+When a session ends, the runner writes its results within 20 seconds. If the browser is still closing, the runner writes a partial result, so the capture is not lost.
+
+### 4.6 Live sessions
+
+- The analyst controls the sandbox browser from the web UI through noVNC.
+- The API checks a token before it streams a session. Other analysts can watch as read-only observers, and the server enforces read-only access.
+- A banner in the live view tells the analyst that the session is a sandbox.
+- The timeline records each analyst action. Sandboxer also records a video of the session.
+- The analyst can extend, pause or end a session.
+- Only the submitter or a senior analyst can cancel an analysis or end a live session.
+
+### 4.7 Clipboard transfer in live sessions
+
+- The analyst can copy text into the session, for example a new URL. The analyst can also copy text out of the session, for example a command from a lure.
+- Each copy is one explicit request. VNC clipboard sync stays off, so nothing syncs automatically.
+- Only the submitter or a senior analyst can copy. The API removes control characters and limits the size.
+- The audit log and the timeline record each copy.
+- Admins can turn off each direction and change the size limit.
+- Text that the analyst copies inside the session does not count as a page clipboard write, so it does not change the verdict.
+
+### 4.8 Queue and reliability
+
+- A Postgres queue holds the runs. A global limit controls the number of sessions that run at the same time.
+- The UI shows the position of each run in the queue and its estimated start time.
+- Each run has a time limit. A reaper removes containers that run past their limit plus a grace period.
+- More than one API and more than one worker can use one database. Workers claim work with `SKIP LOCKED` under an advisory lock, and each worker sends a heartbeat.
+- If a worker stops, the next worker takes its running sessions or fails them cleanly.
+
+### 4.9 Bot-check handling
+
+Many sites, and many phishing kits, put a Cloudflare check in front of the page. A run that sees only the check does not see the site. Sandboxer handles these checks as follows:
+
+- Patchright drives the browser. Stock Playwright turns on CDP features that Cloudflare detects. Live tests showed that every Playwright-driven run failed the check, and the same browser with no driver passed.
+- The locale comes from browser start options, not from Playwright locale emulation, because Cloudflare detects that emulation.
+- Page hooks do not run inside Cloudflare challenge frames.
+- Sandboxer recognises Cloudflare challenge pages, block pages and kit gates that show only a Turnstile widget.
+- When a run gets a challenge, the browser waits up to 45 seconds for it to clear. After 6 seconds, it clicks the Turnstile box. It clicks a second time 10 seconds later if necessary.
+- Sandboxer does not wait on a firewall block page. It does not use CAPTCHA-solving services.
+- The timeline shows each step, with a screenshot of the challenge.
+- If the run cannot get past the check, the verdict is "unknown", not "benign", unless other evidence scored the page. The report then gives the Cloudflare Ray ID and recommends a live re-run or another egress IP.
+
+### 4.10 Analysis and scoring
+
+Sandboxer uses five sources of evidence to score each run:
+
+1. **Behaviour rules.** Declarative rules match facts that the analysis builds from the capture. Section 5 describes them.
+2. **YARA.** Web YARA rules scan the DOM, scripts and downloads.
+3. **Threat feeds.** Sandboxer matches each URL, domain, IP address and file hash against the feed indicators.
+4. **Suricata (optional).** Suricata scans the pcap with ET Open and local rules.
+5. **Domain intelligence.** Sandboxer checks domain age through RDAP, punycode, look-alike names and brands, and suspicious redirects.
+
+Each hit adds points to a weighted score. A score of 70 or more is malicious. A score of 30 or more is suspicious. Admins can change the weights and the thresholds.
+
+The report lists every contribution to the score. The Evidence button shows what each rule matched on. Sandboxer can recalculate any verdict from the stored hits, weights and thresholds.
+
+### 4.11 Suricata over HTTPS
+
+The session pcap holds HTTPS as encrypted data, so Suricata's HTTP rules match only plain HTTP traffic. Sandboxer solves this problem without a TLS proxy:
+
+- The analysis rebuilds each answered HTTPS request from the HAR as plain HTTP in a second pcap.
+- Suricata reads both pcap files in one run.
+- The report marks alerts from the second pcap as `decrypted_https` and shows the request URL.
+- A re-analysis rebuilds the second pcap from the stored HAR.
+
+A TLS proxy changes the TLS fingerprint that the site sees, so Sandboxer does not use one.
+
+### 4.12 Reports
+
+- The report shows the verdict and the explanation first.
+- The report then shows screenshots, the video, a timeline with links to each event, and a network tab. It also shows the DOM, scripts, forms, the frame tree, domains and TLS.
+- The report lists the downloads, including the attempts that delivered no file.
+- IoC export is available as JSON, CSV, defanged text and STIX. The CSV export protects against formula injection.
+- Analysts can add notes and tags, and override the verdict.
+- Analysts can analyse a stored run again with new rules. Each analysis is a new version, and analysts can compare versions. Each version records the rule bundle and the detection-strings version that it used.
+- Analysts can print a report to PDF from the browser.
+
+### 4.13 IoC lookup
+
+- The lookup page accepts URLs, domains, IP addresses, file hashes and email addresses. The analyst can paste text, and the page finds the IoCs in it. It ignores normal prose.
+- The page first checks Sandboxer's own data through `/v1/intel/local`: the threat feeds, past analyses and the allowlist. No data leaves the server for this step.
+- A feed listing makes a result malicious. A related hit, for example on a parent domain, makes it suspicious.
+- The page then sends the IoCs to VirusTotal and AbuseIPDB, if the analyst allows it. A result with no vendor answer is "unknown", not "clean".
+- The page unwraps wrapped URLs, applies heuristics and follows redirects, including meta refresh. It flags meta-refresh cloaking.
+- The page gives a warning for newly registered domains.
+- VirusTotal pivots show related domains, IP addresses and files, with the full vendor details.
+- The analyst can filter and sort the results by verdict, copy the IoC list and detonate a URL or domain result.
+
+### 4.14 Feeds
+
+Sandboxer includes these feeds:
+
+| Feed | Content |
+| --- | --- |
+| URLhaus | Malware URLs (abuse.ch, needs an Auth-Key) |
+| ThreatFox | IoCs for malware (abuse.ch, needs an Auth-Key) |
+| MalwareBazaar | Malware file hashes (abuse.ch, needs an Auth-Key) |
+| OpenPhish | Phishing URLs |
+| Phishing.Database | Phishing domains and URLs |
+| PhishTank | Phishing URLs (off by default) |
+| Tranco | Popular domains, used as an allowlist |
+| MITRE ATT&CK | Technique data for the reports |
+
+- The worker downloads each feed on a schedule and checks it for errors and for freshness.
+- If a new download drops 90% of the indicators, Sandboxer refuses it.
+- Admin > Feeds shows the last error for each feed. "Run now" tries the feed again.
+
+### 4.15 Rules and bundles
+
+- Rules live in Postgres: YARA, Suricata and behaviour rules.
+- Sandboxer publishes rules as versioned bundles. It checks each bundle before it goes live.
+- If a bundle is bad, an admin activates the previous one in one step.
+- A detection engineer can test a rule against stored analyses before the rule goes live. The test does not show restricted analyses.
+- A detection engineer can disable a noisy rule, with a reason. Sandboxer then builds a new bundle.
+- Sandboxer turns off YARA `include` statements, so rule text cannot read files on the host.
+
+### 4.16 Detection strings
+
+The detection logic uses 96 detection strings: keyword patterns, host lists, file types, ports and points. Before this release, only a developer could change them.
+
+- The defaults are TOML files with comments, in `sandbox/detection/defaults/`, grouped by topic: ClickFix, downloads, exfiltration, forms, hosting, lures, Microsoft, network, scripts and web3.
+- A detection engineer edits them in Admin > Detection strings.
+- The page checks each change for errors and lets the engineer test it against sample text.
+- The audit log records each change. The next analysis, in the API and the worker, uses the new value.
+- Each change can be reverted to the default.
+- A detection engineer can also edit the body of each built-in behaviour or YARA rule. The edit stays until the engineer selects "Revert to built-in".
+
+### 4.17 Administration
+
+Admin pages manage these items:
+
+- Feeds and their keys
+- Rules, bundles and the rule tester
+- Scoring weights and verdict thresholds
+- Suppressions and the allowlist
+- Brands for impersonation checks (65 built-in brands, including Saudi government look-alikes)
+- Detection strings
+- API clients, service tokens and webhooks
+- Runtime settings: concurrency, quotas, time limits, retention, thresholds, embed origins and clipboard settings
+- The audit log
+
+### 4.18 API and integration
+
+- A REST API covers submission, status, reports, IoC export, the IoC lookup and administration.
+- The API documents itself at `/docs`, with the OpenAPI schema at `/openapi.json`.
+- Service tokens have scopes and rate limits.
+- Webhooks notify a client when an analysis completes. Sandboxer signs each webhook with an HMAC of the time stamp and the body.
+- An embeddable widget lets an internal site submit URLs and show results. Admins set the allowed embed origins.
+
+## 5. Detection content
+
+### 5.1 Summary
+
+| Item | Count |
+| --- | --- |
+| Built-in behaviour rules | 85 |
+| Built-in web YARA rules | 11 |
+| Detection strings | 96 |
+| Built-in brands | 65 |
+| Threat feeds | 6, plus the Tranco allowlist and ATT&CK data |
+
+Each rule has at least one true-positive test. Where it is important, a rule also has a test for the closest false positive.
+
+### 5.2 Coverage
+
+| Threat | Examples of what Sandboxer detects |
+| --- | --- |
+| ClickFix and FileFix | Clipboard writes of commands, Win+R and Win+X paste steps, remote `msiexec` packages, commands with look-alike or zero-width characters, fake CAPTCHA pages |
+| Microsoft 365 and AiTM phishing | Sign-in clones on foreign hosts, account-type picker clones, EvilTokens device-code kits, Tycoon 2FA, web-proxy login relays |
+| Credential theft | Credential forms that post to other sites, fake sign-in windows (browser-in-the-browser), webmail kits that borrow the victim's favicon, brand-named free-hosting tenants |
+| Data theft | Exfiltration to Telegram, Discord and form services |
+| Malware delivery | Automatic and executable downloads, archive and HTML smuggling, fake browser and Adobe Acrobat updates, held downloads |
+| Web3 | Wallet drainers, EtherHiding |
+| Evasion | Obfuscated and packed JavaScript, invisible-Unicode scripts, canvas CAPTCHAs, debugger traps, cloaking |
+| Network | Local and LAN port scans from the browser, internal probes, suspicious redirects |
+| Domains and brands | New domains, punycode, look-alike domains, brand impersonation, hosting providers' phishing block pages |
+
+`docs/detection-catalog.md` lists each rule, and `docs/detection-rules.md` explains how to write and tune rules.
+
+### 5.3 Validation against live samples
+
+Several rounds of tests ran the rules against live phishing and malware samples. These live samples caused changes in this release:
+
+- A fake Adobe Acrobat update kit scored benign because the server held the download. Sandboxer now records held downloads, and a rule flags the lure.
+- A fake CAPTCHA in a cross-site iframe lost its clipboard write. Sandboxer now collects hook reports from all frames.
+- A Microsoft account-picker clone behind a Turnstile gate scored benign. It now scores malicious.
+- A kit with its own Turnstile gate failed the check and lost its capture. Sandboxer now passes the check in most tries and keeps the capture.
+
+## 6. Security
+
+### 6.1 Security controls
+
+- **Container hardening.** Non-root, read-only root filesystem, no capabilities, resource limits, optional gVisor.
+- **Network isolation.** The egress guard and the worker test, for IPv4 and IPv6 (sections 4.3 and 4.4).
+- **SSRF protection.** The submission guard and the redirect walker pin each request to an address that passed the check. Feed downloads and webhooks use the same guard.
+- **Authentication.** OIDC single sign-on, with group-to-role mapping. Service tokens for systems. Production refuses to start with dev authentication or a weak secret.
+- **Authorisation.** Four roles: analyst, senior analyst, detection engineer and admin. Restricted analyses are visible only to permitted users.
+- **Signed links.** Sandboxer signs live-view, embed and download links, and the links expire after a short time. Logs do not contain the tokens.
+- **Quarantine.** Sandboxer stores downloads read-only and never runs them. Analysts get them as encrypted ZIP files. Size limits protect against decompression bombs.
+- **Audit.** An append-only audit log records each important action, including clipboard copies and setting changes.
+- **Live-view protection.** A token-checked proxy, a strict content security policy and a type allowlist.
+- **Metrics.** In production, `/metrics` needs a token.
+
+### 6.2 Security review
+
+A security review of the full code base took place before this release. It found 24 issues. This release fixes 16 of them and partly fixes SR-09. Two informational findings have accepted risk. Five findings are open. Appendix B lists all findings, and `docs/security-review.md` gives the details.
+
+## 7. Installation and configuration
+
+### 7.1 Requirements
+
+- Docker with Compose. The egress guard works on Docker Desktop and on Linux hosts that use Docker's iptables firewall.
+- Internet access for the worker and the session containers.
+- A free abuse.ch Auth-Key for URLhaus, ThreatFox and MalwareBazaar, from `https://auth.abuse.ch/`.
+- Optional: VirusTotal and AbuseIPDB API keys for enrichment.
+- Optional: a Suricata image, for example `jasonish/suricata:7.0`.
+
+### 7.2 Procedure
+
+1. Get the release code from `https://github.com/G4LILEO0/Sandboxer.git`.
+2. Copy `.env.example` to `.env`.
+3. Set `SANDBOX_SECRET_KEY` to a random value of 32 or more characters.
+4. Set `SANDBOX_ABUSECH_AUTH_KEY`. Add the VirusTotal and AbuseIPDB keys if you have them.
+5. Build the session and pcap images: `docker compose --profile build build`
+6. Start the stack: `docker compose up --build`
+7. Open `http://127.0.0.1:8000/`.
+
+The API applies the database migrations each time it starts. In dev mode, a menu in the page header lets you act as any user and role.
+
+Build the session image again after each change to the runner. A missing session image looks like an egress error.
+
+### 7.3 Configuration
+
+Static settings are `SANDBOX_*` environment variables in `.env`. Admins change runtime settings in Admin > Configuration, and Postgres stores them. Appendix A lists the most important settings. `docs/operations.md` describes all settings.
+
+### 7.4 Single sign-on
+
+1. Set `SANDBOX_AUTH_MODE=oidc`.
+2. Set `SANDBOX_OIDC_ISSUER`, `SANDBOX_OIDC_CLIENT_ID`, `SANDBOX_OIDC_CLIENT_SECRET` and `SANDBOX_OIDC_REDIRECT_URL` (`https://<host>/auth/callback`).
+3. Map identity-provider groups to roles with `SANDBOX_OIDC_ROLE_MAP`, for example `{"sg-soc": "analyst", "sg-soc-leads": "senior_analyst"}`.
+
+### 7.5 LAN access
+
+By default, the API listens only on `127.0.0.1`. The optional file `compose.lan.yaml` also publishes the API on a LAN address:
+
+`docker compose -f compose.yaml -f compose.lan.yaml up -d`
+
+Do not use this file until a sign-in proxy is in front of the API and `SANDBOX_SECRET_KEY` has a random value. Section 9.2 explains why.
+
+### 7.6 Production checklist
+
+Before production, complete these steps. `docs/operations.md` gives the details.
+
+1. Keep the egress guard running, with `SANDBOX_EGRESS_GUARD=enforce`.
+2. Run the worker on a dedicated host or VM, and use gVisor where available.
+3. Set a long random `SANDBOX_SECRET_KEY`, the same on each API instance.
+4. Configure OIDC single sign-on.
+5. Check the licence and key for each feed.
+6. Get the legal and safety sign-off.
+7. Set `SANDBOX_NOVNC_DIR` so that the API serves the live-view page itself.
+8. Set `SANDBOX_METRICS_TOKEN`.
+
+## 8. Operation
+
+### 8.1 Monitoring
+
+- `/metrics` gives Prometheus metrics: queue depth, running sessions, failures, verdict counts, job states, feed staleness and the active bundle.
+- `/healthz` is the liveness check. `/healthz/ready` fails when Postgres is not available.
+- The worker log shows the result of each egress test, including public IPv6.
+
+### 8.2 Storage and retention
+
+- Artifacts are on a filesystem volume. Downloads are on a separate quarantine volume.
+- Retention runs every hour. The default periods are 90 days for most artifacts, 30 days for quarantine, video and pcap, and 180 days for events.
+- When retention removes an artifact, the database row stays, with a "removed" mark.
+
+### 8.3 Day-to-day tasks
+
+| Situation | Action |
+| --- | --- |
+| A rule is noisy | Admin > Rules > Disable, with a reason. Analyse the affected reports again if necessary. |
+| A bad bundle went live | Admin > Bundles & scoring > Activate the previous bundle. |
+| A feed is stale | Admin > Feeds shows the last error. Select "Run now". |
+| A feed causes a false positive | Admin > Suppressions & allowlist > Suppress the indicator. |
+| A session is stuck | The reaper removes it after its time limit plus the grace period. |
+| A Cloudflare check blocks a run | Run the URL again as a live session and pass the check manually, or use another egress IP. |
+| A session cannot connect to a malicious site | Test a TCP connection from the host to the site. An upstream network filter can block known phishing IP addresses. |
+
+After you change built-in rules, wait for the bundle build to finish before you analyse reports again.
+
+## 9. Known limitations
+
+### 9.1 Test coverage
+
+- Public IPv6 from a session is not tested. The test host has no IPv6 route to the internet. The IPv6 blocks, the IPv4-only fallback, the pcap and Suricata passed their tests on that host.
+- Live tests passed real Turnstile checks in about 5 of 6 tries with the Windows profile. Some runs can still fail the check.
+- Cloudflare also scores the egress IP. A datacenter or VPN address with a poor reputation can still get a challenge.
+- Some tests need Patchright and its Chromium. Where they are not installed, pytest skips these tests. The session image contains them.
+- The database and end-to-end tests need a Postgres test database (`TEST_DATABASE_URL`, with a name that ends in `_test`). Without it, only the unit tests run.
+- The OIDC tests check only the token format. Sign-in against the corporate identity provider is not tested.
+- CI fails on GitHub. The last run (2026-11-21) failed on one import-order finding from `ruff` in `sandbox/api/report.py`.
+- The last seven commits of this build are not on GitHub yet.
+
+### 9.2 Security
+
+- Dev authentication has no sign-in. Under dev auth, anyone who can reach the API can act as admin.
+- Do not use `compose.lan.yaml` until a sign-in proxy is in front of the API and `SANDBOX_SECRET_KEY` has a random value. Refer to `docs/lan-exposure-assessment.md`, findings C-1 and C-2.
+- SR-09 is partly open. Set `SANDBOX_NOVNC_DIR` so that the API serves the live-view page itself.
+- SR-18 is open. Chromium runs without its own sandbox. Docker Desktop on Windows cannot run gVisor.
+- SR-19 is open. The worker uses the Docker socket, which gives root access to the host.
+- On Docker Desktop, the guard cannot see the IPv6 addresses of the Windows host. If the office LAN has public IPv6, put its prefix in `SANDBOX_EGRESS_BLOCKED6`. Without this setting, a session can connect to the Windows host and to other devices on the office LAN over IPv6.
+- SR-20 to SR-22 are open and low. An admin cannot revoke a session. Rule regexes have no time limit. The IoC lookup has no per-user rate limit.
+
+### 9.3 Scope and accuracy
+
+- Verdict accuracy is not measured yet. A labelled URL set does not exist yet.
+- No load test at 6 concurrent sessions took place, and the session start time is not measured.
+- DNS from sessions goes to the host's resolver. A page can resolve internal names, but it cannot connect to them.
+- An automated run does not click through kit gates. A kit that waits for a click on its own checkbox can score benign. Run such URLs as live sessions.
+- The report PDF is the browser's print-to-PDF.
+- These items are not in this release: canary fill, OCR and QR codes, SVG smuggling and the cloaking re-run.
+- These items are also not in this release: MISP export, live-session embed, a warm container pool and the Windows executable phase.
+- Legal and safety sign-off (NFR-10) is not complete. Get it before you detonate third-party sites in production.
+
+## 10. Roadmap
+
+| Phase | Work | Result |
+| --- | --- | --- |
+| Consolidate | Push the code to GitHub, fix the CI finding, protect `main` | CI passes on each merge |
+| Harden | Serve noVNC from the API, make gVisor and a seccomp profile mandatory, put a socket proxy in front of the worker, close SR-20 to SR-22 | No open security finding without a fix or an accepted risk |
+| Integrate | Production host, OIDC with the corporate identity provider, monitoring, backups with a restore test | Analysts sign in on the production URL |
+| Prove | Labelled set of 300 or more URLs, accuracy check on each bundle, load test, two-week pilot | Measured accuracy and start time |
+| Go live | Legal and safety sign-off, acceptance checklist, analyst training | Use by all 13 analysts |
+
+## Appendix A. Settings reference
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `SANDBOX_SECRET_KEY` | none | Signs cookies and links. Use a random value of 32 or more characters. |
+| `SANDBOX_AUTH_MODE` | `dev` | `dev` for local use only. `oidc` for single sign-on. |
+| `SANDBOX_ABUSECH_AUTH_KEY` | empty | Key for URLhaus, ThreatFox and MalwareBazaar. |
+| `SANDBOX_EGRESS_GUARD` | `enforce` | `enforce` refuses sessions if the egress test fails. `warn` logs only. |
+| `SANDBOX_SESSION_RUNTIME` | Docker default | Set to `runsc` for gVisor. |
+| `SANDBOX_AUTOMATED_HEADED` | `true` | Automated runs use a headed Chromium on a virtual screen. Set to `false` for the new headless mode. |
+| `SANDBOX_ANTIBOT_WAIT_S` | `45` | The maximum time, in seconds, that a run waits for a Cloudflare challenge to clear. |
+| `SANDBOX_ALLOW_SERVICE_WORKERS` | `false` | Lets pages register service workers. |
+| `SANDBOX_SURICATA_IMAGE` | none | The Suricata image. Without it, Sandboxer stores the pcap but does not scan it. |
+| `SANDBOX_SURICATA_DECRYPTED_HTTPS` | `true` | Suricata also scans HTTPS requests from the HAR. |
+| `SANDBOX_SESSION_IPV6` | `auto` | `auto` gives sessions IPv6 only when the worker can reach a public IPv6 address. `on` always gives sessions IPv6. `off` never gives sessions IPv6. |
+| `SANDBOX_EGRESS_BLOCKED6` | empty | More IPv6 ranges that sessions must not reach. On Docker Desktop, put the office LAN's public IPv6 prefix here. |
+| `SANDBOX_NOVNC_DIR` | empty | A local noVNC copy. The API then serves the live-view page itself. |
+| `SANDBOX_METRICS_TOKEN` | empty | Token for `/metrics`. Production needs it. |
+| `SANDBOX_LAN_IP` | none | The LAN address for `compose.lan.yaml`. |
+
+## Appendix B. Security review findings
+
+| ID | Severity | Finding | Status |
+| --- | --- | --- | --- |
+| SR-01 | High | Redirect walk open to DNS rebinding (SSRF from the API) | Fixed |
+| SR-02 | High | YARA `include` can read files on the API and worker hosts | Fixed |
+| SR-08 | High | Public default secret accepted outside production | Fixed |
+| SR-09 | High | Live-view files from the session container served on the API origin | Partly fixed |
+| SR-18 | High | Chromium runs without its own sandbox | Open |
+| SR-03 | Medium | Rule tester shows restricted analyses | Fixed |
+| SR-04 | Medium | Feed downloads and webhooks have no SSRF guard | Fixed |
+| SR-05 | Medium | Any analyst can cancel another analyst's work | Fixed |
+| SR-06 | Medium | OIDC token header chooses its own signing algorithm | Fixed |
+| SR-07 | Medium | Open redirect after sign-in | Fixed |
+| SR-19 | Medium | Worker runs as root with the Docker socket | Open |
+| SR-10 | Low | Login CSRF on the sign-in callback | Fixed |
+| SR-11 | Low | STIX export: unescaped pattern values | Fixed |
+| SR-12 | Low | IoC lookup builds vendor links with `innerHTML` | Fixed |
+| SR-13 | Low | Signed tokens written to logs | Fixed |
+| SR-14 | Low | `/metrics` open without a token in production | Fixed |
+| SR-15 | Low | Decompression bombs in downloads and feed archives | Fixed |
+| SR-16 | Low | Webhook URL not checked on client update | Fixed |
+| SR-20 | Low | SSO sessions cannot be revoked | Open |
+| SR-21 | Low | Rule regexes have no time limit | Open |
+| SR-22 | Low | No per-user rate limit on the IoC lookup | Open |
+| SR-17 | Info | Embed screenshot served without the sandbox CSP | Fixed |
+| SR-23 | Info | Compose defaults for local development | Accepted |
+| SR-24 | Info | VNC password limited to 8 characters | Accepted |
