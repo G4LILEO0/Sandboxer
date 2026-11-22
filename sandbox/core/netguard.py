@@ -51,6 +51,12 @@ class NetGuard:
         ip = ipaddress.ip_address(address)
         if any(ip in net for net in self.allowed):
             return None
+        # An IPv4-mapped address (::ffff:a.b.c.d) goes out as plain IPv4, so it is judged
+        # as that IPv4 address alone; some resolvers return public IPv4 hosts this way.
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+            if any(ip in net for net in self.allowed):
+                return None
         for candidate in _embedded_addresses(ip):
             if reason := self._reason(candidate):
                 return reason
