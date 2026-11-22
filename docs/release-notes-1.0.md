@@ -382,9 +382,11 @@ Static settings are `SANDBOX_*` environment variables in `.env`. Admins change r
 
 ### 7.5 LAN access
 
-By default, the API listens only on `127.0.0.1`. The optional file `compose.lan.yaml` also publishes the API on a LAN address:
+By default, the API listens only on `127.0.0.1`, port 8000. Set `SANDBOX_API_BIND` and `SANDBOX_API_PORT` in `.env` to change this. The optional file `compose.lan.yaml` also publishes the API on a LAN address:
 
 `docker compose -f compose.yaml -f compose.lan.yaml up -d`
+
+Before you use this file, set `SANDBOX_LAN_IP` to the host's LAN address in `.env`. Compose refuses to start without it. `SANDBOX_LAN_PORT` sets the port on that address (default 8000).
 
 Do not use this file until a sign-in proxy is in front of the API and `SANDBOX_SECRET_KEY` has a random value. Section 9.2 explains why.
 
@@ -491,7 +493,12 @@ After you change built-in rules, wait for the bundle build to finish before you 
 | `SANDBOX_EGRESS_BLOCKED6` | empty | More IPv6 ranges that sessions must not reach. On Docker Desktop, put the office LAN's public IPv6 prefix here. |
 | `SANDBOX_NOVNC_DIR` | empty | A local noVNC copy. The API then serves the live-view page itself. |
 | `SANDBOX_METRICS_TOKEN` | empty | Token for `/metrics`. Production needs it. |
-| `SANDBOX_LAN_IP` | none | The LAN address for `compose.lan.yaml`. |
+| `SANDBOX_API_BIND` | `127.0.0.1` | The host address on which the API listens. |
+| `SANDBOX_API_PORT` | `8000` | The host port for the API. |
+| `SANDBOX_POSTGRES_BIND` | `127.0.0.1` | The host address on which Postgres listens. |
+| `SANDBOX_POSTGRES_PORT` | `5432` | The host port for Postgres. |
+| `SANDBOX_LAN_IP` | none | The LAN address for `compose.lan.yaml`. Compose refuses to start that file without it. |
+| `SANDBOX_LAN_PORT` | `8000` | The port on the LAN address. |
 
 ## Appendix B. Security review findings
 
