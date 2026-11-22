@@ -38,7 +38,7 @@ services:
       POSTGRES_PASSWORD: sandbox
       POSTGRES_DB: sandbox
     ports:
-      - "127.0.0.1:6432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
@@ -57,7 +57,7 @@ services:
     image: sandbox-api:latest
     environment: *app-env
     ports:
-      - "${SANDBOX_API_BIND:-127.0.0.1}:7000:8000"
+      - "${SANDBOX_API_BIND:-127.0.0.1}:8000:8000"
     volumes:
       - artifacts:/data/artifacts
       - quarantine:/data/quarantine:ro
