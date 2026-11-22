@@ -19,6 +19,8 @@ _SURICATA_INFORMATIONAL = ("ET INFO", "ET POLICY", "ET HUNTING", "GPL INFO", "SU
 
 
 def suricata_factor(alert: dict[str, Any]) -> float:
+    if alert.get("not_applicable"):
+        return 0.0
     signature = str(alert.get("signature") or "")
     if signature.upper().startswith(_SURICATA_INFORMATIONAL):
         return 0.0
@@ -122,7 +124,15 @@ def score(
                 "suricata",
                 f"sid:{alert['sid']}",
                 w,
-                {"signature": alert.get("signature"), "severity": alert.get("severity")},
+                {
+                    "signature": alert.get("signature"),
+                    "severity": alert.get("severity"),
+                    **(
+                        {"not_applicable": alert["not_applicable"]}
+                        if alert.get("not_applicable")
+                        else {}
+                    ),
+                },
             )
         )
     if sur_cap is not None and sur_total > sur_cap:

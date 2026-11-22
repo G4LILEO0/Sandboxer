@@ -9,6 +9,7 @@ import asyncio
 import io
 import json
 import logging
+import re
 import tarfile
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,22 @@ log = logging.getLogger(__name__)
 # session subnet (inside fc00::/7), so without it $HOME_NET -> $EXTERNAL_NET rules would
 # never match IPv6 flows.
 HOME_NET = "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,fc00::/7]"
+
+# Alert records also carry the matched payload (printable, lossy) so an analyst can see
+# what triggered a rule. outputs.1 is eve-log and types.0 is alert in the image's stock
+# suricata.yaml.
+_EVE_ALERT = "outputs.1.eve-log.types.0.alert"
+EVE_ALERT_OPTIONS = [
+    f"{_EVE_ALERT}.payload=no",
+    f"{_EVE_ALERT}.payload-printable=yes",
+    f"{_EVE_ALERT}.payload-buffer-size=4kb",
+]
+# How much of each matched payload, and how many flows of each rule, the report keeps.
+PAYLOAD_LIMIT = 2048
+FLOWS_PER_ALERT = 10
+# Rules whose whole point is that the traffic was unencrypted. A flow rebuilt from the
+# HAR was HTTPS on the wire, so such a rule firing there is a false positive.
+_CLEARTEXT_PREMISE = re.compile(r"unencrypted|cleartext|clear[- ]text|plain[- ]?text", re.I)
 
 
 def _tar(files: dict[str, Path]) -> bytes:
@@ -56,6 +73,8 @@ def _run(settings, image: str, rules: Path, pcaps: list[Path]) -> tuple[bool, st
             "--set",
             f"vars.address-groups.HOME_NET={HOME_NET}",
         ]
+        for option in EVE_ALERT_OPTIONS:
+            cmd += ["--set", option]
     else:
         cmd = ["-T", "-S", "/work/rules.rules", "-l", "/work/out"]
     container = client.containers.create(
@@ -92,7 +111,75 @@ async def run_suricata(
     return await asyncio.to_thread(_run, ctx.settings, image, rules, pcaps)
 
 
-def parse_alerts(eve: str) -> list[dict[str, Any]]:
+def rule_texts(rules: Path | None, sids: set[int]) -> dict[int, str]:
+    """The rule source of each of ``sids`` in the rules file, read in one pass."""
+    found: dict[int, str] = {}
+    if not rules or not sids:
+        return found
+    sid_re = re.compile(r"[(;\s]sid\s*:\s*(\d+)\s*;")
+    try:
+        with open(rules, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if "sid" not in line or line.lstrip().startswith("#"):
+                    continue
+                m = sid_re.search(line)
+                if m and (sid := int(m.group(1))) in sids and sid not in found:
+                    found[sid] = line.strip()
+                    if len(found) == len(sids):
+                        break
+    except OSError:
+        log.warning("could not read rules file %s", rules)
+    return found
+
+
+def _metadata(meta: Any) -> dict[str, str]:
+    """eve's {key: [values]} rule metadata as {key: "v1, v2"}."""
+    if not isinstance(meta, dict):
+        return {}
+    return {
+        str(k): ", ".join(str(x) for x in v) if isinstance(v, list) else str(v)
+        for k, v in meta.items()
+    }
+
+
+def _app_layer(event: dict[str, Any]) -> dict[str, Any]:
+    """The protocol details Suricata logged with the alert, trimmed to what helps triage."""
+    out: dict[str, Any] = {}
+    if http := event.get("http"):
+        out["http"] = {
+            k: http[src]
+            for k, src in (
+                ("method", "http_method"),
+                ("hostname", "hostname"),
+                ("url", "url"),
+                ("status", "status"),
+                ("user_agent", "http_user_agent"),
+                ("content_type", "http_content_type"),
+                ("referer", "http_refer"),
+                ("protocol", "protocol"),
+            )
+            if http.get(src) not in (None, "")
+        }
+    if tls := event.get("tls"):
+        out["tls"] = {
+            k: tls[k] for k in ("sni", "version", "subject", "issuerdn", "ja3s") if tls.get(k)
+        }
+        if isinstance(tls.get("ja3"), dict) and tls["ja3"].get("hash"):
+            out["tls"]["ja3"] = tls["ja3"]["hash"]
+    if dns := event.get("dns"):
+        query = dns.get("rrname") or next(
+            (q.get("rrname") for q in dns.get("queries") or [] if q.get("rrname")), None
+        )
+        if query:
+            out["dns"] = {"query": query, "type": dns.get("rrtype")}
+    return out
+
+
+def parse_alerts(eve: str, rules: Path | None = None) -> list[dict[str, Any]]:
+    """Alerts in an eve.json, one entry per rule, with what each one matched.
+
+    ``rules`` is the rules file Suricata ran, used to attach each rule's source text.
+    """
     alerts: dict[int, dict[str, Any]] = {}
     for line in eve.splitlines():
         try:
@@ -107,24 +194,54 @@ def parse_alerts(eve: str) -> list[dict[str, Any]]:
             sid,
             {
                 "sid": sid,
+                "gid": alert.get("gid"),
+                "rev": alert.get("rev"),
                 "signature": alert.get("signature"),
                 "category": alert.get("category"),
                 "severity": alert.get("severity"),
+                "action": alert.get("action"),
+                "metadata": _metadata(alert.get("metadata")),
+                "count": 0,
                 "flows": [],
             },
         )
-        if len(entry["flows"]) < 10:
-            flow = {
-                "src": f"{event.get('src_ip')}:{event.get('src_port')}",
-                "dest": f"{event.get('dest_ip')}:{event.get('dest_port')}",
-                "proto": event.get("proto"),
-                "ts": event.get("timestamp"),
-            }
-            # Flows rebuilt from the HAR (har_pcap) stand for HTTPS requests.
-            if SYNTHETIC_CLIENT_IP in (event.get("src_ip"), event.get("dest_ip")):
-                flow["decrypted_https"] = True
-                http = event.get("http") or {}
-                if http.get("hostname"):
-                    flow["url"] = f"https://{http['hostname']}{http.get('url') or ''}"
-            entry["flows"].append(flow)
+        entry["count"] += 1
+        if len(entry["flows"]) >= FLOWS_PER_ALERT:
+            continue
+        flow: dict[str, Any] = {
+            "src": f"{event.get('src_ip')}:{event.get('src_port')}",
+            "dest": f"{event.get('dest_ip')}:{event.get('dest_port')}",
+            "proto": event.get("proto"),
+            "app_proto": event.get("app_proto"),
+            "direction": event.get("direction"),
+            "ts": event.get("timestamp"),
+            **_app_layer(event),
+        }
+        # Flows rebuilt from the HAR (har_pcap) stand for HTTPS requests.
+        if SYNTHETIC_CLIENT_IP in (event.get("src_ip"), event.get("dest_ip")):
+            flow["decrypted_https"] = True
+            http = event.get("http") or {}
+            if http.get("hostname"):
+                flow["url"] = f"https://{http['hostname']}{http.get('url') or ''}"
+        elif (http := flow.get("http")) and http.get("hostname"):
+            flow["url"] = f"http://{http['hostname']}{http.get('url') or ''}"
+        if payload := event.get("payload_printable"):
+            flow["payload"] = payload[:PAYLOAD_LIMIT]
+            if len(payload) > PAYLOAD_LIMIT:
+                flow["payload_truncated"] = True
+        entry["flows"].append(flow)
+
+    texts = rule_texts(rules, {s for s in alerts if isinstance(s, int)})
+    for sid, entry in alerts.items():
+        if sid in texts:
+            entry["rule"] = texts[sid]
+        if (
+            entry["flows"]
+            and all(f.get("decrypted_https") for f in entry["flows"])
+            and _CLEARTEXT_PREMISE.search(str(entry.get("signature") or ""))
+        ):
+            entry["not_applicable"] = (
+                "The rule flags unencrypted traffic, but this request was sent over HTTPS; "
+                "Suricata saw it only in the decrypted copy rebuilt from the HAR."
+            )
     return list(alerts.values())
