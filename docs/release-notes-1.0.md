@@ -44,7 +44,7 @@ Release 1.0 is ready for team use on a single host. It is not ready for producti
 - Hardened, disposable browser container for each run, with network isolation for IPv4 and IPv6.
 - 85 built-in behaviour rules and 11 web YARA rules for current phishing and malware-delivery kits.
 - 96 detection strings that a detection engineer can edit, test and revert in the Admin UI.
-- Threat feed matching from six sources, optional Suricata scans of HTTP and HTTPS traffic, and optional VirusTotal enrichment.
+- Threat feed matching from six sources, Suricata scans of HTTP and HTTPS traffic, and optional VirusTotal enrichment.
 - Explainable verdicts. Each verdict lists every contribution to the score.
 - Automated runs that pass live Cloudflare Turnstile checks in most tries, and that report "unknown" when they cannot.
 - Live sessions with noVNC, read-only observers, a timeline, a video and audited clipboard transfer.
@@ -66,7 +66,7 @@ Sandboxer runs as a set of Docker containers on one host.
 | pcap sidecar | Records the traffic of one session. | The network namespace of that session, and the `NET_RAW` capability only |
 | `egress-guard` | Puts the session firewall rules on the Docker host and keeps them in place. | The host network namespace and the `NET_ADMIN` capability only |
 | Postgres | Stores the queue, the analyses, rules, feeds, settings and the audit log. | Local volume |
-| Suricata (optional) | Scans the session pcap. | Read access to the pcap |
+| Suricata | Scans the session pcap. Compose pulls the image from Docker Hub. | Read access to the pcap |
 
 ### 3.2 Processing flow
 
@@ -188,7 +188,7 @@ Sandboxer uses five sources of evidence to score each run:
 1. **Behaviour rules.** Declarative rules match facts that the analysis builds from the capture. Section 5 describes them.
 2. **YARA.** Web YARA rules scan the DOM, scripts and downloads.
 3. **Threat feeds.** Sandboxer matches each URL, domain, IP address and file hash against the feed indicators.
-4. **Suricata (optional).** Suricata scans the pcap with ET Open and local rules.
+4. **Suricata.** Suricata scans the pcap with ET Open and local rules. It is on by default.
 5. **Domain intelligence.** Sandboxer checks domain age through RDAP, punycode, look-alike names and brands, and suspicious redirects.
 
 Each hit adds points to a weighted score. A score of 70 or more is malicious. A score of 30 or more is suspicious. Admins can change the weights and the thresholds.
@@ -354,7 +354,7 @@ A security review of the full code base took place before this release. It found
 - Internet access for the worker and the session containers.
 - A free abuse.ch Auth-Key for URLhaus, ThreatFox and MalwareBazaar, from `https://auth.abuse.ch/`.
 - Optional: VirusTotal and AbuseIPDB API keys for enrichment.
-- Optional: a Suricata image, for example `jasonish/suricata:7.0`.
+- Access to Docker Hub. Compose pulls the Suricata image (`jasonish/suricata:7.0`) and Postgres from Docker Hub.
 
 ### 7.2 Procedure
 
@@ -485,7 +485,7 @@ After you change built-in rules, wait for the bundle build to finish before you 
 | `SANDBOX_AUTOMATED_HEADED` | `true` | Automated runs use a headed Chromium on a virtual screen. Set to `false` for the new headless mode. |
 | `SANDBOX_ANTIBOT_WAIT_S` | `45` | The maximum time, in seconds, that a run waits for a Cloudflare challenge to clear. |
 | `SANDBOX_ALLOW_SERVICE_WORKERS` | `false` | Lets pages register service workers. |
-| `SANDBOX_SURICATA_IMAGE` | none | The Suricata image. Without it, Sandboxer stores the pcap but does not scan it. |
+| `SANDBOX_SURICATA_IMAGE` | `jasonish/suricata:7.0` | The Suricata image from Docker Hub. Set it to an empty value to turn off Suricata. Sandboxer then stores the pcap but does not scan it. |
 | `SANDBOX_SURICATA_DECRYPTED_HTTPS` | `true` | Suricata also scans HTTPS requests from the HAR. |
 | `SANDBOX_SESSION_IPV6` | `auto` | `auto` gives sessions IPv6 only when the worker can reach a public IPv6 address. `on` always gives sessions IPv6. `off` never gives sessions IPv6. |
 | `SANDBOX_EGRESS_BLOCKED6` | empty | More IPv6 ranges that sessions must not reach. On Docker Desktop, put the office LAN's public IPv6 prefix here. |

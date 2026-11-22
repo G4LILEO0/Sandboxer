@@ -29,7 +29,7 @@ Release 1.0 contains all planned MVP features. It is ready for use by the team o
 | Safe detonation | A new, hardened container for each link. A network guard blocks all access to internal networks over IPv4 and IPv6. |
 | Automated and live analysis | Automated runs with no analyst action, or live sessions where the analyst controls the browser. |
 | Full capture | Redirects, network traffic, screenshots, video, page content, scripts, forms, clipboard writes and downloads. |
-| Detection | 85 behaviour rules, 11 YARA rules, six threat feeds, optional Suricata network rules and domain checks. |
+| Detection | 85 behaviour rules, 11 YARA rules, six threat feeds, Suricata network rules and domain checks. |
 | Bot-check handling | Automated runs pass most Cloudflare checks. When a run cannot pass, the verdict is "unknown", not "benign". |
 | Reports | Verdict, explanation, evidence, IoC export (JSON, CSV, STIX) and MITRE ATT&CK mapping. |
 | IoC lookup | A check of URLs, domains, IP addresses, hashes and email addresses against local data, VirusTotal and AbuseIPDB. |
