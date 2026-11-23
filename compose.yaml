@@ -82,29 +82,82 @@ services:
   worker:
     image: sandbox-api:latest
     command: ["python", "-m", "sandbox.orchestrator"]
-    environment: *app-env
-    # Needs the Docker socket to start and remove session containers. This makes the
-    # worker host-privileged: never expose it, and keep it off the session network.
-    user: "0:0"
-    # SELinux hosts (openSUSE, Fedora, RHEL with "selinux-enabled": true): a labelled
-    # container may not connect to the Docker socket, and the worker fails with
-    # PermissionError 13 even as root. label=disable lifts SELinux confinement for this
-    # container only. It adds little, since socket access is root on the host already,
-    # and does nothing where SELinux is off. Never relabel the socket with :z or :Z.
-    security_opt:
-      - label=disable
+    environment:
+      <<: *app-env
+      # The worker never holds the Docker socket (SR-19). It reaches Docker only through
+      # docker-proxy, which passes the few calls the session backend makes and refuses
+      # host mounts, privileged containers and anything outside the sandbox's own
+      # containers. The worker runs as the image's non-root user "app".
+      SANDBOX_DOCKER_URL: tcp://docker-proxy:2375
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - artifacts:/data/artifacts
       - quarantine:/data/quarantine
+    networks:
+      default: {}
+      docker-api: {}
     restart: unless-stopped
     depends_on:
       api:
+        condition: service_healthy
+      data-owner:
+        condition: service_completed_successfully
+      docker-proxy:
         condition: service_healthy
       egress-guard:
         condition: service_started
       suricata-image:
         condition: service_completed_successfully
+
+  # The only container with the Docker socket. It filters every API call the worker
+  # sends (sandbox/dockerproxy.py) and sits on a network that only the worker joins.
+  # It runs as root only to open the socket, with no capabilities and a read-only root.
+  docker-proxy:
+    image: sandbox-api:latest
+    command: ["python", "-m", "sandbox.dockerproxy"]
+    user: "0:0"
+    environment:
+      SANDBOX_SESSION_NETWORK: sandbox_sessions
+      SANDBOX_SESSION_BRIDGE: sbx-sessions
+      # The images the worker may start. Keep in step with the session, pcap and
+      # Suricata images above.
+      SANDBOX_PROXY_IMAGES: "sandbox-session:latest sandbox-pcap:latest ${SANDBOX_SURICATA_IMAGE-jasonish/suricata:7.0}"
+      SANDBOX_PROXY_RUNTIMES: "runc runsc"
+    read_only: true
+    cap_drop: [ALL]
+    # SELinux hosts (openSUSE, Fedora, RHEL with "selinux-enabled": true): a labelled
+    # container may not connect to the Docker socket. label=disable lifts SELinux
+    # confinement for this container only, and does nothing where SELinux is off.
+    # Never relabel the socket with :z or :Z.
+    security_opt:
+      - label=disable
+      - no-new-privileges
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      docker-api: {}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-m", "sandbox.dockerproxy", "--check"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Gives the artifact and quarantine volumes to the worker's user (uid 10001). Earlier
+  # releases ran the worker as root, so files it wrote are root's. Exits straight away
+  # when nothing needs changing.
+  data-owner:
+    image: sandbox-api:latest
+    user: "0:0"
+    entrypoint: ["sh", "-c", "find /data/artifacts /data/quarantine ! -user 10001 -exec chown -h 10001 {} +"]
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - artifacts:/data/artifacts
+      - quarantine:/data/quarantine
+    restart: "no"
 
   # Firewall for the session network: sessions reach the public internet only (NFR-3).
   # Runs in the Docker host's network namespace with NET_ADMIN; the worker probes the
@@ -155,6 +208,9 @@ services:
     restart: "no"
 
 networks:
+  # Worker to docker-proxy only. internal: no route out, and no other service joins it.
+  docker-api:
+    internal: true
   sessions:
     name: sandbox_sessions
     driver: bridge

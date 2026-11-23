@@ -126,26 +126,32 @@ def explain_docker_error(exc: BaseException, url: str | None = None) -> str:
     )
     if denied:
         return (
-            f"Permission denied on the Docker socket ({socket}). The worker runs as root "
-            "(user 0:0), so on Linux this is almost always SELinux: with SELinux enforcing "
-            '(openSUSE, Fedora, RHEL; "selinux-enabled": true in /etc/docker/daemon.json) '
-            "a labelled container may not connect to the socket. compose.yaml runs the "
-            "worker with security_opt label=disable for this; recreate it with the current "
-            "compose.yaml (docker compose up -d --force-recreate worker) and check for "
-            "denials with: sudo ausearch -m avc -ts recent. If you run the worker as a "
-            "non-root user, also add the socket's group: group_add with the number from "
-            f"stat -c %g {socket}. Do not relabel the socket with :z. See "
-            "docs/operations.md, 'Docker socket and SELinux'."
+            f"Permission denied on the Docker socket ({socket}). Only the docker-proxy "
+            "service holds the socket, as root (user 0:0), so on Linux this is almost always "
+            'SELinux: with SELinux enforcing (openSUSE, Fedora, RHEL; "selinux-enabled": true '
+            "in /etc/docker/daemon.json) a labelled container may not connect to the socket. "
+            "compose.yaml runs docker-proxy with security_opt label=disable for this; "
+            "recreate it with the current compose.yaml (docker compose up -d "
+            "--force-recreate docker-proxy) and check for denials with: sudo ausearch -m avc "
+            "-ts recent. If you run it as a non-root user, also add the socket's group: "
+            f"group_add with the number from stat -c %g {socket}. Do not relabel the socket "
+            "with :z. See docs/operations.md, 'Docker socket and SELinux'."
         )
     missing = any(isinstance(e, FileNotFoundError) for e in chain) or (
         "No such file or directory" in text or "FileNotFoundError" in text
     )
     if missing:
         return (
-            f"No Docker socket at {socket}. Mount the host's socket into the worker "
+            f"No Docker socket at {socket}. Mount the host's socket into docker-proxy "
             "(compose.yaml does: /var/run/docker.sock:/var/run/docker.sock), or set "
             "DOCKER_HOST / SANDBOX_DOCKER_URL. With rootless Docker the socket is "
             "$XDG_RUNTIME_DIR/docker.sock on the host."
+        )
+    if url and url.startswith("tcp://"):
+        return (
+            f"Cannot reach Docker through the proxy at {url}: {exc}. The worker has no "
+            "Docker socket of its own (SR-19). Check that docker-proxy is running and "
+            "healthy: docker compose ps docker-proxy; docker compose logs docker-proxy."
         )
     return f"Cannot reach the Docker daemon at {socket}: {exc}"
 
