@@ -4,7 +4,7 @@
 | --- | --- |
 | Product | Sandboxer, the MSOC URL sandbox |
 | Version | 1.0 |
-| Release date | 2026-11-23 |
+| Release date | 2026-11-24 |
 | For | MSOC management and analysts |
 
 ## What Sandboxer is
