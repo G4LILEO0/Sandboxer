@@ -51,7 +51,7 @@ On a Windows workstation, do all steps. On a Linux server, start at step 6.
 19. Open `http://localhost:8000/` in a browser on the same computer (opens the Sandboxer UI. WSL forwards `localhost` from Windows to Ubuntu).
 20. In Admin > Configuration, set `max_concurrent_sessions` to 1 or 2 on a workstation (prevents too many sessions in the limited memory of WSL).
 
-Company workstations cannot use Docker Desktop, so they run Sandboxer in WSL 2 until the server deployment. WSL gets only part of the workstation's memory and CPU, so analysis there is slow.
+Workstations that cannot use Docker Desktop, so they can run Sandboxer in WSL 2 until the server deployment. WSL gets only part of the workstation's memory and CPU, so analysis there is slow.
 
 SELinux can stay enforcing, and the iptables backend can be legacy or nf_tables: the stack handles both. Troubleshooting for WSL and Linux hosts is in [docs/operations.md](docs/operations.md#windows-workstations-wsl-with-docker-engine).
 
