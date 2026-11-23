@@ -14,6 +14,9 @@ import idna
 
 ALLOWED_SCHEMES = frozenset({"http", "https"})
 DEFAULT_PORTS = {"http": 80, "https": 443}
+# Long phishing URLs (OAuth redirects with padded parameters) run past 2048; Chromium
+# accepts up to 2 MB. 8192 matches the API body limits.
+MAX_URL_LENGTH = 8192
 
 _SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.\-]*):(?!\d)")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -53,7 +56,7 @@ def refang(value: str) -> str:
     return value
 
 
-def normalise_url(raw: str, max_length: int = 2048) -> NormalisedURL:
+def normalise_url(raw: str, max_length: int = MAX_URL_LENGTH) -> NormalisedURL:
     value = raw.strip()
     if not value:
         raise InvalidURL("URL is empty")

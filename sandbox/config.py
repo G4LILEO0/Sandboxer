@@ -11,6 +11,8 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from sandbox.core.urls import MAX_URL_LENGTH
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SANDBOX_", env_file=".env", extra="ignore")
@@ -39,7 +41,7 @@ class Settings(BaseSettings):
     session_cookie_name: str = "sandbox_session"
     session_ttl_s: int = 8 * 3600
 
-    max_url_length: int = 2048
+    max_url_length: int = MAX_URL_LENGTH
     # CIDRs that are refused in addition to every non-global address.
     ssrf_extra_blocked_cidrs: list[str] = Field(default_factory=list)
     # CIDRs exempted from the block, e.g. the local test server in integration tests.

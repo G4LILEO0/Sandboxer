@@ -287,6 +287,7 @@ async def submit_bulk(
 async def list_analyses(
     principal: Reader,
     db: Db,
+    settings: AppSettings,
     url: str | None = Query(None, description="Exact URL. The API normalises it before matching"),
     domain: str | None = None,
     verdict: str | None = None,
@@ -305,7 +306,9 @@ async def list_analyses(
     conditions = [visible_clause(principal)]
     if url:
         try:
-            conditions.append(Analysis.normalised_url == normalise_url(url).url)
+            conditions.append(
+                Analysis.normalised_url == normalise_url(url, settings.max_url_length).url
+            )
         except InvalidURL as exc:
             raise _error(422, "invalid_url", str(exc)) from exc
     if domain:
