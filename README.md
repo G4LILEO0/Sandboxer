@@ -15,13 +15,26 @@ On a Windows workstation, do all steps. On a Linux server, start at step 6.
 **On Windows, in PowerShell as administrator**
 
 1. Run `wsl --install -d Ubuntu-24.04` (installs WSL 2 and Ubuntu. Restart Windows when it asks, then open Ubuntu and set a Linux user name and password).
-2. Run `notepad $env:USERPROFILE\.wslconfig` (sets the memory and CPU for WSL. Put `[wsl2]`, `memory=8GB` and `processors=4` on three lines, or as much as the workstation can spare, and save).
+2. Run `notepad $env:USERPROFILE\.wslconfig` (sets the memory and CPU for WSL). Paste these three lines into the file, change the numbers to what the workstation can spare, and save the file:
+
+   ```ini
+   [wsl2]
+   memory=8GB
+   processors=4
+   ```
+
 3. Run `wsl --shutdown` (restarts WSL, so that it uses the new memory and CPU settings).
 
 **In Ubuntu**
 
 4. Run `cat /etc/wsl.conf` (checks that systemd is on. Docker Engine runs as a systemd service. The file must have `systemd=true` under `[boot]`).
-5. If step 4 did not show `systemd=true`, run `sudo nano /etc/wsl.conf`, add the two lines `[boot]` and `systemd=true`, then run `wsl --shutdown` in PowerShell (turns on systemd).
+5. If step 4 did not show `systemd=true`, run `sudo nano /etc/wsl.conf` (turns on systemd). Add these two lines, save the file, then run `wsl --shutdown` in PowerShell and open Ubuntu again:
+
+   ```ini
+   [boot]
+   systemd=true
+   ```
+
 6. Run `sudo apt-get update && sudo apt-get install -y git curl openssl` (installs the tools that the next steps use).
 7. Run `curl -fsSL https://get.docker.com | sh` (installs Docker Engine and the Compose plugin with Docker's official script. In WSL, the script shows a Docker Desktop message and waits 20 seconds. Let it continue).
 8. Run `sudo usermod -aG docker $USER` (lets your user run Docker without sudo. Close the terminal and open it again so that this applies).

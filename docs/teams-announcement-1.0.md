@@ -17,6 +17,6 @@ How to run it: Until the server is ready, Sandboxer runs on your Windows laptop 
 
 Limitation: WSL gets only part of the laptop's memory and CPU. Each analysis is slow, and only 1 or 2 can run at the same time. The server deployment removes this limit.
 
-Status: Release 1.0 is ready for team use. It is not ready for production. The next steps are the server, sign-in with corporate SSO, accuracy tests and the legal sign-off.
+Status: Release 1.0 is ready for team use. It is not ready for production. The next steps are the server, accuracy tests and the legal sign-off.
 
 I attached the release notes and the executive summary. Please send me your questions and feedback.

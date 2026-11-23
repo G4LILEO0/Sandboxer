@@ -60,13 +60,26 @@ On a Windows workstation, do all steps. On a Linux server, start at step 6.
 **On Windows, in PowerShell as administrator**
 
 1. Run `wsl --install -d Ubuntu-24.04` (installs WSL 2 and Ubuntu. Restart Windows when it asks, then open Ubuntu and set a Linux user name and password).
-2. Run `notepad $env:USERPROFILE\.wslconfig` (sets the memory and CPU for WSL. Put `[wsl2]`, `memory=8GB` and `processors=4` on three lines, or as much as the workstation can spare, and save).
+2. Run `notepad $env:USERPROFILE\.wslconfig` (sets the memory and CPU for WSL). Paste these three lines into the file, change the numbers to what the workstation can spare, and save the file:
+
+   ```ini
+   [wsl2]
+   memory=8GB
+   processors=4
+   ```
+
 3. Run `wsl --shutdown` (restarts WSL, so that it uses the new memory and CPU settings).
 
 **In Ubuntu**
 
 4. Run `cat /etc/wsl.conf` (checks that systemd is on. Docker Engine runs as a systemd service. The file must have `systemd=true` under `[boot]`).
-5. If step 4 did not show `systemd=true`, run `sudo nano /etc/wsl.conf`, add the two lines `[boot]` and `systemd=true`, then run `wsl --shutdown` in PowerShell (turns on systemd).
+5. If step 4 did not show `systemd=true`, run `sudo nano /etc/wsl.conf` (turns on systemd). Add these two lines, save the file, then run `wsl --shutdown` in PowerShell and open Ubuntu again:
+
+   ```ini
+   [boot]
+   systemd=true
+   ```
+
 6. Run `sudo apt-get update && sudo apt-get install -y git curl openssl` (installs the tools that the next steps use).
 7. Run `curl -fsSL https://get.docker.com | sh` (installs Docker Engine and the Compose plugin with Docker's official script. In WSL, the script shows a Docker Desktop message and waits 20 seconds. Let it continue).
 8. Run `sudo usermod -aG docker $USER` (lets your user run Docker without sudo. Close the terminal and open it again so that this applies).
@@ -87,7 +100,7 @@ The API applies the database migrations each time it starts. In dev mode, a menu
 
 Run step 16 again after each change to the runner. A missing session image looks like an egress error.
 
-### 2.3 Notes for WSL workstations
+### 2.3 Notes for WSL workstations (optional)
 
 - Keep an Ubuntu window open while you use Sandboxer, because WSL can stop Ubuntu when all its windows close. After a restart, open Ubuntu, run `cd ~/Sandboxer`, then run `docker compose up -d`.
 - If Docker does not start and `sudo journalctl -u docker` shows iptables errors, run `sudo update-alternatives --set iptables /usr/sbin/iptables-legacy` and `sudo update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy`, then run `sudo systemctl restart docker`. The egress guard works with either backend.
@@ -97,7 +110,7 @@ Run step 16 again after each change to the runner. A missing session image looks
 
 `docs/operations.md`, section "Windows workstations: WSL with Docker Engine", gives more detail.
 
-### 2.4 Notes for Linux servers
+### 2.4 Notes for Linux servers (optional)
 
 `scripts/host-setup.sh` without `--fix` changes nothing. It checks Docker, Docker's firewall backend, rootless mode, `br_netfilter`, the iptables backend, the guard rules, firewalld, SELinux, `.env` and the images. For each problem that it does not fix, it gives the command to run.
 
@@ -110,17 +123,11 @@ The stack handles these Linux differences automatically:
 - **Clear errors.** If the worker cannot reach Docker, it logs the cause in one line and stops. If no backend has the `DOCKER-USER` chain, the guard logs a "NOT isolated" error. The probe error names `br_netfilter` when the module is missing.
 - **Host ports.** On Linux, the isolation probe also tests the Docker host's own ports.
 
-### 2.5 Configuration
+### 2.5 Configuration (optional)
 
 Static settings are `SANDBOX_*` environment variables in `.env`. Admins change runtime settings in Admin > Configuration, and Postgres stores them. Appendix A lists the most important settings. `docs/operations.md` describes all settings.
 
-### 2.6 Single sign-on
-
-1. Set `SANDBOX_AUTH_MODE=oidc`.
-2. Set `SANDBOX_OIDC_ISSUER`, `SANDBOX_OIDC_CLIENT_ID`, `SANDBOX_OIDC_CLIENT_SECRET` and `SANDBOX_OIDC_REDIRECT_URL` (`https://<host>/auth/callback`).
-3. Map identity-provider groups to roles with `SANDBOX_OIDC_ROLE_MAP`, for example `{"sg-soc": "analyst", "sg-soc-leads": "senior_analyst"}`.
-
-### 2.7 LAN access
+### 2.6 LAN access (optional)
 
 By default, the API listens only on `127.0.0.1`, port 8000. Set `SANDBOX_API_BIND` and `SANDBOX_API_PORT` in `.env` to change this. The optional file `compose.lan.yaml` also publishes the API on a LAN address:
 
@@ -129,19 +136,6 @@ By default, the API listens only on `127.0.0.1`, port 8000. Set `SANDBOX_API_BIN
 Before you use this file, set `SANDBOX_LAN_IP` to the host's LAN address in `.env`. Compose refuses to start without it. `SANDBOX_LAN_PORT` sets the port on that address (default 8000).
 
 Do not use this file until a sign-in proxy is in front of the API and `SANDBOX_SECRET_KEY` has a random value. Section 9.2 explains why.
-
-### 2.8 Production checklist
-
-Before production, complete these steps. `docs/operations.md` gives the details.
-
-1. Keep the egress guard running, with `SANDBOX_EGRESS_GUARD=enforce`.
-2. Run the worker on a dedicated host or VM, and use gVisor where available.
-3. Set a long random `SANDBOX_SECRET_KEY`, the same on each API instance.
-4. Configure OIDC single sign-on.
-5. Check the licence and key for each feed.
-6. Get the legal and safety sign-off.
-7. Set `SANDBOX_NOVNC_DIR` so that the API serves the live-view page itself.
-8. Set `SANDBOX_METRICS_TOKEN`.
 
 ## 3. Highlights
 
@@ -155,7 +149,7 @@ Before production, complete these steps. `docs/operations.md` gives the details.
 - IoC lookup that checks local data first, then VirusTotal and AbuseIPDB.
 - A "Report missed detection" button. When the rules miss a malicious URL, the analyst exports all artifacts as one encrypted bundle for the detection engineer.
 - Deployment on Linux hosts with SELinux and either iptables backend, with a host setup script that checks and fixes the host.
-- OIDC single sign-on, four roles, service tokens with scopes, and an append-only audit log.
+- Four roles, service tokens with scopes, and an append-only audit log.
 - A full security review and a re-assessment before release. 16 of 24 findings are fixed, and the re-assessment found no new High finding.
 
 ## 4. Architecture
@@ -471,7 +465,7 @@ When the rules miss a malicious URL, the analyst can now report it with its arti
 - **Container hardening.** Non-root, read-only root filesystem, no capabilities, resource limits, optional gVisor.
 - **Network isolation.** The egress guard and the worker test, for IPv4 and IPv6 (sections 5.3 and 5.4).
 - **SSRF protection.** The submission guard and the redirect walker pin each request to an address that passed the check. Feed downloads and webhooks use the same guard.
-- **Authentication.** OIDC single sign-on, with group-to-role mapping. Service tokens for systems. Production refuses to start with dev authentication or a weak secret.
+- **Authentication.** Service tokens for systems. Production refuses to start with dev authentication or a weak secret.
 - **Authorisation.** Four roles: analyst, senior analyst, detection engineer and admin. Restricted analyses are visible only to permitted users.
 - **Signed links.** Sandboxer signs live-view, embed and download links, and the links expire after a short time. Logs do not contain the tokens.
 - **Quarantine.** Sandboxer stores downloads read-only and never runs them. Analysts get them as encrypted ZIP files, alone or in an artifact bundle. Service tokens cannot download them. Size limits protect against decompression bombs.
@@ -538,7 +532,6 @@ After you change built-in rules, wait for the bundle build to finish before you 
 - Cloudflare also scores the egress IP. A datacenter or VPN address with a poor reputation can still get a challenge.
 - Some tests need Patchright and its Chromium. Where they are not installed, pytest skips these tests. The session image contains them.
 - The database and end-to-end tests need a Postgres test database (`TEST_DATABASE_URL`, with a name that ends in `_test`). Without it, only the unit tests run.
-- The OIDC tests check only the token format. Sign-in against the corporate identity provider is not tested.
 - 726 unit tests passed. Two tests failed only because the test environment has no browser driver. They must skip in that case, as the other browser tests do.
 - Nobody tested the WSL setup steps in this document on a company workstation. They follow the Linux deployment, which the WSL Ubuntu setup uses.
 - The Linux fixes were tested on Docker Desktop. SELinux and legacy iptables have tests with stub programs, and logs from an openSUSE host showed the problems. Nobody ran the full stack on an SELinux host after the fixes.
@@ -575,7 +568,7 @@ After you change built-in rules, wait for the bundle build to finish before you 
 | --- | --- | --- |
 | Consolidate | Fix the CI finding, merge into `main` and protect `main` | CI passes on each merge |
 | Harden | Serve noVNC from the API. Make gVisor and a seccomp profile mandatory. Put a socket proxy in front of the worker. Close SR-20 to SR-22, SR-25 and SR-26. | No open security finding without a fix or an accepted risk |
-| Integrate | Move from the interim WSL workstations to the production server. OIDC with the corporate identity provider, monitoring, backups with a restore test. | Analysts sign in on the production URL, with no WSL resource limit |
+| Integrate | Move from the interim WSL workstations to the production server. Monitoring, backups with a restore test. | Analysts use the production server, with no WSL resource limit |
 | Prove | Labelled set of 300 or more URLs, accuracy check on each bundle, load test, two-week pilot | Measured accuracy and start time |
 | Go live | Legal and safety sign-off, acceptance checklist, analyst training | Use by all 13 analysts |
 
@@ -584,7 +577,7 @@ After you change built-in rules, wait for the bundle build to finish before you 
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `SANDBOX_SECRET_KEY` | none | Signs cookies and links. Use a random value of 32 or more characters. |
-| `SANDBOX_AUTH_MODE` | `dev` | `dev` for local use only. `oidc` for single sign-on. |
+| `SANDBOX_AUTH_MODE` | `dev` | `dev` for local use only. |
 | `SANDBOX_ABUSECH_AUTH_KEY` | empty | Key for URLhaus, ThreatFox and MalwareBazaar. |
 | `SANDBOX_EGRESS_GUARD` | `enforce` | `enforce` refuses sessions if the egress test fails. `warn` logs only. |
 | `SANDBOX_SESSION_RUNTIME` | Docker default | Set to `runsc` for gVisor. |
@@ -628,7 +621,7 @@ After you change built-in rules, wait for the bundle build to finish before you 
 | SR-14 | Low | `/metrics` open without a token in production | Fixed |
 | SR-15 | Low | Decompression bombs in downloads and feed archives | Fixed |
 | SR-16 | Low | Webhook URL not checked on client update | Fixed |
-| SR-20 | Low | SSO sessions cannot be revoked | Open |
+| SR-20 | Low | Sign-in sessions cannot be revoked | Open |
 | SR-21 | Low | Rule regexes and detection strings have no time limit | Open, wider |
 | SR-22 | Low | No per-user rate limit on the IoC lookup | Open, wider |
 | SR-17 | Info | Embed screenshot served without the sandbox CSP | Fixed |

@@ -12,7 +12,7 @@
 
 Sandboxer 1.0 is the first release of the MSOC's own URL sandbox. An analyst submits a suspicious link. Sandboxer opens the link in a disposable, isolated browser, records all page activity and gives a verdict with the evidence for it.
 
-Release 1.0 contains all planned MVP features. It is ready for use by the team on a single host. It is not ready for production. The main gaps are production hosting, corporate sign-on, measured accuracy and the legal sign-off.
+Release 1.0 contains all planned MVP features. It is ready for use by the team on a single host. It is not ready for production. The main gaps are production hosting, measured accuracy and the legal sign-off.
 
 Until the server is ready, analysts run Sandboxer on their Windows workstations in WSL (Windows Subsystem for Linux). Company workstations cannot use Docker Desktop, because the company size rules out its free licence. WSL gets only part of the workstation's memory and CPU, so analysis is slow in this interim setup. The server deployment removes this limit.
 
@@ -36,7 +36,7 @@ Until the server is ready, analysts run Sandboxer on their Windows workstations 
 | Bot-check handling | Automated runs pass most Cloudflare checks. When a run cannot pass, the verdict is "unknown", not "benign". |
 | Reports | Verdict, explanation, evidence, IoC export (JSON, CSV, STIX) and MITRE ATT&CK mapping. |
 | IoC lookup | A check of URLs, domains, IP addresses, hashes and email addresses against local data, VirusTotal and AbuseIPDB. |
-| Administration and audit | Single sign-on support, four roles, service tokens and an append-only audit log. |
+| Administration and audit | Four roles, service tokens and an append-only audit log. |
 | Missed-detection export | One button tags a missed case and exports all its artifacts as an encrypted bundle for the detection engineer. |
 | Linux deployment | Works on Linux hosts with SELinux and either iptables backend. A setup script checks the host and fixes the common problems. |
 
@@ -52,7 +52,6 @@ Until the server is ready, analysts run Sandboxer on their Windows workstations 
 | Detection tests | Each rule has at least one positive test. Live samples proved the latest rule changes. |
 | Accuracy measurement | Not started. A labelled set of URLs is necessary. |
 | Load test | Not started |
-| Corporate sign-on | Supported, but not tested with the corporate identity provider |
 | Interim deployment | Windows workstations with WSL and Docker Engine. Works, but analysis is slow. |
 | Production hosting | Not decided |
 | Legal and safety sign-off | Not complete |
@@ -75,14 +74,13 @@ Until the server is ready, analysts run Sandboxer on their Windows workstations 
 
 1. Fix the continuous integration finding. All the code is on GitHub.
 2. Close the open platform security findings.
-3. Choose the production server, move from the WSL workstations to it, and connect corporate sign-on.
+3. Choose the production server, and move from the WSL workstations to it.
 4. Build a labelled set of 300 or more URLs and measure verdict accuracy.
 5. Run a load test and a two-week pilot with 3 to 4 analysts.
 6. Get the legal and safety sign-off, then go live for all 13 analysts.
 
 ## 7. Decisions necessary from management
 
-- The single sign-on provider
 - The production hosting: on-premises or cloud
 - The retention periods for reports and artifacts
 - Permission to send indicators to VirusTotal and AbuseIPDB
