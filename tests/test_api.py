@@ -1,3 +1,5 @@
+import secrets
+
 import pytest
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
@@ -94,6 +96,20 @@ async def test_submit_and_fetch(db_client):
 
     by_url = await db_client.get("/v1/analyses", params={"url": "https://PUBLIC.example/login"})
     assert body["id"] in [item["id"] for item in by_url.json()["items"]]
+
+
+@pytest.mark.db
+async def test_submit_and_find_long_url(db_client):
+    """URLs longer than the B-tree index row limit (about 2.7 KB) can be stored and found."""
+    url = "https://public.example/" + secrets.token_urlsafe(5300)[:7000]
+    response = await db_client.post("/v1/analyses", json={"url": url}, headers=ANALYST)
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["normalised_url"] == url
+
+    by_url = await db_client.get("/v1/analyses", params={"url": url})
+    assert by_url.status_code == 200
+    assert [item["id"] for item in by_url.json()["items"]] == [body["id"]]
 
 
 @pytest.mark.db

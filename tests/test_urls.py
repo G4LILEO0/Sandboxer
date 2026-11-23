@@ -1,6 +1,12 @@
 import pytest
 
-from sandbox.core.urls import InvalidURL, normalise_url, parse_whatwg_ipv4, refang
+from sandbox.core.urls import (
+    MAX_URL_LENGTH,
+    InvalidURL,
+    normalise_url,
+    parse_whatwg_ipv4,
+    refang,
+)
 
 
 @pytest.mark.parametrize(
@@ -72,7 +78,23 @@ def test_rejects(raw):
 
 def test_rejects_overlong_url():
     with pytest.raises(InvalidURL, match="longer than"):
-        normalise_url("http://example.com/" + "a" * 3000)
+        normalise_url("http://example.com/" + "a" * (MAX_URL_LENGTH + 1))
+
+
+def test_accepts_long_oauth_style_url():
+    """Phishing OAuth links with padded parameters run past the old 2048 limit."""
+    redirect = "https%3A%2F%2Fevil.example%2Fcallback%3Fsession%3D" + "%2F" * 300
+    state = "%7B%22a%22%3A%22" + "x9%2B" * 200 + "%22%7D"
+    raw = (
+        "https://login.microsoft.com/common/oauth2/v2.0/authorize/a/b/c/d/e"
+        f"?client_id=00000000-0000-0000-0000-000000000000&redirect_uri={redirect}"
+        f"&response_type=code&scope=openid%20profile&state={state}"
+    )
+    assert 2100 < len(raw) < 2400
+    result = normalise_url(raw)
+    assert result.host == "login.microsoft.com"
+    assert result.url.startswith("https://login.microsoft.com/common/oauth2/v2.0/authorize/")
+    assert len(result.url) > 2048
 
 
 @pytest.mark.parametrize(

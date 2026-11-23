@@ -54,7 +54,9 @@ class Analysis(Base):
         CheckConstraint(_in("mode", ANALYSIS_MODES), name="mode"),
         CheckConstraint(_in("status", ANALYSIS_STATUSES), name="status"),
         CheckConstraint(f"verdict IS NULL OR {_in('verdict', VERDICTS)}", name="verdict"),
-        Index(None, "normalised_url", "created_at"),
+        # Hash, not B-tree: a B-tree index row is limited to about 2.7 KB and URLs can be
+        # up to 8192 characters. Only equality lookups use this index.
+        Index(None, "normalised_url", postgresql_using="hash"),
         Index(None, "host"),
         Index(None, "created_at"),
         Index(None, "status"),
@@ -521,7 +523,8 @@ class Ioc(Base):
     __tablename__ = "iocs"
     __table_args__ = (
         CheckConstraint(_in("type", IOC_TYPES), name="type"),
-        Index(None, "type", "value"),
+        # Hash, not B-tree: URL values can exceed the B-tree index row limit (about 2.7 KB).
+        Index(None, "value", postgresql_using="hash"),
         Index(None, "analysis_id", "version"),
     )
 
