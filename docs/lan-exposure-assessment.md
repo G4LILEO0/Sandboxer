@@ -19,7 +19,7 @@ Safe on `127.0.0.1` as it is today. **Not safe to bind to the LAN as configured*
 | --- | --- | --- |
 | SR-09 | noVNC files are served from the hostile session container on the API origin | Partly fixed; `SANDBOX_NOVNC_DIR` not set and `novnc` not in the API image |
 | SR-18 | Chromium runs with `--no-sandbox`; no gVisor, default seccomp | Open (Docker Desktop on Windows cannot run `runsc`) |
-| SR-19 | Worker is root with the Docker socket | Open |
+| SR-19 | Worker is root with the Docker socket | Fixed (`1e0d6e8`) |
 | SR-22 | No per-user limit on `/v1/intel/*` | Open, and wider: the new `vt-relations` pivot endpoint adds more VirusTotal calls per user. On the LAN, anyone can spend the team's VT and AbuseIPDB quota |
 
 SR-20 (sessions not revocable) and SR-21 (ReDoS in rule regexes) are unchanged and low.

@@ -18,10 +18,10 @@ Each finding below gives what is wrong, how it could be used, what was changed, 
 | Severity | Found | Fixed | Partly fixed | Open (recommendation or accepted) |
 | --- | --- | --- | --- | --- |
 | High | 5 | 3 | 1 (SR-09) | 1 (SR-18) |
-| Medium | 6 | 5 | | 1 (SR-19) |
+| Medium | 6 | 6 | | |
 | Low | 10 | 7 | | 3 (SR-20 to SR-22) |
 | Info | 3 | 1 | | 2 (SR-23, SR-24) |
-| **Total** | **24** | **16** | **1** | **7** |
+| **Total** | **24** | **17** | **1** | **6** |
 
 ## 2. Summary of findings
 
@@ -45,7 +45,7 @@ Each finding below gives what is wrong, how it could be used, what was changed, 
 | SR-16 | Low | Webhook URL not validated when a client is updated | Fixed |
 | SR-17 | Info | Embed screenshot served without the sandbox CSP | Fixed |
 | SR-18 | High | Chromium runs without its own sandbox; gVisor and a custom seccomp profile are optional | Open, infrastructure |
-| SR-19 | Medium | Worker runs as root with the raw Docker socket | Open, infrastructure |
+| SR-19 | Medium | Worker runs as root with the raw Docker socket | Fixed (2026-11-23, `1e0d6e8`) |
 | SR-20 | Low | SSO sessions cannot be revoked; role changes take up to 8 hours | Open |
 | SR-21 | Low | Behaviour-rule regexes have no time limit (ReDoS by a detection engineer) | Open |
 | SR-22 | Low | No per-user rate limit on the IoC lookup (VirusTotal quota) | Open |
@@ -246,6 +246,8 @@ Playwright launches Chromium with `--no-sandbox` (its default inside containers)
 The worker runs as root with the Docker socket mounted. It also parses hostile capture output and feed data. Any parser bug in the worker gives control of the host.
 
 **Recommendation:** put a Docker socket proxy in front of it that allows only container create, start, stop, remove, archive and network calls, or use rootless Docker. Run the worker as a non-root user, and on its own host or VM as the operations notes say.
+
+**Fixed (2026-11-23).** The worker runs as the non-root `app` user and has no socket. The `docker-proxy` service (`sandbox/dockerproxy.py`) holds the socket with no capabilities and a read-only root, on an internal network that only the worker joins. It allows only the calls the backend makes, checks every container definition (image allowlist, no privileged mode, host mounts, devices, ports or host namespaces, `NET_RAW` only, session network only), and refuses calls on containers without a `sandbox.role` label. See docs/operations.md, "Docker socket proxy".
 
 ### SR-20 (Low): stateless SSO sessions
 

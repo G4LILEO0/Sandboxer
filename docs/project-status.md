@@ -63,7 +63,6 @@ Deferred from the detection spec, with reasons in the implementation report:
 See `docs/security-review.md`. 16 of 24 findings are fixed and SR-09 is partly fixed. These are open:
 - **SR-09:** serve noVNC from the API image (`SANDBOX_NOVNC_DIR`).
 - **SR-18:** Chromium runs without its own sandbox, so gVisor and a seccomp profile are needed.
-- **SR-19:** the worker is host-root through the Docker socket.
 - **SR-20 to SR-22, low:** sessions cannot be revoked, rule regexes have no time limit, and the IoC lookup has no per-user rate limit.
 
 ### 2.5 Open decisions (unchanged since requirements v0.1)
@@ -114,7 +113,7 @@ Five phases. The weeks are estimates for one engineer with Claude helping, and t
 
 1. **SR-09:** install `novnc` in `docker/api.Dockerfile` and set `SANDBOX_NOVNC_DIR=/usr/share/novnc`.
 2. **SR-18:** make `runsc` required when `SANDBOX_ENV=prod` (refuse sessions otherwise), write and test a seccomp profile for the session image, and pin and track Chromium updates.
-3. **SR-19:** add a Docker socket proxy that allows only the API calls the backend uses, and run the worker as non-root.
+3. **SR-19:** fixed in `1e0d6e8`. The worker runs as non-root behind a filtering Docker socket proxy.
 4. **SR-20 to SR-22:** server-side session revocation or a 1 to 2 hour TTL, `re2` for rule regexes, and a per-user rate limit on `/v1/intel/*`.
 5. Add Bandit or Semgrep and `pip-audit` to CI. Scan the images with Trivy.
 6. Add CI integration tests that start a real session container against the fixture site (section 11 testing requirement).
