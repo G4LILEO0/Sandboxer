@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sandbox.api.auth import SCOPES, CurrentPrincipal
 from sandbox.api.deps import AppSettings, Db
 from sandbox.db.models import Rule
+from sandbox.detections import catalog
 from sandbox.runner.profiles import PROFILES
 
 router = APIRouter(prefix="/v1", tags=["meta"])
@@ -44,7 +45,14 @@ async def meta(principal: CurrentPrincipal, settings: AppSettings, db: Db) -> di
         "scopes": list(SCOPES),
         "tag_descriptions": TAG_DESCRIPTIONS,
         "rule_descriptions": {
-            name: {"description": desc, "severity": sev, "engine": engine}
+            name: {
+                "description": desc,
+                "severity": sev,
+                "engine": engine,
+                **(
+                    {"title": d.title} if engine == "behaviour" and (d := catalog.get(name)) else {}
+                ),
+            }
             for name, desc, sev, engine in rules
             if engine != "suricata"
         },

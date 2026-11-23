@@ -1,7 +1,7 @@
 """Detection strings: the keyword patterns, host lists, file types and points that the
-fact builders (sandbox.analysis.facts, sandbox.analysis.domains) match captures against.
+signals (sandbox.detections.*, sandbox.analysis.domains) match captures against.
 
-They ship as TOML files in ``sandbox/detection/defaults/`` (one file per area, every
+They ship as TOML files in ``sandbox/detections/`` (one file per area, every
 entry documented) and a detection engineer changes them in Admin > Detection strings.
 An edit is stored in the ``detection_overrides`` table, validated before it is saved,
 audited, and picked up by the next analysis or re-analysis; reverting deletes the row

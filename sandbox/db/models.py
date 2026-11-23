@@ -443,7 +443,7 @@ class ScoringConfig(Base):
 
 
 class DetectionOverride(Base):
-    """An edited detection string (sandbox.detection): the value replaces the shipped
+    """An edited detection string (sandbox.detections.strings): the value replaces the shipped
     default of entry ``key`` until it is deleted (Admin > Detection strings)."""
 
     __tablename__ = "detection_overrides"

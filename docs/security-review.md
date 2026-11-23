@@ -213,7 +213,7 @@ The code was in good shape before the review. URL normalisation follows the WHAT
 
 ### SR-15 (Low): decompression bombs
 
-**Where:** `analysis/facts.py` (`_archive_listing`, run on attacker-supplied downloads) and `feeds/parsers.py`.
+**Where:** `detections/downloads.py` (`_archive_listing`, run on attacker-supplied downloads) and `feeds/parsers.py`.
 
 **Problem:** `tarfile.getmembers()` decompresses the whole archive, so a small `.tar.gz` that expands to terabytes would hold the worker. Feed zips were read whole.
 
@@ -288,7 +288,7 @@ Each `/v1/intel/vt/...` call can trigger up to 13 VirusTotal requests, and there
 | `sandbox/api/routes/metrics.py` | Token required in prod (SR-14) |
 | `sandbox/api/routes/embed.py` | CSP on screenshots (SR-17) |
 | `sandbox/api/routes/admin.py` | Webhook URL pattern on update (SR-16) |
-| `sandbox/analysis/facts.py`, `sandbox/feeds/parsers.py` | Archive limits (SR-15) |
+| `sandbox/detections/downloads.py`, `sandbox/feeds/parsers.py` | Archive limits (SR-15) |
 | `sandbox/web/js/render.js`, `sandbox/web/js/normalize.js` | DOM-built vendor links (SR-12) |
 | `docker/api.Dockerfile` | `--no-access-log` (SR-13) |
 | `docs/operations.md`, `.env.example` | New settings and production checklist items |

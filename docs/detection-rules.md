@@ -4,19 +4,20 @@ How the three rule engines work, where rules live, and how to add or change one.
 
 ## Where rules live
 
-Every rule, whatever the engine, is a row in the Postgres `rules` table (`engine` is `yara`, `suricata` or `behaviour`; `source` is `builtin`, `local` or a feed name). Analyses never read that table directly. They run against the **active bundle**: a snapshot of every enabled, valid rule, compiled and written to artifact storage (`bundles/<id>/yara.yarc`, `suricata.rules`, `behaviour.json`). Every rule change queues a bundle rebuild, and any older bundle can be re-activated as a one-step rollback.
+Every rule, whatever the engine, is a row in the Postgres `rules` table (`engine` is `yara`, `suricata` or `behaviour`; `source` is `builtin`, `local` or a feed name). Analyses never read that table directly. They run against the **active bundle**: a snapshot of every enabled, valid rule, compiled and written to artifact storage (`bundles/<id>/yara.yarc`, `suricata.rules`, and `behaviour.json`, the list of enabled detections with their metadata). Every rule change queues a bundle rebuild, and any older bundle can be re-activated as a one-step rollback.
 
 | Source | Where it comes from | Can you edit the body? |
 | --- | --- | --- |
-| `builtin` | [`sandbox/rules/defaults.py`](../sandbox/rules/defaults.py) (`BEHAVIOUR_RULES`, `BUILTIN_YARA`), seeded by [`sandbox/seed.py`](../sandbox/seed.py) on every start | Yes: Admin > Detection rules > View > Edit (`PATCH /v1/rules/{id}`). The edit is kept across upgrades until **Revert to built-in** (`POST /v1/rules/{id}/revert`). Unedited bodies are refreshed by seeding; local disables and weights always survive |
-| `local` | Admin, or `POST /v1/rules` | Yes, with `PATCH /v1/rules/{id}` |
+| `builtin` behaviour | The detections in [`sandbox/detections/`](../sandbox/detections/), one row each, seeded by [`sandbox/seed.py`](../sandbox/seed.py) on every start. The row's body is the rule as sentences | No: the logic is code (see [Behaviour detections](#behaviour-detections)). Disable, weight, severity, tags and ATT&CK ids can be changed in Admin and survive upgrades |
+| `builtin` YARA | [`sandbox/rules/defaults.py`](../sandbox/rules/defaults.py) (`BUILTIN_YARA`), seeded on every start | Yes: Admin > Detection rules > View > Edit (`PATCH /v1/rules/{id}`). The edit is kept across upgrades until **Revert to built-in** (`POST /v1/rules/{id}/revert`). Unedited bodies are refreshed by seeding; local disables and weights always survive |
+| `local` | Admin, or `POST /v1/rules` (YARA and Suricata only) | Yes, with `PATCH /v1/rules/{id}` |
 | feed (`et_open`, `signature_base`) | Rule archives imported by [`sandbox/rules/importer.py`](../sandbox/rules/importer.py) | No. Disable it instead; the disable survives feed updates |
 
-Scoring weights are in `scoring_config` (the scoring section in Admin, `PUT /v1/scoring`). A rule scores its own weight if one is set, or else the `severity:<level>` weight. Brands are in the `brands` table (the brands section in Admin, `PUT /v1/brands`).
+Scoring weights are in `scoring_config` (the scoring section in Admin, `PUT /v1/scoring`). A behaviour detection scores its own `score` from the code unless Admin sets a weight for it; YARA and feed rules score their own weight if one is set, or else the `severity:<level>` weight. Brands are in the `brands` table (the brands section in Admin, `PUT /v1/brands`).
 
 ## Detection strings
 
-The facts that behaviour rules read are built from **detection strings**: keyword patterns, host lists, file types, ports and points (ClickFix command traits, Run-dialog and fake-CAPTCHA wording, payment pretexts, Microsoft sign-in markers, device-code wording, free hosting platforms, form collectors, IP-lookup services, wallet-drainer wording, and so on). They are not in Python code. They ship in [`sandbox/detection/defaults/*.toml`](../sandbox/detection/defaults/), one file per area, each entry with a title and a description, and a detection engineer changes them in **Admin > Detection strings**:
+The signals that detections read are built from **detection strings**: keyword patterns, host lists, file types, ports and points (ClickFix command traits, Run-dialog and fake-CAPTCHA wording, payment pretexts, Microsoft sign-in markers, device-code wording, free hosting platforms, form collectors, IP-lookup services, wallet-drainer wording, and so on). They are not in Python code. They ship in [`sandbox/detections/*.toml`](../sandbox/detections/), one file per area, each entry with a title and a description, and a detection engineer changes them in **Admin > Detection strings**:
 
 1. Find the entry (search by title, key or value; **Edited only** shows local changes).
 2. Edit it. Lists are one entry per line; patterns are Python regular expressions with checkboxes for the flags; pattern lists and tables have one row per item.
@@ -27,113 +28,66 @@ The facts that behaviour rules read are built from **detection strings**: keywor
 
 API: `GET /v1/detection-strings`, `GET|PUT|DELETE /v1/detection-strings/{key}`, `POST /v1/detection-strings/{key}/try`, `GET /v1/detection-strings-history`. Writes need the detection engineer role.
 
-To change what ships, edit the TOML file and add a test. The code reads an entry through a line such as `_RUN_DIALOG = S.bind(globals(), "_RUN_DIALOG", "clickfix.run_dialog")` in `facts.py` or `domains.py`; a test fails if an entry is not read anywhere.
+To change what ships, edit the TOML file and add a test. The code reads an entry through a line such as `_RUN_DIALOG = S.bind(globals(), "_RUN_DIALOG", "clickfix.run_dialog")` in the area module under `sandbox/detections/` (or `sandbox/analysis/domains.py`); a test fails if an entry is not read anywhere.
 
-## Workflow for a new rule
+## Behaviour detections
 
-1. Draft it, then dry-run it over recent stored analyses with `POST /v1/rules/test` (the rule test form in Admin). This shows which verdicts would change, without detonating anything.
-2. Create it with `POST /v1/rules` (`engine`, `name`, `body`, `severity`, `tags`, `attack_ids`). A bundle build is queued automatically.
-3. Re-analyse the cases you care about (re-analysis uses the active bundle).
-4. If it misbehaves, disable it with a reason, or re-activate the previous bundle.
+Every behaviour verdict comes from one model, with no exceptions: a **detection** made of **signals**. There are no JSON conditions, no weight table and no scoring code outside it.
 
-To ship a rule as built-in, add it to `defaults.py` along with a test in `tests/test_detections.py` that shows it firing on a true positive and staying quiet on the closest false positive.
+- A **signal** is one named value observed in a capture, such as `clipboard.command_like` (how many clipboard writes look like a shell command). It has a title and a plain description of how it is computed, and it never scores on its own.
+- A **detection** combines signals into a condition and gives the result a severity and a score.
 
-## Behaviour rules
+Both live in the **area module** that computes the signals: `clickfix`, `downloads`, `evasion`, `exfiltration`, `forms`, `hosting`, `lures`, `microsoft`, `navigation`, `network`, `scripts`, `web3` under [`sandbox/detections/`](../sandbox/detections/). Each module holds, top to bottom, the detection strings it binds, the code that computes its section of the observed values (`*_section(cap)`), its `signal(...)` declarations and its `detection(...)` declarations. So the code, its wording and its rules are in one file.
 
-Behaviour rules are JSON conditions over **facts**: a nested dict that [`sandbox/analysis/facts.py`](../sandbox/analysis/facts.py) computes from the stored capture.
+```python
+signal(
+    "idp.cdn_assets_on_foreign_page",
+    "IdP CDN assets on a foreign sign-in page",
+    "True when a request to an identity-provider CDN (string microsoft.idp_cdn) was made "
+    "by a page that shows a credential prompt and is on a host that is not Microsoft-owned "
+    "(Admin > Brands) and not allowlisted. ...",
+)
 
-```json
-{
-  "condition": {
-    "all": [
-      {"fact": "forms.password_forms", "op": "gt", "value": 0},
-      {"fact": "domains.final_age_days", "op": "lt", "value": 30},
-      {"not": {"fact": "final.allowlisted", "op": "eq", "value": true}}
-    ]
-  },
-  "evidence": ["final.domain"]
-}
+detection(
+    "idp_cdn_assets_foreign_page",
+    title="Sign-in page loads IdP branding from the IdP's CDN",
+    severity="high",
+    score=45,
+    tags=["phishing", "aitm"],
+    attack=["T1566.002", "T1656"],
+    description="A page that is not the identity provider loads IdP sign-in branding from "
+    "the IdP's CDN (AADCDN, Okta CDN) and shows a credential prompt.",
+    when=sig("idp.cdn_assets_on_foreign_page").is_true(),
+    evidence=["idp.cdn_assets", "final.url"],
+)
 ```
 
-- Combinators: `all`, `any`, `not`.
-- Operators: `eq ne gt gte lt lte in contains exists matches any_matches` (`matches` and `any_matches` are case-insensitive regexes).
-- A missing fact never matches, except under `exists: false`.
-- Every fact the condition reads, plus each `evidence` path, is stored with the hit and shown in the report.
+Admin and the report show this rule as: *Fires when IdP CDN assets on a foreign sign-in page*, followed by the check with the value it saw.
 
-To see the facts for a real case, open the report's raw summary (`summary.facts` on the analysis version), or run them offline with `python -m sandbox.analysis.local <capture-dir>`.
+- Tests: `signal > n`, `>=`, `<`, `<=`, `.equals(v)`, `.is_true()`, `.present()` (set and not empty), `.one_of([...])`.
+- Combine with `all_of`, `any_of`, `not_` (or `&`, `|`, `~`). Use `sig("area.key")` to read a signal declared in another module. A shared condition is a plain Python variable (`CLICKFIX_LIKE` in `clickfix.py`).
+- A missing value never passes a test, except `not_(x.present())`. A value of the wrong type is a miss, never an error.
+- `evidence` names extra signals stored with the hit for the report.
+- The catalog ([`catalog.py`](../sandbox/detections/catalog.py)) refuses to load if a detection reads or names a signal nobody declared, so a typo cannot ship as a rule that silently never fires. A test also fails if a signal is declared but no detection reads it, or if it is missing from the observed values of an empty capture.
 
-### Fact reference
+**How a detection explains itself.** Every hit stores each test it made, with the value it saw and whether it passed (`detail.checks`), and every `any_of` branch is checked so the report shows all of them. The report's Evidence dialog shows the rule as sentences, the checks table and the matched content. Admin > Detection rules > View shows the same sentences, every signal with how it is computed and where, and the detection strings of that area. [`docs/detections.md`](detections.md) lists all of them; it is generated with `python -m sandbox.detections.docs`, and a test fails when it is out of date.
 
-| Path | Meaning |
-| --- | --- |
-| `final.url`, `final.host`, `final.domain`, `final.allowlisted`, `final.title` | The page the session ended on |
-| `capture.load_failed`, `capture.navigated` | The page never loaded or never navigated |
-| `forms.password_forms` | Forms with a password field, across every page seen |
-| `forms.cross_domain_credential` | Password forms posting to another site (one brand's own domains count as the same site; `javascript:` actions are ignored) |
-| `forms.password_over_http` | Password forms served or submitted over http |
-| `scripts.max_obfuscation_score`, `scripts.obfuscated` | Obfuscation signals per script |
-| `scripts.invisible_unicode`, `.invisible_unicode_details` | Scripts (fetched, or inline in a raw DOM snapshot) holding a run of 64+ invisible characters (Hangul fillers, zero-width characters) that mixes at least two of them: an invisible-character payload encoding (`{source, longest_run, chars}`) |
-| `downloads.count`, `.executable`, `.archive`, `.disguised`, `.unprompted`, `.unprompted_risky`, `.not_received` | Downloads, including download links the page activated that delivered no file (`files[].received` false, `files[].status` `no_response` or `failed`; counted in `.not_received`). Extension-based counts include those attempts. `disguised` covers `x.pdf.exe` and a PE file named `.pdf`; `unprompted_risky` counts executables, archives or disguised files downloaded without a click |
-| `clipboard.command_like` | Clipboard writes that contain any shell command |
-| `clipboard.writes`, `.max_write_len`, `.write_samples` | Page-initiated clipboard writes (analyst Ctrl+C excluded): count, longest text, and up to 5 samples (300 chars, with `user_activation`) |
-| `clipboard.clickfix_like` | Clipboard writes with ClickFix traits: a download cradle, hidden or encoded PowerShell, mshta of a URL, `curl … \| sh`, `finger user@host` or `for /f … in ('…') do %x` fetch-and-run, `start /min` or `%COMSPEC%`, `^` caret obfuscation, or a fake-CAPTCHA comment or space/dash-padded decoy. `^` and in-word `""` are stripped before matching |
-| `lure.run_dialog_instructions` | Pages telling the visitor to open Run or a terminal and paste |
-| `lure.payment_pretext`, `lure.payment_pretexts` | Reasons to pay, in English and Arabic: redelivery or customs fees, held parcels, traffic fines, tolls (`رسوم التوصيل`, `شحنتك`, `مخالفة مرورية`, …) |
-| `forms.payment_card_forms`, `.otp_forms`, `.seed_phrase_forms`, `.sensitive_prompt_pages` | Pages asking for card details (number plus CVV or expiry), a one-time code, or a wallet recovery phrase, excluding brand-owned and allowlisted sites |
-| `final.free_hosting` | The free hosting or site-builder platform the final page is on (`pages.dev`, `typedream.app`, `web.app`, …), or null |
-| `final.abuse_interstitial` | The session ended on Cloudflare's 'Suspected Phishing/Malware' block for the hostname (`{provider, kind}`), or null |
-| `brand.hosting_label` | A free-hosting tenant named after a brand (`microsoftaccount-kit.<builder>`) whose page asks for credentials: `{brand, host, platform, keyword, prompt}`, or null |
-| `brand.favicon_lookups`, `.favicon_lookup_count` | Sites whose favicon the page fetched through a favicon service (Google s2/faviconV2, DuckDuckGo, Clearbit) but never visited |
-| `domains.government_lookalike`, `.government_lookalikes` | Hosts dressed as government sites outside a government suffix (`absher-gov-sa.com`) |
-| `brand.prompt`, `brand.free_hosting_lure` | What the impersonating page asks for (`password`, `payment`, `seed`, `otp` or `username`), and whether it is a brand login or wallet page on free hosting |
-| `domains.lookalike`, `domains.lookalikes` | Hosts imitating a brand domain (homoglyph, typo, combo) |
-| `domains.punycode`, `domains.punycode_confusable` | IDN hosts; `confusable` counts mixed-script or all-Latin-lookalike labels only |
-| `domains.final_age_days`, `domains.chain_youngest_age_days`, `domains.youngest_age_days` | RDAP age of the final domain, of the submitted / redirect / final domains, and of any contacted domain |
-| `redirects.count`, `.cross_domain`, `.https_downgrade`, `.chain` | The page's own redirect chain; navigations made by the analyst are excluded |
-| `brand.name`, `.confidence`, `.credential_prompt`, `.evidence`, `.url` | The strongest brand-impersonation candidate (see below) |
-| `network.blocked_internal` | Blocked requests to internal or metadata addresses |
-| `network.local_probe.port_count`, `.ports`, `.host_count`, `.hosts`, `.remote_access_count`, `.remote_access`, `.channels`, `.scripts`, `.fraud_vendor`, `.local_app` | Local port scanning: blocked HTTP/WebSocket attempts and WebRTC TURN/STUN servers aimed at loopback (`127.0.0.0/8`, `::1`, `localhost`, `0.0.0.0`) or private addresses, by port and host. `remote_access` names the remote-access ports tried (`3389/rdp`, `5900/vnc`, `5938/teamviewer`, `7070/anydesk`, …); `scripts` are the initiating scripts; `fraud_vendor` is set when one of them is a known anti-fraud profiler (ThreatMetrix, including its first-party `/fp/tags.js` paths), or, when no initiator is known (blocked WebSockets never have one), when such a profiler was loaded on the page and the probes match its own scan exactly (loopback WebSockets on its known ports only), so loading the tag alone cannot silence the rule; `local_app` when every port is a desktop app's helper range (Discord RPC 6463-6472). Link-local/metadata targets are left to `blocked_internal` |
-| `network.ip_lookups` | Client-side IP/ASN/geo lookup services the page called (geofencing / sandbox checks) |
-| `frames.hidden_iframes` | Invisible third-party iframes that are not allowlisted |
-| `frames.smuggled_credential_pages` | `blob:`/`about:` documents created by the page that hold a credential form (HTML smuggling) |
-| `popups.count`, `dialogs.count` | Popups and JavaScript dialogs |
-| `exfil.telegram_count`, `.telegram`, `.discord_count`, `.discord`, `.form_collectors` | Browser calls to the Telegram Bot API, Discord webhooks, or no-code form-collector services |
-| `idp.ms_clone_pages`, `.ms_markers` | Non-Microsoft pages carrying ≥2 Microsoft sign-in structural markers (ESTS `$Config`, `i0116`/`idSIButton9`, AADCDN assets) plus a credential prompt |
-| `idp.cdn_assets_on_foreign_page`, `.cdn_assets` | IdP (AADCDN / Okta CDN) sign-in branding loaded by a foreign credential page |
-| `idp.ms_paths_on_foreign_host`, `.ms_foreign_paths` | Microsoft login endpoints served from a non-Microsoft host with ESTS markers/cookies (AiTM proxy) |
-| `idp.high_risk_consent`, `.oauth_authorize_requests` | Entra authorize/consent requests: non-first-party `client_id` with high-risk Graph scopes |
-| `idp.fake_window_frames`, `.fake_window_frame_details` | A brand's URL drawn as a bare text node (with or without `https://`, not inside a link, code span or title) followed within 2500 characters by an iframe the brand does not serve: a fake sign-in window, seen even before its login loads (`{page, brand, shown_url, frame_src}`) |
-| `network.web_proxy_kits`, `.web_proxy_kit_count`, `.web_proxy_assets` | Interception web proxies the page loaded from a non-allowlisted host: Ultraviolet (`uv.config/handler/bundle/client/sw.js`, `__uv$config`), Scramjet, Rammerhead |
-| `idp.device_code_kit_api`, `.device_code_kit_hosts`, `.device_code_kit_details`, `.device_code_antibot_header` | EvilTokens device-code backend on a non-Microsoft, non-allowlisted host: `/api/device/gate`, `/start` or `/status/<id>` calls (two kinds needed) or an `X-Antibot-Token` request header |
-| `idp.device_code_relay`, `.device_code_relay_details`, `.device_code_browser_flow`, `.device_code_browser_flow_details` | A foreign host's response carrying a Microsoft device code (`user_code`/`userCode` with a verification URI); browser calls to Microsoft `/devicecode`, or `/token` with a device_code grant, whose Origin/Referer is a foreign page |
-| `idp.cookies_on_foreign_host`, `.idp_cookies` | Microsoft ESTS session cookies set by a non-Microsoft host |
-| `redirects.oauth_error_bounce_count`, `.oauth_error_bounce` | `prompt=none` authorize request that bounced off a real IdP (`error=…`) to a foreign host |
-| `web3.rpc_call_count`, `.rpc_calls`, `.contract_addresses` | JSON-RPC `eth_call`/`eth_getStorageAt` reads (EtherHiding dead-drop loader) |
-| `web3.known_malicious_contract`, `.known_contracts` | Contract addresses published in EtherHiding research |
-| `web3.wallet_requests`, `.wallet_drainer` | Signing/sending requests seen by the fake wallet provider (only when `SANDBOX_FAKE_WALLET` is on) |
-| `websocket.count`, `.connections` | WebSocket connections and parsed Socket.IO event names |
-| `clipboard.path_disguised`, `.no_gesture_writes`, `.overwritten_command` | FileFix path-disguised commands; writes with no user gesture; a command later blanked/overwritten |
-| `lure.fake_captcha`, `.fake_captcha_evidence`, `.genuine_challenge` | Fake CAPTCHA/verification UI, and whether a genuine Turnstile/reCAPTCHA resource was loaded; with `lure.run_dialog_instructions` this also reads hidden overlay text from the raw DOM snapshots |
-| `lure.fake_update_pages` | Non-vendor pages showing a browser/software update lure (browsers, Adobe Acrobat Reader, Flash Player) |
-| `lure.open_download_pages` | Non-vendor pages that tell the visitor to open/run/double-click a named disk image, installer or script (`AcrobatSetup.iso`) |
-| `final.ipfs` | The final page is served from an IPFS gateway (`{gateway, cid}` or null) |
-| `evasion.devtools_blocked`, `.devtools_blocked_keys`, `.context_menu_blocked` | DevTools shortcuts / context menu the page cancelled (observed via the key probe) |
-| `evasion.debugger_trap`, `.debugger_trap_sources` | Scripts with a debugger trap: `debugger` run from a timer, between two clock reads, or built from a string (`constructor("debugger")`, `'debu'+'gger'`). A lone `debugger;` does not count |
-| `downloads.types` | Content-based (magic-byte) types of downloads, e.g. `pe`, `lnk`, `iso`, `cab`, `chm`, `vhd` |
-| `downloads.archive_inner_risky`, `.archive_encrypted`, `.archive_password_on_page`, `.archives` | ZIP/TAR member listing (stdlib, directory only — never extracted); risky inner types; encrypted entries; a password printed on the page (DE-DLD-001/002) |
-| `forms.script_posted_credentials`, `.script_posted_targets` | Password field with no real form action posted by fetch/XHR/beacon to another site (needs the A3 request log) |
-| `network.request_log`, `.trusted_redirectors` | A3 browser request log summary (count, by resource type); trusted redirector / open-redirect wrappers in the chain |
-| `navigation.scripted_bounce`, `.scripted_bounces` | Script-initiated top-level bounces to a decoy (about:blank, a 404, a big-brand homepage) |
-| `capture.gated` | A CAPTCHA/Turnstile challenge, or a home-made canvas CAPTCHA, was seen this session (prefer `unknown` over `benign`; re-run interactively) |
-| `capture.custom_captcha`, `.custom_captcha_pages` | Non-allowlisted, non-brand pages with a `<canvas>`, CAPTCHA wording and a text input within 3000 characters of each other, and no CAPTCHA provider loaded (Tycoon 2FA's own CAPTCHA) |
-| `scripts.libraries` | JS library inventory parsed from CDN script URLs (`{name, version, url}`) |
-| `cookies.end_of_session` | Cookie names in the jar at teardown (values are hashed, never stored) |
-| `js.dynamic_exec_count`, `.dynamic_exec_max_len`, `.dynamic_exec_max_entropy` | Runtime eval/Function/setTimeout(string) calls: count, longest argument, highest entropy; `js.code_exec_*` are eval/Function/string-timer only and exclude the sandbox's own evaluate() and Playwright wrappers |
-| `js.blob_constructs`, `.blob_details` | Blob/File constructions over 1 KB (HTML smuggling) |
-| `js.history_floods`, `.fullscreen`, `.pointer_lock`, `.keyboard_lock`, `.notification_prompt`, `.service_worker`, `.sw_scripts` | Runtime API calls used by browser lockers and push-bait pages |
-| `lure.tech_support_phone`, `.tech_support_phones`, `.allow_notifications_bait` | A support phone number near scare wording; "click Allow to continue/verify" coercion |
+**Performance.** The observed values are built once per capture (the report stores them anyway, as `summary.facts`), each section once, sharing one parsed view of the requests and hosts. A detection only reads values out of that tree, so adding one costs microseconds.
 
-To add a new fact, compute it in `build_facts`. Keep it a pure function of the stored capture, so re-analysis stays reproducible. New facts read the HAR (`exfil.*`, `idp.*`, `web3.*`, `network.ip_lookups`), raw DOM snapshots (`idp.ms_*` structural markers), the A3 request log (`requests.jsonl`), the runtime-API log (`js.*`, dynamic scripts), end-of-session cookies, and the runner's `websocket_frames`, `wallet_requests` and `blocked_input` logs. **All of them degrade to neutral values on captures that predate the artifact** (a missing log yields `0`/`false`/`null`, never an error), so stored analyses stay re-evaluable.
+### Adding or changing a detection
+
+1. Open the case's missed-detection export or report, and find the values that tell the case apart (the report's **Recorded facts**, or `python -m sandbox.analysis.local <capture-dir>` offline).
+2. If no signal says it yet, add one in the area module: compute it in that module's `*_section` function as a pure function of the stored capture, then declare it with `signal(...)`. If it depends on wording or a host list, add a detection string to the area's TOML file and `S.bind` it, so analysts can tune it in Admin.
+3. Declare the `detection(...)` next to it.
+4. Add a test in `tests/test_detections.py` that shows it firing on the true positive and staying quiet on the closest false positive, run `python -m sandbox.detections.docs`, and run the tests.
+5. Dry-run it over stored analyses: Admin > Detection rules > View > **Test against recent analyses** (`POST /v1/rules/test` with `engine: behaviour` and the detection's name as `body`). It shows which verdicts would change.
+6. If it misbehaves in production, disable it with a reason (the disable survives upgrades), or re-activate the previous bundle.
+
+New signals that read the HAR, raw DOM snapshots, the A3 request log, the runtime-API log, cookies or the runner's websocket, wallet and blocked-input logs **must degrade to neutral values on captures that predate the artifact** (`0`, `false`, `null` or an empty list, never an error), so stored analyses stay re-evaluable.
+
+### YARA and Suricata
+
+YARA rules match content (DOM snapshots, scripts, downloads) and Suricata rules match traffic; they are content engines with their own syntax and stay as they are (below). Local rules of these two engines are written in Admin. Local JSON behaviour rules from earlier versions no longer run: seeding marks them with an error that says so, and their logic belongs in a detection.
 
 ### Active-probe capture (legal sign-off, NFR-10)
 
