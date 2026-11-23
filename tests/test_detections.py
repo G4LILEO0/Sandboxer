@@ -2869,6 +2869,34 @@ def test_cloudflare_abuse_interstitial_fires():
         assert "hosting_abuse_interstitial" in _hits(_cap(url, [page]))
 
 
+def test_cloudflare_abuse_interstitial_in_a_new_tab_fires():
+    # an_01M84AGCBDF4BB38S7N5G248E2: a shared Power BI report links to the kit, which opens
+    # in a new tab and ends on the Cloudflare block. The session's final URL is the report.
+    lure_url = "https://app.powerbi.com/view?r=abc"
+    lure = _page(lure_url, "Microsoft Power BI", text="Open document")
+    kit_url = "https://kit.example-phish.com/"
+    kit = _cf_page(
+        kit_url,
+        "Suspected Phishing | Cloudflare",
+        "Warning Suspected Phishing This website has been reported. Ignore & Proceed",
+        "/cdn-cgi/phish-bypass",
+    )
+    assert "hosting_abuse_interstitial" in _hits(_cap(lure_url, [lure, kit]))
+
+
+def test_cloudflare_abuse_interstitial_in_an_iframe_is_quiet():
+    url = "https://blog.example/"
+    page = _page(url, "Blog")
+    block = _cf_page(
+        "https://ads.example-flagged.com/",
+        "Suspected Phishing | Cloudflare",
+        "Warning Suspected Phishing This website has been reported. Ignore & Proceed",
+        "/cdn-cgi/phish-bypass",
+    )
+    page["frames"].append(block["frames"][0])
+    assert "hosting_abuse_interstitial" not in _hits(_cap(url, [page]))
+
+
 def test_cloudflare_challenge_and_article_are_not_abuse_interstitial():
     url = "https://shop.example/"
     challenge = _cf_page(

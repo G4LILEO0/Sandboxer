@@ -109,6 +109,7 @@ def forms_section(cap: Capture) -> dict[str, Any]:
         "page_url": "The frame URL",
         "page_host": "Its host",
         "live": "True for a frame still open at the end of the session",
+        "top": "True for a top-level page: the main frame of an open tab, or a page seen earlier",
         "content": "The frame's title and visible text, joined by a space",
         "action": "Where the form submits: its action, else the page URL; empty for a "
         "password field outside any form",
@@ -126,6 +127,7 @@ def _forms_table(cap: Capture) -> list[Row]:
         rows = []
         data = cap.data
         live = len(_frames(data.result))
+        tops = {id(p["frames"][0]) for p in data.result.get("pages", []) if p.get("frames")}
         for n, frame in enumerate(_all_frames(data)):
             page_url = frame.get("url", "")
             page_host = _host(page_url)
@@ -133,6 +135,7 @@ def _forms_table(cap: Capture) -> list[Row]:
                 "page_url": page_url,
                 "page_host": page_host,
                 "live": n < live,
+                "top": n >= live or id(frame) in tops,
                 "content": f"{frame.get('title', '')} {frame.get('text', '')}",
             }
             for form in frame.get("forms", []):
