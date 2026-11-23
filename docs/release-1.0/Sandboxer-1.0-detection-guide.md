@@ -4,7 +4,7 @@
 | --- | --- |
 | Product | Sandboxer, the MSOC URL sandbox |
 | Version | 1.0 |
-| Date | 2026-11-23 |
+| Date | 2026-11-24 |
 | For | Detection engineers and analysts who want to know why a link got its verdict |
 | Related documents | Sandboxer 1.0 release summary, Sandboxer 1.0 release notes |
 
