@@ -1,0 +1,16 @@
+title: Hosting provider already flagged the site
+severity: high
+score: 40
+tags: phishing, malware-download, takedown
+attack: T1583.006
+description: The page ended on Cloudflare's 'Suspected Phishing' or 'Suspected Malware'
+  block for this hostname. The provider already confirmed abuse. The payload is not visible,
+  but the URL is not clean. Run the analysis again only if you need the payload.
+---
+// The final page is the hosting provider's own phishing warning: a form that posts to
+// /cdn-cgi/phish-bypass on the final host, with abuse wording (string lures.abuse_warning).
+forms
+| where live and isnotempty(page_host) and page_host == toscalar(capture | project final_host)
+| where url_path(raw_action) == "/cdn-cgi/phish-bypass" and url_host(raw_action) == page_host
+| where content matches list("lures.abuse_warning")
+| project page_url, warning = extract(list("lures.abuse_warning"), 1, content)

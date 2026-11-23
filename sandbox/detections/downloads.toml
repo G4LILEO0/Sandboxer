@@ -8,7 +8,7 @@ title = 'Downloads'
 
 [executable_extensions]
 title = 'Executable file extensions'
-description = 'File extensions counted as executables, scripts or disk images (downloads.executable).'
+description = 'File extensions counted as executables, scripts or disk images (the executable column of the download_files shared query).'
 type = "words"
 values = [
   'apk',
@@ -45,7 +45,7 @@ values = [
 
 [archive_extensions]
 title = 'Archive file extensions'
-description = 'File extensions counted as archives (downloads.archive).'
+description = 'File extensions counted as archives (the archive column of the download_files shared query).'
 type = "words"
 values = [
   '7z',

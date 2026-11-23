@@ -1,0 +1,13 @@
+title: Tech-support scam browser locker
+severity: high
+score: 60
+tags: tech-support-scam, scam
+attack: T1656, T1204.001
+description: The page used lock-in APIs (fullscreen re-entry, pointer/keyboard lock, forced
+  audio) and shows a support phone number with scare wording.
+---
+// A tech-support scare with a phone number ...
+tech_support_frames
+// ... on a page that takes over the screen, the pointer or the keyboard.
+| where exists(fullscreen_requests) or exists(pointer_lock_requests) or exists(keyboard_lock_requests)
+| project url, phone = extract(list("lures.tech_support_phone"), 0, content)

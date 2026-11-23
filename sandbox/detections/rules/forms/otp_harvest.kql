@@ -1,0 +1,20 @@
+title: One-time code asked for with a lure
+severity: high
+score: 45
+tags: phishing, otp-harvest
+attack: T1566.002, T1111
+description: A page asks for a one-time code (SMS, Absher, Nafath or bank OTP). It also
+  shows a brand or a payment pretext. Or it is on a lookalike or government-lookalike
+  domain, on free hosting, or on a domain under 30 days old.
+---
+// A one-time-code prompt on a page no known brand or allowlisted site runs ...
+otp_pages
+// ... that imitates a brand, gives a reason to pay, or sits on a lookalike, free-hosted
+// or young domain.
+| where toscalar(brand_claim | project confidence) >= 35
+    or exists(payment_pretext_frames)
+    or exists(lookalike_hosts)
+    or exists(government_lookalike_hosts)
+    or exists(final_free_hosting)
+    or toscalar(final_domain | project age_days) < 30
+| project url

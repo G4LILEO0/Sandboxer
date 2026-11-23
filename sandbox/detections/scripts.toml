@@ -8,7 +8,7 @@ title = 'Scripts and obfuscation'
 
 [obfuscation_signals]
 title = 'Obfuscation signals and points'
-description = 'Obfuscation signals in collected scripts, each with the points it adds to scripts.max_obfuscation_score (the obfuscated_javascript rule fires at 3). Each item needs a name.'
+description = 'Obfuscation signals in collected scripts, each with the points it adds to the obfuscation_score of a script in the scripts table (the obfuscated_javascript rule fires at 3). Each item needs a name.'
 type = "regex_list"
 [[obfuscation_signals.items]]
 name = 'eval_decode'

@@ -12,17 +12,24 @@ from __future__ import annotations
 import html as _html
 import re
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
-from sandbox.analysis.domains import brand_owner, site
+from sandbox.analysis.domains import brand_owner, free_hosting, registrable, site
 from sandbox.detections import strings as S
 from sandbox.detections.base import (
+    _SCRIPT_POST_TYPES,
     Capture,
     _all_frames,
     _chain_urls,
     _credential_prompt,
+    _has_text_box,
     _host,
     _prompt_kinds,
+    _same_site,
+    _same_url,
+)
+from sandbox.detections.base import (
+    _frames as _frames_of,
 )
 from sandbox.detections.kql.language import Env, ListRef, Row, list_patterns, list_value
 
@@ -36,7 +43,8 @@ def _cache(cap: Capture) -> dict[str, Any]:
     return c
 
 
-def _memo(cap: Capture, key: Any, build: Any) -> Any:
+def memo(cap: Capture, key: Any, build: Any) -> Any:
+    """Build a value once per capture (a table's rows, a function's answer)."""
     c = _cache(cap)
     if key not in c:
         c[key] = build()
@@ -106,7 +114,7 @@ def _requests(cap: Capture) -> list[Row]:
             )
         return rows
 
-    return _memo(cap, "requests", build)
+    return memo(cap, "requests", build)
 
 
 @table(
@@ -116,7 +124,7 @@ def _requests(cap: Capture) -> list[Row]:
     {"url": "The page URL", "host": "Its host, lower case", "html": "The raw HTML"},
 )
 def _pages(cap: Capture) -> list[Row]:
-    return _memo(
+    return memo(
         cap,
         "pages",
         lambda: [
@@ -140,13 +148,30 @@ def _pages(cap: Capture) -> list[Row]:
         "prompts": "Every secret the frame asks for",
         "email_only_form": "True when a form has an email field and no password field",
         "links": "Every link URL in the frame",
+        "content": "The title and the visible text, joined by a space",
+        "live": "True for a frame still open at the end of the session (false for a page "
+        "seen earlier)",
+        "top": "True for a top-level page: the main frame of an open tab, or a page seen earlier",
+        "has_text_box": "True when the frame has a text box or text area to type into",
+        "script_posted": "True when a script in the frame sent a POST (fetch, XHR, beacon, "
+        "WebSocket), from the browser request log",
     },
 )
 def _frames(cap: Capture) -> list[Row]:
     def build() -> list[Row]:
         rows = []
-        for f in _all_frames(cap.data):
+        data = cap.data
+        live = _frames_of(data.result)
+        tops = {id(p["frames"][0]) for p in data.result.get("pages", []) if p.get("frames")}
+        posted = {
+            (q.get("frame_url") or "").rstrip("/").lower()
+            for q in data.requests
+            if str(q.get("method", "")).upper() == "POST"
+            and str(q.get("type") or "").lower() in _SCRIPT_POST_TYPES
+        }
+        for n, f in enumerate(_all_frames(data)):
             forms = f.get("forms", [])
+            is_live = n < len(live)
             rows.append(
                 {
                     "url": f.get("url", ""),
@@ -161,11 +186,16 @@ def _frames(cap: Capture) -> list[Row]:
                         for form in forms
                     ),
                     "links": [str(x) for x in f.get("links", [])],
+                    "content": f"{f.get('title', '')} {f.get('text', '')}",
+                    "live": is_live,
+                    "top": not is_live or id(f) in tops,
+                    "has_text_box": _has_text_box(f),
+                    "script_posted": (f.get("url") or "").rstrip("/").lower() in posted,
                 }
             )
         return rows
 
-    return _memo(cap, "frames", build)
+    return memo(cap, "frames", build)
 
 
 @table(
@@ -174,7 +204,7 @@ def _frames(cap: Capture) -> list[Row]:
     {"url": "The URL"},
 )
 def _chain(cap: Capture) -> list[Row]:
-    return _memo(cap, "chain", lambda: [{"url": u} for u in _chain_urls(cap.data)])
+    return memo(cap, "chain", lambda: [{"url": u} for u in _chain_urls(cap.data)])
 
 
 @table(
@@ -184,6 +214,7 @@ def _chain(cap: Capture) -> list[Row]:
         "url": "The submitted URL",
         "final_url": "The URL the session ended on",
         "final_host": "Its host",
+        "title": "The final page's title",
     },
 )
 def _capture(cap: Capture) -> list[Row]:
@@ -193,6 +224,7 @@ def _capture(cap: Capture) -> list[Row]:
             "url": r.get("url", ""),
             "final_url": r.get("final_url") or r.get("url", ""),
             "final_host": cap.final_host,
+            "title": r.get("title") or "",
         }
     ]
 
@@ -239,7 +271,7 @@ def _pattern(p: Any) -> re.Pattern[str] | None:
 def _urls_seen(cap: Capture, pattern: Any) -> list[Row]:
     rx = _pattern(pattern)
     key = ("urls_seen", rx.pattern if rx else None)
-    return _memo(cap, key, lambda: _build_urls_seen(cap, rx))
+    return memo(cap, key, lambda: _build_urls_seen(cap, rx))
 
 
 def _build_urls_seen(cap: Capture, rx: re.Pattern[str] | None) -> list[Row]:
@@ -312,7 +344,7 @@ _QUOTING_TAGS = re.compile(r"<(a|code|pre|kbd|samp|textarea|option|title|script|
 )
 def _url_texts(cap: Capture, span: Any) -> list[Row]:
     span = int(span) if isinstance(span, (int, float)) else 0
-    return _memo(cap, ("url_texts", span), lambda: _build_url_texts(cap, span))
+    return memo(cap, ("url_texts", span), lambda: _build_url_texts(cap, span))
 
 
 def _build_url_texts(cap: Capture, span: int) -> list[Row]:
@@ -354,7 +386,7 @@ def function(name: str, signature: str, description: str):
 def _owner(host: Any, cap: Capture) -> Any:
     if not isinstance(host, str) or not host:
         return None
-    return _memo(cap, ("owner", host), lambda: brand_owner(host, cap.data.brands))
+    return memo(cap, ("owner", host), lambda: brand_owner(host, cap.data.brands))
 
 
 @function(
@@ -432,6 +464,187 @@ def url_param(url: Any, name: Any, *, ctx: Capture) -> str:
     except ValueError:
         return ""
     return (q.get(name) or [""])[0]
+
+
+@function(
+    "url_scheme",
+    "url_scheme(url)",
+    "The URL scheme in lower case (https, http, javascript, mailto, ...); empty if none.",
+)
+def url_scheme(url: Any, *, ctx: Capture) -> str:
+    try:
+        return urlsplit(url).scheme.lower() if isinstance(url, str) else ""
+    except ValueError:
+        return ""
+
+
+@function("url_query", "url_query(url)", "The query string of a URL, without the ?.")
+def url_query(url: Any, *, ctx: Capture) -> str:
+    try:
+        return urlsplit(url).query if isinstance(url, str) else ""
+    except ValueError:
+        return ""
+
+
+@function("url_fragment", "url_fragment(url)", "The fragment of a URL, without the #.")
+def url_fragment(url: Any, *, ctx: Capture) -> str:
+    try:
+        return urlsplit(url).fragment if isinstance(url, str) else ""
+    except ValueError:
+        return ""
+
+
+@function(
+    "url_decode",
+    "url_decode(text)",
+    "The text with %-escapes decoded twice (links are often encoded twice).",
+)
+def url_decode(v: Any, *, ctx: Capture) -> Any:
+    return unquote(unquote(v)) if isinstance(v, str) else v
+
+
+@function(
+    "same_url",
+    "same_url(url_a, url_b)",
+    "True when two URLs are the same, ignoring letter case and a trailing slash.",
+)
+def same_url(a: Any, b: Any, *, ctx: Capture) -> bool:
+    return _same_url(a if isinstance(a, str) else None, b if isinstance(b, str) else None)
+
+
+@function(
+    "registrable",
+    "registrable(host)",
+    "The registrable domain of a host (login.example.co.uk is example.co.uk).",
+)
+def registrable_of(host: Any, *, ctx: Capture) -> str:
+    return registrable(host) if isinstance(host, str) and host else ""
+
+
+@function(
+    "same_site",
+    "same_site(host_a, host_b)",
+    "True when two hosts share a registrable domain, or both belong to one brand in "
+    "Admin > Brands (live.com and microsoftonline.com).",
+)
+def same_site(a: Any, b: Any, *, ctx: Capture) -> bool:
+    if not isinstance(a, str) or not isinstance(b, str):
+        return False
+    return memo(ctx, ("same_site", a, b), lambda: _same_site(a, b, ctx.data.brands))
+
+
+@function(
+    "free_hosting",
+    "free_hosting(host)",
+    "The free hosting or site-builder platform the host is a tenant of (pages.dev, "
+    "weebly.com, ...), or empty.",
+)
+def free_hosting_of(host: Any, *, ctx: Capture) -> str:
+    return (free_hosting(host) or "") if isinstance(host, str) and host else ""
+
+
+@function(
+    "host_in",
+    'host_in(host, list("clickfix.browser_vendors"))',
+    "True when the host is one of the listed domains or a subdomain of one.",
+)
+def host_in(host: Any, domains: Any, *, ctx: Capture) -> bool:
+    if not isinstance(host, str) or not host:
+        return False
+    vals = list_value(domains) if isinstance(domains, ListRef) else domains
+    if isinstance(vals, dict):
+        vals = tuple(vals)
+    if not isinstance(vals, (list, tuple, set, frozenset)):
+        return False
+    return any(isinstance(v, str) and (host == v or host.endswith("." + v)) for v in vals)
+
+
+def _values(v: Any) -> list[Any]:
+    if isinstance(v, ListRef):
+        v = list_value(v)
+    if isinstance(v, dict):
+        return list(v)
+    if isinstance(v, (list, tuple, set, frozenset)):
+        return list(v)
+    return []
+
+
+@function(
+    "count_in",
+    'count_in(values, list("network.remote_access_ports"))',
+    "How many of the values are in the list (or in another array).",
+)
+def count_in(values: Any, options: Any, *, ctx: Capture) -> int:
+    opts = {str(o) for o in _values(options)}
+    return sum(1 for v in _values(values) if str(v) in opts)
+
+
+@function(
+    "is_subset",
+    "is_subset(values, other)",
+    "True when every value is also in the other array or list (and there is at least one).",
+)
+def is_subset(values: Any, other: Any, *, ctx: Capture) -> bool:
+    vals = _values(values)
+    return bool(vals) and {str(v) for v in vals} <= {str(o) for o in _values(other)}
+
+
+@function(
+    "list_item",
+    'list_item(list("network.fraud_vendor_ports"), name)',
+    "The entry under a name in a table-shaped detection string; empty if none.",
+)
+def list_item(table: Any, name: Any, *, ctx: Capture) -> Any:
+    data = list_value(table) if isinstance(table, ListRef) else table
+    if isinstance(data, dict) and name in data:
+        v = data[name]
+        return sorted(v) if isinstance(v, (set, frozenset)) else v
+    return None
+
+
+@function(
+    "first_name_matching",
+    'first_name_matching(urls, list("network.fraud_vendor_scripts"))',
+    "The name of the first entry of a named-pattern table whose pattern matches one of "
+    "the texts; empty if none.",
+)
+def first_name_matching(texts: Any, table: Any, *, ctx: Capture) -> str:
+    data = list_value(table) if isinstance(table, ListRef) else None
+    items = [t for t in _values(texts) if isinstance(t, str)]
+    if isinstance(data, dict):
+        for name, rx in data.items():
+            if isinstance(rx, re.Pattern) and any(rx.search(t) for t in items):
+                return str(name)
+    elif isinstance(data, list):
+        for item in data:
+            if any(item.regex.search(t) for t in items):
+                return str(item.name)
+    return ""
+
+
+@function(
+    "first_name_covering",
+    'first_name_covering(ports, list("network.local_app_ports"))',
+    "The name of the first entry of a table of sets that holds every one of the values; "
+    "empty if none (or no values).",
+)
+def first_name_covering(values: Any, table: Any, *, ctx: Capture) -> str:
+    data = list_value(table) if isinstance(table, ListRef) else None
+    vals = {str(v) for v in _values(values)}
+    if not vals or not isinstance(data, dict):
+        return ""
+    return next((str(n) for n, r in data.items() if vals <= {str(x) for x in r}), "")
+
+
+@function(
+    "page_text",
+    "page_text()",
+    "The visible text of every frame (as in frames), joined by spaces.",
+)
+def page_text(*, ctx: Capture) -> str:
+    return memo(
+        ctx, "page_text", lambda: " ".join(f.get("text", "") for f in _all_frames(ctx.data))
+    )
 
 
 @function("tolower", "tolower(text)", "The text in lower case.")
@@ -609,23 +822,11 @@ def near(v: Any, a: Any, b: Any, distance: Any, *, ctx: Capture) -> bool:
     return False
 
 
-@function(
-    "signal",
-    'signal("capture.gated")',
-    "A value from an area that is not yet written as queries (transitional; each one goes "
-    "away when its area moves to rules).",
-)
-def signal(path: Any, *, ctx: Capture) -> Any:
-    from sandbox.detections.model import _MISSING, get_value
-
-    if not isinstance(path, str):
-        return None
-    area = path.split(".", 1)[0]
-    v = get_value({area: ctx.section(area)}, path)
-    return None if v is _MISSING else v
-
-
 def environment() -> Env:
+    # The area modules declare their own tables and functions; importing them registers
+    # them here.
+    import sandbox.detections.observe  # noqa: F401
+
     return Env(
         tables={k: v["build"] for k, v in TABLES.items()},
         table_functions={k: v["build"] for k, v in TABLE_FUNCTIONS.items()},

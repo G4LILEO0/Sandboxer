@@ -459,20 +459,15 @@ async function showEvidence(h) {
   const ev = res.data;
   const parts = [];
   if (ev.description) parts.push(el('p', { className: 'small', textContent: ev.description }));
-  // A detection explains itself: the rule as sentences, then every check it made with
-  // the value it saw (sandbox/detections).
+  // A rule explains itself: its query, how each step narrowed the rows down, and the rows
+  // it returned (sandbox/detections/rules). Hits recorded before rules were queries keep
+  // the values they recorded, shown raw below.
   if (ev.kind === 'query') {
     parts.push(...queryEvidence(ev));
-  } else if (ev.rule_text) parts.push(el('pre', { className: 'small rule-text', textContent: ev.rule_text }));
-  if (ev.condition.length) {
-    parts.push(el('h3', { className: 'section-title', textContent: 'Checks' }),
-      table(['Check', 'Signal', 'Value seen', ''], ev.condition.map((c) => el('tr', { className: c.passed ? '' : 'muted' },
-        el('td', { className: 'small', textContent: c.test || `${c.negated ? 'NOT ' : ''}${c.fact} ${c.op} ${fmtValue(c.threshold)}` }),
-        el('td', { className: 'monospace small', textContent: c.fact }),
-        el('td', { className: 'monospace small evidence-actual', textContent: c.missing ? '(missing)' : fmtValue(c.actual) }),
-        el('td', {}, el('span', { className: `pass ${c.passed ? 'pass-yes' : 'pass-no'}`, textContent: c.passed ? 'pass' : 'fail' }))))));
-  } else if (h.engine === 'behaviour' && !ev.rule_found) {
-    parts.push(empty('The rule no longer exists. Showing the facts recorded when it fired.'));
+  } else if (h.engine === 'behaviour') {
+    parts.push(empty(ev.rule_found
+      ? 'This hit was recorded before the rule was a query. Showing the values recorded when it fired.'
+      : 'The rule no longer exists. Showing the facts recorded when it fired.'));
   }
   if (ev.rule_source) parts.push(details('YARA rule source', ev.rule_source));
   parts.push(el('h3', { className: 'section-title', textContent: `Matched content (${ev.samples.length})` }),

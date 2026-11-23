@@ -1,0 +1,17 @@
+title: Clipboard command written silently or wiped
+severity: medium
+score: 25
+tags: clickfix
+attack: T1204.004, T1070
+description: The page wrote a shell-like command to the clipboard with no user gesture, or
+  overwrote or blanked a command it wrote earlier. ClickFix kits do both. Copy buttons on
+  documentation pages do neither.
+---
+union
+    // A clipboard command written with no click behind it ...
+    (clipboard_commands
+     | where user_activation == false
+     | project how = "written without a click", text = substring(text, 0, 1000), frame_url),
+    // ... or a command the page blanked or replaced afterwards.
+    (overwritten_commands
+     | project how = "blanked or replaced", text = substring(prev_plain, 0, 1000), frame_url)

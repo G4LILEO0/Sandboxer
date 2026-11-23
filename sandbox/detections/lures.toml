@@ -22,7 +22,7 @@ pattern = '\b(log ?in|sign ?in|wallet|verify|verification|account|support|secure
 
 [tech_support_scare]
 title = 'Tech-support scare wording'
-description = 'Tech-support scare wording. Phone numbers on such a page feed lure.tech_support_phone.'
+description = 'Tech-support scare wording. With a phone number (Tech-support phone number) it feeds the tech_support_frames shared query.'
 type = "regex"
 flags = 'i'
 pattern = '(microsoft|windows|defender|apple|support|virus|infected|blocked|trojan|spyware|call (us|now|immediately)|do not (restart|shut)|technical support)'

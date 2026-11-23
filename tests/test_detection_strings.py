@@ -5,7 +5,7 @@ import re
 import pytest
 
 from sandbox.analysis import domains
-from sandbox.detections import clickfix, lures, network
+from sandbox.detections import clickfix
 from sandbox.detections import strings as detection
 
 
@@ -48,7 +48,12 @@ def test_bound_globals_follow_the_active_value():
 
 def test_threatmetrix_host_pattern_matches():
     """The shipped host pattern used to carry a stray backspace and never matched."""
-    assert network._fraud_vendor(["https://h.online-metrix.net/abc.js"]) == "threatmetrix"
+    from sandbox.detections.kql.language import ListRef
+    from sandbox.detections.kql.tables import first_name_matching
+
+    scripts = ["https://h.online-metrix.net/abc.js"]
+    vendors = ListRef("network.fraud_vendor_scripts")
+    assert first_name_matching(scripts, vendors, ctx=None) == "threatmetrix"
 
 
 def test_override_changes_detection_and_revert_restores_it():
@@ -91,7 +96,7 @@ def test_a_broken_override_is_skipped_and_the_default_kept():
     assert len(problems) == 2
     entry = detection.entries()["clickfix.run_dialog"]
     assert entry.error and entry.compiled.pattern == entry.default["pattern"]
-    assert lures._RUN_DIALOG.search("Press Win + R")
+    assert detection.get("clickfix.run_dialog").search("Press Win + R")
 
 
 @pytest.mark.parametrize(

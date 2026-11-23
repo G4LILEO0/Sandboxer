@@ -1,0 +1,18 @@
+title: Card details asked for with a lure
+severity: high
+score: 45
+tags: phishing, card-harvest
+attack: T1566.002, T1056.003
+description: A page asks for card details (number with CVV or expiry) and has another
+  phishing trait. The traits are: a delivery-fee, customs or fine pretext, a lookalike or
+  government-lookalike domain, free hosting, or a domain under 30 days old.
+---
+// A card-number form on a page no known brand or allowlisted site runs ...
+card_pages
+// ... with a reason to pay, or on a lookalike, free-hosted or young domain.
+| where exists(payment_pretext_frames)
+    or exists(lookalike_hosts)
+    or exists(government_lookalike_hosts)
+    or exists(final_free_hosting)
+    or toscalar(final_domain | project age_days) < 30
+| project url

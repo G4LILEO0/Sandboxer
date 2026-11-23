@@ -1,0 +1,9 @@
+title: Executable inside a downloaded archive
+severity: high
+score: 50
+tags: malware-download
+attack: T1204.002, T1105
+description: A downloaded archive contains an executable, script or shortcut.
+---
+risky_archive_entries
+| project archive, name, size

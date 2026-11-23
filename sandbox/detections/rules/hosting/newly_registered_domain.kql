@@ -1,0 +1,13 @@
+title: Newly registered domain on the path
+severity: medium
+score: 25
+tags: newly-registered
+attack: T1583.001
+description: The submitted, redirect or final domain was registered less than 30 days ago.
+  Third- party resources do not count.
+---
+// A domain on the visitor's path (not a third-party resource) registered less than 30
+// days ago.
+domains
+| where on_path and age_days < 30
+| project domain, age_days

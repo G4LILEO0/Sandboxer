@@ -1,0 +1,22 @@
+title: Login page fetches the victim's brand logo
+severity: high
+score: 50
+tags: phishing, credential-harvest
+attack: T1566.002, T1656
+description: A password page fetches another site's favicon through a favicon service
+  (Google s2/faviconV2, DuckDuckGo, Clearbit). Webmail kits use this trick to show the
+  victim's own mail-provider icon. The page also is on free hosting, is on a domain under 30
+  days old, calls an IP-lookup service or shows verification wording.
+---
+// A password page ...
+password_pages
+// ... that fetches the favicon of one to three other sites through a favicon service
+// (the visitor's own mail provider's logo) ...
+| extend favicons = toscalar(favicon_lookups | where not(visited) | summarize dcount(target))
+| where favicons > 0 and favicons <= 3
+// ... on a free-hosted or young domain, with an IP lookup or verification wording.
+| where exists(final_free_hosting)
+    or toscalar(final_domain | project age_days) < 30
+    or exists(ip_lookups)
+    or exists(verification_texts)
+| project url, favicon_targets = toscalar(favicon_lookups | where not(visited) | summarize make_set(target))

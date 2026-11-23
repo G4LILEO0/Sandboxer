@@ -1,0 +1,9 @@
+title: Card-number form on an unknown site
+severity: low
+score: 10
+tags: card-form
+description: A page outside known brands and allowlisted sites asks for card details. On its
+  own, this matches any checkout page. It adds weight to other findings.
+---
+card_pages
+| project url

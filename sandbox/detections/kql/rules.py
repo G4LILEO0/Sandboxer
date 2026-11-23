@@ -32,18 +32,27 @@ from typing import Any
 
 from sandbox.detections.kql.language import Env, Query, QueryError, parse, parse_shared
 from sandbox.detections.kql.tables import environment
-from sandbox.detections.model import SEVERITIES, Outcome
 
 RULES_DIR = Path(__file__).resolve().parents[1] / "rules"
+SEVERITIES = ("info", "low", "medium", "high", "critical")
 EVIDENCE_ROWS = 10
 _TEXT_CAP = 300
 _HEADER_KEYS = {"title", "severity", "score", "tags", "attack", "description"}
 
 
+@dataclass
+class Outcome:
+    """One rule run over one capture: whether it fired, its evidence (the rows it
+    returned) and how each step narrowed the rows down."""
+
+    matched: bool
+    facts: dict[str, Any] = field(default_factory=dict)
+    checks: list[dict[str, Any]] = field(default_factory=list)
+
+
 @dataclass(frozen=True, eq=False)
 class RuleDetection:
-    """A detection written as a query. Same interface as ``model.Detection`` where the
-    catalog, engine and API need it."""
+    """A detection: one rule file, parsed."""
 
     name: str
     title: str
@@ -56,14 +65,13 @@ class RuleDetection:
     query: Query
     source: str  # path relative to the repository
     env: Env = field(repr=False, default=None)  # type: ignore[assignment]
-    kind: str = "query"
 
-    def evaluate(self, facts: Any) -> Outcome:
-        cap = getattr(facts, "capture", None)
-        if cap is None:
-            # Stored observed values alone cannot answer a query; the engine always
-            # passes the capture (see observe.build_facts).
-            return Outcome(False, {}, [{"note": "needs the capture, not stored values"}])
+    def evaluate(self, capture: Any) -> Outcome:
+        """Run the rule over a capture (``base.Capture``, or the observed values of one,
+        which carry it)."""
+        cap = getattr(capture, "capture", capture)
+        if cap is None or not hasattr(cap, "data"):
+            return Outcome(False, {}, [{"note": "needs the capture"}])
         rows, run = self.query.run(cap, self.env)
         evidence = {
             "rows": [_jsonable_row(r) for r in rows[:EVIDENCE_ROWS]],
@@ -73,9 +81,6 @@ class RuleDetection:
 
     def rule_text(self) -> str:
         return self.query.text.strip()
-
-    def signals(self) -> list[Any]:
-        return []
 
 
 def _jsonable(v: Any) -> Any:
@@ -131,16 +136,25 @@ def load(directory: Path = RULES_DIR) -> list[RuleDetection]:
     env = environment()
     repo = directory.parents[2]
     # Shared named queries first, so every rule can use them.
-    shared_files = sorted(directory.glob("*/_shared.kql"))
-    for path in shared_files:
-        try:
-            lets, texts = parse_shared(path.read_text(encoding="utf-8"), env)
-        except QueryError as e:
+    # A shared query can use one from another area, so a file whose names are not all
+    # known yet is parsed again after the others, until none is left.
+    pending = sorted(directory.glob("*/_shared.kql"))
+    while pending:
+        errors: dict[Path, QueryError] = {}
+        for path in pending:
+            try:
+                lets, texts = parse_shared(path.read_text(encoding="utf-8"), env)
+            except QueryError as e:
+                errors[path] = e
+                continue
+            for name, pipe in lets.items():
+                if name in env.shared:
+                    raise QueryError(f"{path.relative_to(repo)}: {name} is defined twice")
+                env.shared[name] = Query(lets, pipe, texts[name])
+        if len(errors) == len(pending):
+            path, e = next(iter(errors.items()))
             raise QueryError(f"{path.relative_to(repo)}: {e}") from None
-        for name, pipe in lets.items():
-            if name in env.shared:
-                raise QueryError(f"{path.relative_to(repo)}: {name} is defined twice")
-            env.shared[name] = Query(lets, pipe, texts[name])
+        pending = list(errors)
     out = []
     for path in sorted(directory.glob("*/*.kql")):
         if path.name.startswith("_"):

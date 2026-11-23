@@ -1,0 +1,10 @@
+title: FileFix: command disguised as a file path
+severity: critical
+score: 80
+tags: clickfix, filefix
+attack: T1204.004, T1059.001
+description: The clipboard holds a shell command, then padding, then a comment with a decoy
+  Windows file path (FileFix). The victim pastes it into Explorer's address bar.
+---
+filefix_writes
+| project text = substring(text, 0, 1000), api, frame_url

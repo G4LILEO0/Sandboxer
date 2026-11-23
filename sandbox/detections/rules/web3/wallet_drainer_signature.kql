@@ -1,0 +1,16 @@
+title: Wallet drainer signature request
+severity: high
+score: 60
+tags: crypto, wallet-drainer
+attack: T1657, T1566.002
+description: A page asked the (instrumented) wallet to sign a Permit/approval or an
+  unlimited token approval right after connect, on a non-allowlisted domain: a drainer.
+---
+// The page asked the wallet to sign a Permit, or to approve unlimited spending
+// (approve 0x095ea7b3, setApprovalForAll 0xa22cb465) ...
+wallet_requests
+| where primary_type startswith "permit" or unlimited
+    or selector in ("0x095ea7b3", "0xa22cb465")
+// ... on a site that is not allowlisted.
+| where not(exists(final_allowlisted))
+| project method, primary_type, selector, unlimited

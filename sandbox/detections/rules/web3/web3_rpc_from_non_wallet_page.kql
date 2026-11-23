@@ -1,0 +1,12 @@
+title: Blockchain read from a page with no wallet (EtherHiding)
+severity: high
+score: 55
+tags: etherhiding, web3
+attack: T1102.001, T1105, T1189
+description: A page that is not a wallet/web3 app (no wallet UI, no wallet use) read a smart
+  contract over JSON-RPC (eth_call / eth_getStorageAt). This is the EtherHiding dead- drop
+  loader pattern. The rule fires on allowlisted sites too, because EtherHiding runs on
+  compromised legitimate sites.
+---
+etherhiding_reads
+| project host, method, to

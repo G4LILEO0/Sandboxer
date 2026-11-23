@@ -1,0 +1,10 @@
+title: Lookalike of a government domain
+severity: high
+score: 45
+tags: phishing, government-impersonation
+attack: T1583.001, T1656
+description: A domain imitates a government site but is not under a government suffix
+  (absher- gov-sa.com, moi.gov.sa.verify-id.com, govsa-fines.net).
+---
+government_lookalike_hosts
+| project host, government_lookalike

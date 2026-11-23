@@ -1,0 +1,10 @@
+title: Wallet recovery phrase asked for
+severity: high
+score: 60
+tags: phishing, crypto, wallet-drainer
+attack: T1566.002, T1056.003
+description: A page outside any known wallet's domains asks for a wallet recovery (seed)
+  phrase.
+---
+seed_pages
+| project url

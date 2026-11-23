@@ -1,0 +1,19 @@
+title: Wallet drainer lure
+severity: medium
+score: 30
+tags: web3, drainer, phishing
+attack: T1566.002, T1656
+description: Claim/airdrop or wallet-verification wording on a page that loads a wallet
+  library, served from a young, lookalike or free-hosting domain.
+---
+// Claim, airdrop or wallet-verification wording on a top-level page ...
+frames
+| where top and content matches list("web3.drainer_wording")
+// ... that loads a wallet library, on a site that is not allowlisted ...
+| where toscalar(libraries | where name in (list("web3.wallet_libraries")) | count) > 0
+| where not(exists(final_allowlisted))
+// ... and is young, a lookalike or free-hosted.
+| where toscalar(final_domain | project age_days) < 60
+    or exists(lookalike_hosts)
+    or exists(final_free_hosting)
+| distinct url

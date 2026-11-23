@@ -1,0 +1,22 @@
+title: Blockchain-hosted payload decoded and run
+severity: critical
+score: 80
+tags: etherhiding, web3, obfuscation
+attack: T1102.001, T1027, T1059.007
+description: A page read a smart contract, the answer was a kilobyte-sized string, and that
+  string (or its base64 layer) became eval/Function code. The contract is the next- stage
+  script store (ClearFake / EtherHiding). Without the direct link, the rule needs 1 KB+ of
+  code-only exec (innerHTML/document.write do not count). In that case, an allowlisted site
+  also needs a fake update/CAPTCHA lure.
+---
+// A long string from a blockchain read on a page with no wallet ...
+rpc_strings
+| where exists(rpc_calls) and not(exists(wallet_requests))
+// ... is decoded and run: a piece of it is in code the page ran through eval or Function.
+// Or, from a page with no wallet UI, 1 KB or more of code was run; on an allowlisted
+// site that also needs a fake update or fake CAPTCHA page.
+| where executed
+    or (exists(etherhiding_reads)
+        and toscalar(code_exec | project max_len) >= 1024
+        and (not(exists(final_allowlisted)) or exists(fake_update_pages) or exists(fake_captcha_texts)))
+| project value = substring(value, 0, 300), executed

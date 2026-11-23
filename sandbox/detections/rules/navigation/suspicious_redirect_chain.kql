@@ -1,0 +1,14 @@
+title: Suspicious redirect chain
+severity: medium
+score: 25
+tags: suspicious-redirect, cloaking
+attack: T1608.005
+description: Three or more cross-site redirects, a long chain through several sites, or an
+  https to http downgrade.
+---
+// Three or more cross-site hops, an https: to http: hop, or a long chain (5 or more hops)
+// with at least two cross-site ones.
+capture
+| extend hops = toscalar(redirects | count), cross_site = toscalar(cross_site_hops | count)
+| where cross_site >= 3 or exists(https_downgrades) or (hops >= 5 and cross_site >= 2)
+| project hops, cross_site, downgrade = exists(https_downgrades)

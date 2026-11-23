@@ -1,0 +1,15 @@
+title: ClickFix command put on the clipboard
+severity: critical
+score: 80
+tags: clickfix
+attack: T1204.004, T1059
+description: The page put a command on the clipboard. The command has a ClickFix trait, or
+  the page tells the visitor to paste it into the Run dialog or a terminal. ClickFix traits:
+  a download cradle, hidden or encoded PowerShell, mshta of a URL, a finger.exe or for /f
+  fetch-and-run, caret obfuscation, or a fake-CAPTCHA comment or padded decoy.
+---
+// A clipboard command with a ClickFix trait, or any clipboard command on a page that
+// tells the visitor to paste into Run or a terminal.
+clipboard_commands
+| where trait in ("unambiguous", "cradle") or exists(run_dialog_pages)
+| project command = substring(text, 0, 1000), trait, api, frame_url

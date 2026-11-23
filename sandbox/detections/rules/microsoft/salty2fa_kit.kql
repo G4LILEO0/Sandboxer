@@ -17,7 +17,7 @@ let numeric_php_posts =
     | distinct host;
 // A Microsoft sign-in clone, behind a CAPTCHA, that blocks DevTools and posts to such a host.
 ms_clone_pages
-| where signal("capture.gated") == true
-    and signal("evasion.devtools_blocked") > 0
+| where exists(captcha_gates)
+    and exists(devtools_keys_blocked)
     and exists(numeric_php_posts)
-| extend devtools_keys = signal("evasion.devtools_blocked_keys")
+| extend devtools_keys = toscalar(devtools_keys_blocked | summarize make_set(key))

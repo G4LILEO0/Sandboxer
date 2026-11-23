@@ -1,0 +1,79 @@
+// Pages that tell the visitor to open the Run dialog or a terminal (string
+// clickfix.run_dialog) and paste into it (clickfix.paste). Hidden overlay text counts.
+let run_dialog_pages =
+    lure_texts
+    | where text matches list("clickfix.run_dialog") and text matches list("clickfix.paste")
+    | distinct url;
+
+// Text that asks the visitor to prove they are human (string clickfix.verify_wording).
+let verification_texts =
+    lure_texts
+    | where content matches list("clickfix.verify_wording");
+
+// A fake CAPTCHA: verification wording with paste, Run-dialog or key-press steps in the
+// same text.
+let fake_captcha_texts =
+    verification_texts
+    | where content matches list("clickfix.paste")
+        or content matches list("clickfix.run_dialog")
+        or content matches list("clickfix.key_instruction");
+
+// Requests to a real CAPTCHA provider (Turnstile, reCAPTCHA, hCaptcha).
+let genuine_challenge_requests =
+    requests
+    | where url matches list("clickfix.genuine_challenge");
+
+// A reason to pay: redelivery or customs fees, fines, tolls (string lures.payment_pretext).
+let payment_pretext_frames =
+    frames
+    | where content matches list("lures.payment_pretext");
+
+// A tech-support scare (string lures.tech_support_scare) with a phone number to call.
+let tech_support_frames =
+    frames
+    | where content matches list("lures.tech_support_scare")
+        and content matches list("lures.tech_support_phone");
+
+// Wording that tells the visitor to press Allow on the notification prompt.
+let notification_bait_frames =
+    frames
+    | where content matches list("lures.allow_notifications_bait");
+
+// Steps that tell the visitor to paste a URL back into the page (ConsentFix), with a box
+// to paste into or a script that posts it, on a page Microsoft does not own and that is
+// not allowlisted. A tutorial that only describes the step has no box.
+let paste_back_frames =
+    frames
+    | where content matches list("lures.paste_back")
+    | where isnotempty(host) and not owned_by(host, "Microsoft") and not allowlisted(host)
+    | where has_text_box or script_posted;
+
+// Pages not run by a browser vendor (string clickfix.browser_vendors).
+let non_vendor_frames =
+    frames
+    | where isnotempty(host) and not host_in(host, list("clickfix.browser_vendors"));
+
+// A fake "your browser needs an update" page.
+let fake_update_pages =
+    non_vendor_frames
+    | where content matches list("clickfix.fake_browser_update")
+    | distinct url;
+
+// A page that tells the visitor to open the disk image or installer they were sent.
+let open_download_pages =
+    non_vendor_frames
+    | where text matches list("clickfix.open_download_instructions")
+    | distinct url;
+
+// A fake "the browser crashed, run this to repair it" page (CrashFix).
+let crash_repair_pages =
+    non_vendor_frames
+    | where content matches list("clickfix.crash_repair")
+    | distinct url;
+
+// A fake operating-system update screen with a progress percentage.
+let fake_os_update_pages =
+    non_vendor_frames
+    | where content matches list("clickfix.fake_os_update")
+        and content matches list("clickfix.progress_percent")
+    | distinct url;

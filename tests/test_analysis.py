@@ -66,14 +66,19 @@ def test_fixture_does_not_trigger(fixture_eval, rule):
 
 def test_fixture_facts_explain_hits(fixture_eval):
     facts = fixture_eval.facts
-    form = facts["forms"]["cross_domain_credential_forms"][0]
-    assert form["action"] == "https://collector.example.net/submit.php"
     assert facts["brand"]["name"] == "Microsoft"
-    assert "powershell" in facts["clipboard"]["commands"][0]["text"]
     assert facts["downloads"]["files"][0]["name"] == "invoice_2026.exe"
     assert {r["type"] for r in facts["redirects"]["chain"]} == {"meta_refresh", "js"}
-    hit = next(h for h in fixture_eval.rule_hits if h["rule_name"] == "form_posts_cross_domain")
-    assert "forms.cross_domain_credential_forms" in hit["detail"]["facts"]
+
+    def rows(rule):
+        hit = next(h for h in fixture_eval.rule_hits if h["rule_name"] == rule)
+        return hit["detail"]["facts"]["rows"]
+
+    # A hit's evidence is the rows its rule returned.
+    assert (
+        rows("form_posts_cross_domain")[0]["action"] == "https://collector.example.net/submit.php"
+    )
+    assert "powershell" in rows("clickfix_clipboard_command")[0]["command"]
 
 
 def test_fixture_iocs(fixture_eval):
@@ -439,15 +444,12 @@ def _harreq(url, method="GET", post="", body="", set_cookie=()):
 def test_facts_backward_compatible_with_old_capture():
     """A capture missing every new artifact yields neutral facts, never a crash."""
     facts = build_facts(_capd("https://plain.example/"))
-    assert facts["exfil"]["telegram_count"] == 0
     # Query rules read the capture's tables, which are empty, not missing.
     hits = behaviour_hits(builtin_behaviour(), facts)
     assert not [h["rule_name"] for h in hits if h["detail"].get("kind") == "query"]
     assert facts["web3"]["rpc_call_count"] == 0
-    assert facts["websocket"]["count"] == 0
-    assert facts["evasion"]["devtools_blocked"] == 0
-    assert facts["final"]["ipfs"] is None
-    assert facts["lure"]["fake_captcha"] is False
+    assert facts["network"]["requests"] == 0
+    assert facts["capture"]["antibot"] is None and facts["network"]["blocked"] == []
 
 
 def test_web3_rpc_fact_parses_batch_and_method():
@@ -474,9 +476,17 @@ def test_clipboard_no_gesture_and_overwrite_facts():
             {"api": "navigator.clipboard.writeText", "text": "   ", "user_activation": True},
         ],
     )
-    clip = build_facts(data)["clipboard"]
-    assert clip["no_gesture_writes"] == 1
-    assert clip["overwritten_command"] == 1
+    from sandbox.detections.base import Capture
+    from sandbox.detections.catalog import detections
+    from sandbox.detections.kql.language import parse
+
+    env = detections()[0].env
+
+    def rows(name):
+        return parse(name, env).run(Capture(data), env)[0]
+
+    assert len(rows("no_gesture_writes")) == 1
+    assert len(rows("overwritten_commands")) == 1
 
 
 def test_clipboard_ioc_extraction_from_command():

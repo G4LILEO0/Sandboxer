@@ -1,20 +1,18 @@
 """Every detection, loaded and checked, and the one function that runs them.
 
-Detections are being moved to query rules (``sandbox/detections/rules/<area>/*.kql``,
-see sandbox.detections.kql); the areas not moved yet still declare theirs in Python.
-Both kinds load here into one catalog and run through ``run``. The load fails at once if
-a rule does not parse, names something unknown, or a Python detection reads a signal
-nobody declared, so a typo can never ship as a rule that silently never fires.
+A detection is a rule file: ``sandbox/detections/rules/<area>/<name>.kql``, a short
+header and a query over the capture's tables (see sandbox.detections.kql). There is no
+other kind. Every rule is parsed when Sandboxer starts, and a rule that does not parse or
+names something unknown stops the start with the file and line, so a typo can never ship
+as a rule that silently never fires.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from sandbox.detections import observe  # noqa: F401  (imports every area module)
 from sandbox.detections.kql import rules as query_rules
 from sandbox.detections.kql.rules import RuleDetection
-from sandbox.detections.model import DETECTIONS, SIGNALS, Detection
 
 # Weights that are not a detection's own score: the severity fall-backs (YARA and feed
 # rules), the indicator base weight and the per-alert Suricata weight (ANA-7).
@@ -29,34 +27,18 @@ BASE_WEIGHTS: dict[str, int] = {
 }
 
 
-def _check() -> None:
-    problems = []
-    for d in DETECTIONS.values():
-        if isinstance(d, RuleDetection):
-            continue  # checked when parsed
-        for t in d.when.tests():
-            if t.path not in SIGNALS:
-                problems.append(f"{d.name} reads undeclared signal {t.path}")
-        for path in d.evidence:
-            if path not in SIGNALS:
-                problems.append(f"{d.name} names undeclared evidence {path}")
-    if problems:
-        raise RuntimeError("Detection catalog is broken: " + "; ".join(problems))
-
-
-_check()
-
+DETECTIONS: dict[str, RuleDetection] = {}
 for _rule in query_rules.load():
     if _rule.name in DETECTIONS:
-        raise RuntimeError(f"Detection {_rule.name} is declared in Python and in {_rule.source}")
+        raise RuntimeError(f"Detection {_rule.name} is declared twice ({_rule.source})")
     DETECTIONS[_rule.name] = _rule
 
 
-def detections() -> list[Detection | RuleDetection]:
+def detections() -> list[RuleDetection]:
     return list(DETECTIONS.values())
 
 
-def get(name: str) -> Detection | RuleDetection | None:
+def get(name: str) -> RuleDetection | None:
     return DETECTIONS.get(name)
 
 
@@ -70,7 +52,7 @@ def definitions() -> list[dict[str, Any]]:
     return [definition(d) for d in DETECTIONS.values()]
 
 
-def definition(d: Detection | RuleDetection, rule_id: str | None = None) -> dict[str, Any]:
+def definition(d: RuleDetection, rule_id: str | None = None) -> dict[str, Any]:
     return {
         "id": rule_id or d.name,
         "name": d.name,
@@ -81,10 +63,11 @@ def definition(d: Detection | RuleDetection, rule_id: str | None = None) -> dict
     }
 
 
-def run(definitions: list[dict[str, Any]], facts: dict[str, Any]) -> list[dict[str, Any]]:
-    """Evaluate the enabled detections (``definitions``, one per enabled rule row) over one
-    capture's observed values. Returns one hit per detection that fired, carrying every
-    check it made, so the report can say exactly why."""
+def run(definitions: list[dict[str, Any]], capture: Any) -> list[dict[str, Any]]:
+    """Run the enabled detections (``definitions``, one per enabled rule row) over one
+    capture (``base.Capture``, or its observed values, which carry it). Returns one hit
+    per detection that fired, with the rows it returned and how each step narrowed them
+    down, so the report can say exactly why."""
     from sandbox.ids import new_id
 
     hits = []
@@ -93,7 +76,7 @@ def run(definitions: list[dict[str, Any]], facts: dict[str, Any]) -> list[dict[s
         d = spec.get("detection") or DETECTIONS.get(spec["name"])
         if d is None:
             continue  # a rule row whose detection was removed from the code
-        outcome = d.evaluate(facts)
+        outcome = d.evaluate(capture)
         if not outcome.matched:
             continue
         hits.append(
@@ -107,7 +90,7 @@ def run(definitions: list[dict[str, Any]], facts: dict[str, Any]) -> list[dict[s
                 "attack_ids": list(spec.get("attack_ids") or d.attack),
                 "artifact_id": None,
                 "detail": {
-                    **({"kind": "query"} if isinstance(d, RuleDetection) else {}),
+                    "kind": "query",
                     "title": d.title,
                     "description": spec.get("description") or d.description,
                     "facts": outcome.facts,
@@ -118,16 +101,9 @@ def run(definitions: list[dict[str, Any]], facts: dict[str, Any]) -> list[dict[s
     return hits
 
 
-def describe(d: Detection | RuleDetection) -> dict[str, Any]:
-    """A detection as Admin shows it."""
-    if isinstance(d, RuleDetection):
-        return describe_rule(d)
-    return _describe_python(d)
-
-
-def describe_rule(d: RuleDetection) -> dict[str, Any]:
-    """A query rule: its metadata, its query, the shared named queries it uses, and the
-    description of every table, function and detection string it names."""
+def describe(d: RuleDetection) -> dict[str, Any]:
+    """A detection as Admin shows it: its metadata, its query, the shared named queries it
+    uses, and the description of every table, function and detection string it names."""
     import re
 
     from sandbox.detections import strings
@@ -192,7 +168,6 @@ def describe_rule(d: RuleDetection) -> dict[str, Any]:
             for k in keys
             if k in entries
         ],
-        "signals": [],
     }
 
 
@@ -200,42 +175,3 @@ def _shared_text(d: RuleDetection, name: str) -> str:
     from sandbox.detections.kql.rules import shared_source
 
     return shared_source(d.env, name)
-
-
-def _describe_python(d: Detection) -> dict[str, Any]:
-    """A detection as Admin shows it: metadata, the rule as sentences, and each signal it
-    reads with its description and where it is computed."""
-    from sandbox.detections import strings
-
-    used_strings = sorted(
-        {
-            b.key
-            for b in strings._state.bindings
-            if b.namespace.get("__name__", "").rsplit(".", 1)[-1] in {s.area for s in d.signals()}
-        }
-    )
-    return {
-        "name": d.name,
-        "title": d.title,
-        "severity": d.severity,
-        "score": d.score,
-        "tags": list(d.tags),
-        "attack_ids": list(d.attack),
-        "description": d.description,
-        "area": d.area,
-        "source": f"sandbox/detections/{d.area}.py",
-        "rule": d.rule_text(),
-        "signals": [
-            {
-                "path": s.path,
-                "title": s.title,
-                "description": s.description,
-                "area": s.area,
-                "source": f"sandbox/detections/{s.area}.py",
-                "evidence_only": s.path in d.evidence
-                and s.path not in {t.path for t in d.when.tests()},
-            }
-            for s in d.signals()
-        ],
-        "strings": used_strings,
-    }

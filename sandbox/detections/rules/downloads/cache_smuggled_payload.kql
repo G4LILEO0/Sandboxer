@@ -1,0 +1,14 @@
+title: Payload smuggled as an image with a paste lure
+severity: high
+score: 55
+tags: filefix, cache-smuggling, malware-download
+attack: T1027.006, T1204.004, T1564
+description: A response served as an image is really an archive or executable, and the page
+  gives FileFix/ClickFix steps. The browser cached a payload with no download prompt, for a
+  later File Explorer or Run step to use.
+---
+// A payload served as an image ...
+mislabeled_images
+// ... on a page that tells the visitor to paste a command, or put one on the clipboard.
+| where exists(filefix_writes) or exists(run_dialog_pages) or exists(clickfix_commands)
+| project url, content_type, magic

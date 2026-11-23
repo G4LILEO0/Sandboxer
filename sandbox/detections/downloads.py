@@ -1,4 +1,5 @@
-"""downloads"""
+"""Downloads: every file the page started, what it really is, the files inside archives,
+and payloads served as images. The rules in rules/downloads/ decide."""
 
 import base64
 import binascii
@@ -6,8 +7,9 @@ from datetime import datetime
 from typing import Any
 
 from sandbox.detections import strings as S
-from sandbox.detections.base import Capture, CaptureData, _all_frames, _magic_type
-from sandbox.detections.model import all_of, any_of, detection, sig, signal
+from sandbox.detections.base import Capture, CaptureData, _magic_type
+from sandbox.detections.kql.language import Row
+from sandbox.detections.kql.tables import memo, table
 
 # Detection strings (keyword patterns, host lists, file types, points) live in
 # sandbox/detections/*.toml and are edited in Admin > Detection strings; each
@@ -99,10 +101,7 @@ def _downloads(data: CaptureData) -> dict[str, Any]:
     }
 
 
-_SMUGGLE_MAGIC = S.bind(globals(), "_SMUGGLE_MAGIC", "downloads.smuggled_content_types", S.as_set)
-
-
-def _mislabeled_images(data: CaptureData) -> list[dict[str, Any]]:
+def _image_responses(data: CaptureData) -> list[dict[str, Any]]:
     out = []
     for e in data.har_entries[:3000]:
         resp = e.get("response") or {}
@@ -121,14 +120,10 @@ def _mislabeled_images(data: CaptureData) -> list[dict[str, Any]]:
                 continue
         else:
             head = text[:16].encode("latin-1", "ignore")
-        magic = _magic_type(head)
-        if magic in _SMUGGLE_MAGIC:
-            url = str((e.get("request") or {}).get("url", ""))
-            out.append({"url": url[:500], "content_type": ctype[:80], "magic": magic})
+        url = str((e.get("request") or {}).get("url", ""))
+        out.append({"url": url[:500], "content_type": ctype[:80], "magic": _magic_type(head)})
     return out
 
-
-_ARCHIVE_PASSWORD = S.bind(globals(), "_ARCHIVE_PASSWORD", "downloads.archive_password_on_page")
 
 # How far into a (decompressed) tar the download listing reads.
 _TAR_SCAN_LIMIT = 256 * 1024 * 1024
@@ -142,6 +137,7 @@ def _archive_listing(data: CaptureData) -> dict[str, Any]:
     import zipfile
 
     archives, inner_risky, encrypted = [], 0, 0
+    all_entries: list[dict[str, Any]] = []
     for d in data.result.get("downloads", []):
         sha = d.get("sha256")
         path = data.download_paths.get(sha or "")
@@ -172,6 +168,7 @@ def _archive_listing(data: CaptureData) -> dict[str, Any]:
                                 "size": info.file_size,
                                 "encrypted": enc,
                                 "risky": risky,
+                                "extension": ext,
                             }
                         )  # noqa: E501
             elif tarfile.is_tarfile(path):
@@ -187,7 +184,12 @@ def _archive_listing(data: CaptureData) -> dict[str, Any]:
                         risky = ext in EXECUTABLE_EXTENSIONS
                         inner_risky += risky
                         entry["entries"].append(
-                            {"name": member.name[:200], "size": member.size, "risky": risky}
+                            {
+                                "name": member.name[:200],
+                                "size": member.size,
+                                "risky": risky,
+                                "extension": ext,
+                            }
                         )  # noqa: E501
             else:
                 continue
@@ -195,14 +197,14 @@ def _archive_listing(data: CaptureData) -> dict[str, Any]:
             continue
         encrypted += entry["encrypted"]
         archives.append(entry)
-    # Is an archive password printed on a page? (scanner-evasion delivery, DE-DLD-002)
-    page_text = " ".join(f.get("text", "") for f in _all_frames(data))
-    password_on_page = bool(encrypted and _ARCHIVE_PASSWORD.search(page_text))
+        all_entries += [
+            {"archive": entry["name"], "format": entry["format"], **e} for e in entry["entries"]
+        ]
     return {
         "archives": archives[:10],
         "archive_inner_risky": inner_risky,
         "archive_encrypted": encrypted,
-        "archive_password_on_page": password_on_page,
+        "_entries": all_entries,
     }
 
 
@@ -210,264 +212,103 @@ def _archive_listing(data: CaptureData) -> dict[str, Any]:
 
 
 def downloads_section(cap: Capture) -> dict[str, Any]:
-    """Downloaded files: type, how they started, archive contents."""
-    data = cap.data
-    mislabeled = _mislabeled_images(data)
-    return {
-        **_downloads(data),
-        **_archive_listing(data),
-        "mislabeled_image": len(mislabeled),
-        "mislabeled_images": mislabeled[:10],
-    }
+    """Downloaded files (type, how they started) and what the archives hold, for the
+    report's Downloads tab."""
+    return {**_downloads_of(cap), "archives": _listing_of(cap)["archives"]}
 
 
-# --- signals: the values this area observes --------------------------------------------
+def _downloads_of(cap: Capture) -> dict[str, Any]:
+    return memo(cap, "downloads_summary", lambda: _downloads(cap.data))
 
-signal(
-    "downloads.unprompted_risky",
-    "Risky downloads without a click",
-    (
-        "Downloads that are executable, archive or disguised and did not start within 10 "
-        "seconds after an analyst click."
-    ),
+
+# --- tables -------------------------------------------------------------------------------
+
+
+@table(
+    "downloads",
+    "Every download the browser started, received or not.",
+    {
+        "name": "The file name the server suggested",
+        "url": "Where it came from",
+        "sha256": "The file's SHA-256; empty when it never arrived",
+        "extension": "The last extension of the name, lower case (exe for report.pdf.exe)",
+        "inner_extension": "The extension before it (pdf for report.pdf.exe); empty for a "
+        "name with one extension",
+        "magic": "The file type from its first bytes: pe, elf, macho, zip, rar, 7z, cab, "
+        "iso, lnk, ole, chm, vhd, vhdx; empty if none of these",
+        "prompted": "True when an analyst click came at most 10 seconds before the page started it",
+        "received": "True when the file arrived",
+    },
 )
+def _downloads_table(cap: Capture) -> list[Row]:
+    def build() -> list[Row]:
+        rows = []
+        for f in _downloads_of(cap)["files"]:
+            parts = (f["name"] or "").lower().split(".")
+            rows.append(
+                {
+                    "name": f["name"],
+                    "url": f["url"] or "",
+                    "sha256": f["sha256"] or "",
+                    "extension": f["extension"],
+                    "inner_extension": parts[-2] if len(parts) > 2 else "",
+                    "magic": f["magic"] or "",
+                    "prompted": f["prompted"],
+                    "received": f["received"],
+                }
+            )
+        return rows
 
-signal(
-    "downloads.executable",
-    "Executable downloads",
-    (
-        "Downloads with an executable extension (string downloads.executable_extensions) or "
-        "executable file content (string downloads.risky_content_types)."
-    ),
+    return memo(cap, "downloads", build)
+
+
+@table(
+    "archive_entries",
+    "The files listed inside each downloaded zip or tar archive (the directory only; "
+    "nothing is extracted; the first 200 per archive).",
+    {
+        "archive": "The archive's file name",
+        "format": "zip or tar",
+        "name": "The entry's path inside it",
+        "extension": "The entry's last extension, lower case",
+        "encrypted": "True for a password-protected zip entry",
+        "size": "Its size in bytes",
+    },
 )
+def _entries_table(cap: Capture) -> list[Row]:
+    def build() -> list[Row]:
+        return [
+            {
+                "archive": e["archive"],
+                "format": e["format"],
+                "name": e["name"],
+                "extension": e["extension"],
+                "encrypted": bool(e.get("encrypted")),
+                "size": e.get("size"),
+            }
+            for e in _listing_of(cap)["_entries"]
+        ]
 
-signal(
-    "downloads.archive",
-    "Archive downloads",
-    (
-        "Downloads with an archive extension (string downloads.archive_extensions) or zip, "
-        "rar, 7z or cab content."
-    ),
+    return memo(cap, "archive_entries", build)
+
+
+def _listing_of(cap: Capture) -> dict[str, Any]:
+    return memo(cap, "archive_listing", lambda: _archive_listing(cap.data))
+
+
+@table(
+    "image_responses",
+    "Every HAR response (first 3,000) served with an image/* content type, with the file "
+    "type its first bytes show.",
+    {
+        "url": "The URL (first 500 characters)",
+        "content_type": "The content type sent",
+        "magic": "The file type from the first bytes (pe, zip, ...); empty for a real image",
+    },
 )
-
-signal(
-    "downloads.disguised",
-    "Disguised downloads",
-    (
-        "Downloads that hide their type: a decoy extension before an executable one "
-        "(invoice.pdf.exe), or a document extension (string downloads.decoy_extensions) on "
-        "executable content."
-    ),
-)
-
-signal(
-    "downloads.files",
-    "Downloaded files",
-    (
-        "Every download with name, URL, SHA-256, extension, detected type, and whether it was "
-        "executable, archive, disguised or started by a click."
-    ),
-)
-
-signal(
-    "downloads.mislabeled_image",
-    "Payload served as an image",
-    (
-        "Responses with an image/* content type whose bytes are an executable or archive "
-        "(string downloads.smuggled_content_types): a payload smuggled into the browser "
-        "cache."
-    ),
-)
-
-signal(
-    "downloads.mislabeled_images",
-    "Payloads served as images",
-    "URL, claimed type and real type of each payload served as an image (first 10).",
-)
-
-signal(
-    "downloads.archives",
-    "Archive listings",
-    (
-        "The member list of each downloaded zip or tar (names only, never extracted; first "
-        "200 members)."
-    ),
-)
-
-signal(
-    "downloads.archive_inner_risky",
-    "Executables inside archives",
-    ("Archive members with an executable extension (string downloads.executable_extensions)."),
-)
-
-signal(
-    "downloads.archive_encrypted",
-    "Password-protected archives",
-    "Downloaded zip archives with at least one encrypted member.",
-)
-
-signal(
-    "downloads.archive_password_on_page",
-    "Archive password printed on the page",
-    (
-        "A password-protected archive was downloaded and a page prints its password (string "
-        "downloads.archive_password_on_page). This hides the payload from mail and web "
-        "scanners."
-    ),
-)
-
-
-# --- detections ------------------------------------------------------------------------
-
-detection(
-    "automatic_download",
-    title="Risky file downloaded without a click",
-    severity="high",
-    score=45,
-    tags=["malware-download"],
-    attack=["T1189", "T1204.002"],
-    description=(
-        "The page started a download of an executable, archive or disguised file without the "
-        "analyst clicking anything."
-    ),
-    when=sig("downloads.unprompted_risky") > 0,
-    evidence=[
-        "downloads.files",
-    ],
-)
-
-detection(
-    "executable_download",
-    title="Executable file downloaded",
-    severity="high",
-    score=45,
-    tags=["malware-download"],
-    attack=["T1204.002"],
-    description="A downloaded file is an executable, script or disk image.",
-    when=sig("downloads.executable") > 0,
-    evidence=[
-        "downloads.files",
-    ],
-)
-
-detection(
-    "disguised_download",
-    title="Download disguised as another file type",
-    severity="high",
-    score=45,
-    tags=["malware-download", "masquerading"],
-    attack=["T1036.007", "T1036.008"],
-    description=(
-        "A downloaded file hides its type: a double extension (invoice.pdf.exe) or a document "
-        "extension on an executable."
-    ),
-    when=sig("downloads.disguised") > 0,
-    evidence=[
-        "downloads.files",
-    ],
-)
-
-detection(
-    "cache_smuggled_payload",
-    title="Payload smuggled as an image with a paste lure",
-    severity="high",
-    score=55,
-    tags=["filefix", "cache-smuggling", "malware-download"],
-    attack=["T1027.006", "T1204.004", "T1564"],
-    description=(
-        "A response served as an image is really an archive or executable, and the page gives "
-        "FileFix/ClickFix steps. The browser cached a payload with no download prompt, for a "
-        "later File Explorer or Run step to use."
-    ),
-    when=all_of(
-        sig("downloads.mislabeled_image") > 0,
-        any_of(
-            sig("clipboard.path_disguised") > 0,
-            sig("lure.run_dialog_instructions") > 0,
-            sig("clipboard.clickfix_like") > 0,
-        ),
-    ),
-    evidence=[
-        "downloads.mislabeled_images",
-        "clipboard.commands",
-        "lure.run_dialog_pages",
-    ],
-)
-
-detection(
-    "mislabeled_image_payload",
-    title="Payload served as an image",
-    severity="medium",
-    score=30,
-    tags=["cache-smuggling"],
-    attack=["T1027.006", "T1036"],
-    description=(
-        "A response served as an image is really an archive or executable (ZIP, RAR, 7z, PE, "
-        "CAB, OLE). Real CDNs that mislabel content serve another image type, not this."
-    ),
-    when=sig("downloads.mislabeled_image") > 0,
-    evidence=[
-        "downloads.mislabeled_images",
-        "final.url",
-    ],
-)
-
-detection(
-    "html_smuggling_binary_blob",
-    title="File built in the browser (HTML smuggling)",
-    severity="high",
-    score=60,
-    tags=["smuggling", "malware-download"],
-    attack=["T1027.006", "T1204.002"],
-    description=(
-        "The page built a large Blob/File and a risky file download happened in the same "
-        "session: HTML smuggling that assembles the payload in the browser."
-    ),
-    when=all_of(
-        sig("js.blob_constructs") > 0,
-        any_of(
-            sig("downloads.executable") > 0,
-            sig("downloads.disguised") > 0,
-            sig("downloads.archive") > 0,
-        ),
-    ),
-    evidence=[
-        "js.blob_details",
-        "downloads.files",
-    ],
-)
-
-detection(
-    "risky_archive_contents",
-    title="Executable inside a downloaded archive",
-    severity="high",
-    score=50,
-    tags=["malware-download"],
-    attack=["T1204.002", "T1105"],
-    description="A downloaded archive contains an executable, script or shortcut.",
-    when=sig("downloads.archive_inner_risky") > 0,
-    evidence=[
-        "downloads.archives",
-    ],
-)
-
-detection(
-    "password_protected_archive_with_password",
-    title="Password-protected archive with the password on the page",
-    severity="high",
-    score=50,
-    tags=["malware-download", "defense-evasion"],
-    attack=["T1027.013", "T1204.002"],
-    description=(
-        "A downloaded archive is encrypted and the page prints the password. This pattern "
-        "stops SEGs and browsers from scanning the contents."
-    ),
-    when=all_of(
-        sig("downloads.archive_encrypted") > 0,
-        sig("downloads.archive_password_on_page").is_true(),
-    ),
-    evidence=[
-        "downloads.archives",
-        "final.url",
-    ],
-)
+def _images_table(cap: Capture) -> list[Row]:
+    return memo(
+        cap,
+        "image_responses",
+        lambda: [{**i, "magic": i["magic"] or ""} for i in _image_responses(cap.data)],
+    )

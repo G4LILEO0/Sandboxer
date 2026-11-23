@@ -1,0 +1,10 @@
+title: Download disguised as another file type
+severity: high
+score: 45
+tags: malware-download, masquerading
+attack: T1036.007, T1036.008
+description: A downloaded file hides its type: a double extension (invoice.pdf.exe) or a
+  document extension on an executable.
+---
+disguised_downloads
+| project name, url, extension, inner_extension, magic, sha256

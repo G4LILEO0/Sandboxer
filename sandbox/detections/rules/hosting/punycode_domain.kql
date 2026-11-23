@@ -1,0 +1,11 @@
+title: Confusable punycode domain
+severity: medium
+score: 25
+tags: punycode
+attack: T1583.001, T1036
+description: A domain is an internationalised name that mixes Latin with another script or
+  uses only Latin-lookalike characters.
+---
+hosts
+| where confusable
+| project host, display

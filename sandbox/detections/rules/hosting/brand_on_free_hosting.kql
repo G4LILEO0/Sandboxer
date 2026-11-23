@@ -1,0 +1,15 @@
+title: Brand login page on free hosting
+severity: high
+score: 45
+tags: phishing, brand-impersonation, free-hosting
+attack: T1583.006, T1656
+description: A page on a free hosting or site-builder platform has a brand and login,
+  wallet, support or verification wording in its title. Example platforms: pages.dev,
+  typedream.app, web.app, blob.core.windows.net. These are the SEO and smishing landing
+  pages that send victims to a harvester.
+---
+// The brand page the capture imitates most has a brand login or wallet title and sits on
+// a free hosting tenant that is not allowlisted.
+brand_claim
+| where free_hosting_lure == true
+| project brand, confidence, url, evidence

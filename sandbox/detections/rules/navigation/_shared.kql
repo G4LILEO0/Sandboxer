@@ -1,0 +1,35 @@
+// Redirect hops between two different sites (sites of one brand count as one site).
+let cross_site_hops =
+    redirects
+    | where isnotempty(from_host) and isnotempty(to_host)
+        and not same_site(from_host, to_host);
+
+// A redirect from https: to plain http:.
+let https_downgrades =
+    redirects
+    | where from_url startswith "https:" and to_url startswith "http:";
+
+// A scripted bounce (JavaScript or a refresh, no click) to a decoy site (string
+// network.cloaking_decoy_hosts) or to a blank page: cloaking that shows scanners
+// something harmless.
+let scripted_bounces =
+    redirects
+    | where type in ("js", "meta_refresh", "header_refresh")
+    | where (isnotempty(to_host) and to_host matches list("network.cloaking_decoy_hosts"))
+        or to_url startswith "about:blank";
+
+// Hops that started on a trusted redirector (string network.trusted_redirectors): a
+// search engine, ad or mail-security link that sends the visitor on.
+let trusted_redirector_hops =
+    redirects
+    | where from_url matches list("network.trusted_redirectors");
+
+// Links to a Windows protocol handler (search-ms:, ms-search:, search:, WebDAV UNC paths)
+// on pages that are not allowlisted, one row per link, with the first page it came from.
+let handler_links =
+    protocol_links
+    | where not allowlisted(page_host)
+    | summarize page_url = take_any(page_url),
+                decoded = take_any(decoded),
+                target_hosts = take_any(target_hosts)
+        by target;

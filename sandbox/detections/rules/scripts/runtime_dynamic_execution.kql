@@ -1,0 +1,13 @@
+title: Packed code run at runtime
+severity: medium
+score: 25
+tags: obfuscation
+attack: T1027, T1059.007
+description: The page ran large, high-entropy strings through eval/Function/setTimeout at
+  runtime (packed code that only appears after decoding).
+---
+// Two or more strings run as code, the longest over 1 KB and the most random over 4.5
+// bits per character: a packed payload unpacking itself.
+code_exec
+| where runs >= 2 and max_len > 1024 and max_entropy > 4.5
+| project runs, max_len, max_entropy

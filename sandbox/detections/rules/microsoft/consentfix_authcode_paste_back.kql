@@ -14,4 +14,4 @@ description: A non-Microsoft page shows a real Entra authorize URL for a first-p
 // (see firstparty_loopback_authorize in _shared.kql) ...
 firstparty_loopback_authorize
 // ... on a page that asks the visitor to paste a URL back into a text box.
-| where signal("lure.paste_back_with_input") == true
+| where exists(paste_back_frames)

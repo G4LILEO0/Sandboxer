@@ -1,0 +1,12 @@
+title: Brand impersonation asking for credentials
+severity: high
+score: 45
+tags: phishing, brand-impersonation
+attack: T1656
+description: A page presents a known brand and asks for credentials, but is not hosted on
+  that brand's domains.
+---
+// A page imitates a brand with confidence 60 or more and asks for a secret.
+brand_claim
+| where confidence >= 60 and isnotempty(prompt)
+| project brand, confidence, prompt, url, evidence

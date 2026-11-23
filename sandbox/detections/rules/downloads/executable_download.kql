@@ -1,0 +1,9 @@
+title: Executable file downloaded
+severity: high
+score: 45
+tags: malware-download
+attack: T1204.002
+description: A downloaded file is an executable, script or disk image.
+---
+executable_downloads
+| project name, url, extension, magic, sha256

@@ -1,0 +1,38 @@
+// Every download, with what kind of file it is: an executable (by extension or by its
+// first bytes), an archive, or disguised (invoice.pdf.exe, or a "report.pdf" that is
+// really a program).
+let download_files =
+    downloads
+    | extend executable = extension in (list("downloads.executable_extensions"))
+                 or magic in (list("downloads.risky_content_types")),
+             archive = extension in (list("downloads.archive_extensions"))
+                 or magic in ("zip", "rar", "7z", "cab"),
+             disguised = (inner_extension in (list("downloads.decoy_extensions"))
+                     and extension in (list("downloads.executable_extensions")))
+                 or (extension in (list("downloads.decoy_extensions"))
+                     and magic in (list("downloads.risky_content_types")));
+
+let executable_downloads = download_files | where executable;
+let archive_downloads = download_files | where archive;
+let disguised_downloads = download_files | where disguised;
+
+// Executables, archives or disguised files the page started with no analyst click in
+// the 10 seconds before.
+let unprompted_risky_downloads =
+    download_files
+    | where not(prompted) and (executable or archive or disguised);
+
+// A program, archive or disk image served with an image content type (cache smuggling).
+let mislabeled_images =
+    image_responses
+    | where magic in (list("downloads.smuggled_content_types"));
+
+// Executables listed inside a downloaded archive.
+let risky_archive_entries =
+    archive_entries
+    | where extension in (list("downloads.executable_extensions"));
+
+// Password-protected entries inside a downloaded zip.
+let encrypted_archive_entries =
+    archive_entries
+    | where encrypted;

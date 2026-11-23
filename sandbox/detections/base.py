@@ -262,6 +262,20 @@ def _prompt_kinds(frame: dict[str, Any]) -> set[str]:
     return kinds
 
 
+_TEXT_INPUT_TYPES = ("text", "url", "search", "")
+
+
+def _has_text_box(frame: dict[str, Any]) -> bool:
+    if frame.get("loose_text_inputs", 0):
+        return True
+    return any(
+        fld.get("tag") == "textarea"
+        or (fld.get("tag", "input") == "input" and fld.get("type", "") in _TEXT_INPUT_TYPES)
+        for form in frame.get("forms", [])
+        for fld in form.get("fields", [])
+    )
+
+
 def _credential_prompt(frame: dict[str, Any]) -> str | None:
     """The strongest secret a frame asks for, or None."""
     kinds = _prompt_kinds(frame)

@@ -1,0 +1,14 @@
+title: Clipboard written without a click
+severity: medium
+score: 25
+tags: suspicious-clipboard
+attack: T1204.004, T1115
+description: The page wrote non-command text to the clipboard with no user gesture behind
+  it. Copy buttons, share links and coupon codes copy on a click. A write that nobody asked
+  for is how a lure pre-loads what it will tell the visitor to paste.
+---
+// Text the page put on the clipboard with no click behind it, when none of it is a
+// command (clipboard_command_tampering covers commands).
+no_gesture_writes
+| where not(exists(clipboard_commands))
+| project text = substring(text, 0, 300), api, frame_url

@@ -1,0 +1,10 @@
+title: Risky file downloaded without a click
+severity: high
+score: 45
+tags: malware-download
+attack: T1189, T1204.002
+description: The page started a download of an executable, archive or disguised file without
+  the analyst clicking anything.
+---
+unprompted_risky_downloads
+| project name, url, extension, magic, sha256

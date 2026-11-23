@@ -1,0 +1,49 @@
+// The session ended on an allowlisted site.
+let final_allowlisted =
+    capture
+    | where allowlisted(final_host);
+
+// The final page is a tenant of a free hosting or site-builder platform.
+let final_free_hosting =
+    capture
+    | extend platform = free_hosting(final_host)
+    | where isnotempty(platform);
+
+// The final page is served through an IPFS gateway (string web3.ipfs_url).
+let final_ipfs =
+    capture
+    | where final_url matches list("web3.ipfs_url");
+
+// The final page's domain and how old it is.
+let final_domain =
+    domains
+    | where final;
+
+// The brand the capture imitates most: the frame and brand with the highest imitation
+// confidence (the first one on a tie).
+let brand_claim =
+    brand_claims
+    | where confidence > 0
+    | summarize confidence = max(confidence),
+                brand = arg_max(confidence, brand),
+                prompt = arg_max(confidence, prompt),
+                free_hosting_lure = arg_max(confidence, free_hosting_lure),
+                url = arg_max(confidence, url),
+                evidence = arg_max(confidence, evidence)
+    | where isnotempty(brand);
+
+// That brand page asks for a secret (a password, card, code, phrase or sign-in name).
+let brand_secret_page =
+    brand_claim
+    | where isnotempty(prompt);
+
+// Lookalike hosts: homoglyph or typo variants of a brand domain, or a brand name inside a
+// foreign domain (Admin > Brands).
+let lookalike_hosts =
+    hosts
+    | where isnotempty(lookalike);
+
+// Hosts that dress up as a government site without being under a government suffix.
+let government_lookalike_hosts =
+    hosts
+    | where isnotempty(government_lookalike);

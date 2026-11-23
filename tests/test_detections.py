@@ -52,6 +52,28 @@ def _data(final_url, pages=(), **result) -> CaptureData:
     return CaptureData(result={**base, **result}, brands=BRANDS)
 
 
+def _rows(data: CaptureData, name: str) -> list[dict]:
+    """A table or shared named query over the capture, as the rules see it."""
+    from sandbox.detections.base import Capture
+    from sandbox.detections.kql.language import parse
+
+    env = catalog.detections()[0].env
+    rows, _ = parse(name, env).run(Capture(data), env)
+    return rows
+
+
+def _hit_rows(data: CaptureData, rule: str) -> list[dict]:
+    """The rows a rule returned (its evidence), or [] when it did not fire."""
+    for h in behaviour_hits(builtin_behaviour(), build_facts(data)):
+        if h["rule_name"] == rule:
+            return h["detail"]["facts"]["rows"]
+    return []
+
+
+def _traits(data: CaptureData) -> list[str]:
+    return [r["trait"] for r in _rows(data, "clipboard_commands")]
+
+
 def _hits(data: CaptureData) -> set[str]:
     return {h["rule_name"] for h in behaviour_hits(builtin_behaviour(), build_facts(data))}
 
@@ -361,8 +383,7 @@ def test_plain_command_with_run_dialog_lure_is_clickfix():
 )
 def test_homebrew_install_oneliner_is_not_clickfix(page, text):
     data = _data(page, clipboard=_clip(text))
-    facts = build_facts(data)
-    assert facts["clipboard"]["installer_cradles"] == 1
+    assert _traits(data) == ["installer"]
     hits = _hits(data)
     assert "clickfix_clipboard_command" not in hits
     assert "clipboard_command_write" in hits
@@ -374,7 +395,7 @@ def test_encoded_powershell_clipboard_is_clickfix_even_on_allowlisted():
     text = 'powershell -w hidden -c "irm https://astral.sh/uv/install.ps1 | iex"'
     data = _data("https://www.bigblog.com/", clipboard=_clip(text))
     data.allowlisted = {"bigblog.com"}
-    assert build_facts(data)["clipboard"]["clickfix_unambiguous"] == 1
+    assert _traits(data) == ["unambiguous"]
     assert "clickfix_clipboard_command" in _hits(data)
 
 
@@ -430,7 +451,7 @@ def test_installer_gating_bypasses_are_unambiguous_clickfix(text):
     """L2 §1.1 hardening: URLs dressed as an installer source are worse than a plain
     cradle; they count as unambiguous ClickFix."""
     data = _data("https://x.example/", clipboard=_clip(text))
-    assert build_facts(data)["clipboard"]["clickfix_unambiguous"] == 1
+    assert _traits(data) == ["unambiguous"]
     assert "clickfix_clipboard_command" in _hits(data)
 
 
@@ -452,7 +473,7 @@ _DECOY = "\U0001d5d6\U0001d75c\U0001d75a\u200b\U0001d5d6 \U0001d5e6\U0001d769"
 )
 def test_remote_msi_and_disguised_commands_are_clickfix(text):
     data = _data("https://x.example/", clipboard=_clip(text))
-    assert build_facts(data)["clipboard"]["clickfix_unambiguous"] == 1
+    assert _traits(data) == ["unambiguous"]
     assert "clickfix_clipboard_command" in _hits(data)
 
 
@@ -480,7 +501,7 @@ def test_installer_repo_prefix_is_case_insensitive():
 )
 def test_dns_cradle_clipboard_is_clickfix(text):
     data = _data("https://verify.example/", clipboard=_clip(text))
-    assert build_facts(data)["clipboard"]["clickfix_unambiguous"] == 1
+    assert _traits(data) == ["unambiguous"]
     assert "clickfix_clipboard_command" in _hits(data)
     from sandbox.detections.observe import extract_iocs
 
@@ -551,8 +572,7 @@ def test_google_sso_hops_are_same_site():
         {"from": "https://accounts.google.com/", "to": "https://www.google.de/", "type": "js"},
         {"from": "https://www.google.de/", "to": "https://doodles.google/", "type": "js"},
     ]
-    facts = build_facts(_data("https://doodles.google/", redirects=hops))
-    assert facts["redirects"]["cross_domain"] == 0
+    assert _rows(_data("https://doodles.google/", redirects=hops), "cross_site_hops") == []
 
 
 # --- scripts -----------------------------------------------------------------------------
@@ -947,7 +967,7 @@ def test_spl_redelivery_fee_card_harvest():
         forms=[CARD_FORM],
     )
     facts = build_facts(_data(url, [page]))
-    assert facts["lure"]["payment_pretext"] > 0
+    assert _rows(_data(url, [page]), "payment_pretext_frames")
     assert facts["brand"]["name"] == "Saudi Post (SPL)" and facts["brand"]["prompt"] == "payment"
     hits = _hits(_data(url, [page]))
     assert {"payment_card_harvest", "brand_impersonation", "lookalike_domain"} <= hits
@@ -1541,8 +1561,8 @@ def test_rpc_string_result_executed_fires_on_allowlisted():
     )  # noqa: E501
     web3 = build_facts(data)["web3"]
     assert web3["rpc_large_string_results"] == 1
-    assert web3["rpc_result_linked_exec"] is True
-    assert "_rpc_large_strings" not in web3
+    assert [r["executed"] for r in _rows(data, "rpc_strings")] == [True]
+    assert "_large_all" not in web3
     assert "etherhiding_payload_executed" in _hits(data)
 
 
@@ -1570,10 +1590,8 @@ def test_large_string_answer_overrides_dapp_ui_and_iframe_wording_does_not_count
     'connect wallet' inside a third-party iframe does not make the page a dApp."""
     dapp = _page("https://dapp.example/", "DEX", "Connect wallet")
     big = _rpc(result=_abi_string_result(_STAGE))
-    assert build_facts(_cap("https://dapp.example/", [dapp], har=big))["web3"]["etherhiding_rpc"]
-    assert not build_facts(_cap("https://dapp.example/", [dapp], har=_rpc()))["web3"][
-        "etherhiding_rpc"
-    ]  # noqa: E501
+    assert _rows(_cap("https://dapp.example/", [dapp], har=big), "etherhiding_reads")
+    assert not _rows(_cap("https://dapp.example/", [dapp], har=_rpc()), "etherhiding_reads")
     page = _page("https://blog.example/", "Blog", "Recipes")
     page["frames"].append(
         {
@@ -1584,7 +1602,7 @@ def test_large_string_answer_overrides_dapp_ui_and_iframe_wording_does_not_count
             "iframes": [],
         }
     )  # noqa: E501
-    assert build_facts(_cap("https://blog.example/", [page], har=_rpc()))["web3"]["etherhiding_rpc"]
+    assert _rows(_cap("https://blog.example/", [page], har=_rpc()), "etherhiding_reads")
 
 
 def test_web3_known_malicious_contract_fires():
@@ -1619,20 +1637,20 @@ def test_cloudflare_footer_is_not_fake_captcha():
         title="Shop",
         text="Performance & security by Cloudflare. Ray ID: 8a1b2c3d4e. Security check",
     )  # noqa: E501
-    lure = build_facts(_cap("https://shop.example/", [page]))["lure"]
-    assert lure["fake_captcha"] is False
-    assert lure["verification_wording"] is False
+    data = _cap("https://shop.example/", [page])
+    assert _rows(data, "fake_captcha_texts") == []
+    assert _rows(data, "verification_texts") == []
 
 
 def test_fake_captcha_needs_an_instruction_next_to_the_wording():
     wording = _page("https://v.example/", title="Verify you are human", text="Checking...")
-    assert build_facts(_cap("https://v.example/", [wording]))["lure"]["fake_captcha"] is False
+    assert _rows(_cap("https://v.example/", [wording]), "fake_captcha_texts") == []
     told = _page(
         "https://v.example/",
         title="Verify you are human",
         text="Press and hold the Windows key, then copy the verification code",
     )  # noqa: E501
-    assert build_facts(_cap("https://v.example/", [told]))["lure"]["fake_captcha"] is True
+    assert _rows(_cap("https://v.example/", [told]), "fake_captcha_texts")
 
 
 _TURNSTILE = [_req("https://challenges.cloudflare.com/turnstile/v0/api.js")]
@@ -1698,9 +1716,8 @@ _ACROBAT_DONE = (
 def test_fake_acrobat_update_with_open_instructions_fires_without_a_file():
     page = _page("https://zenithsgroupadvisor.com/", "Adobe Acrobat Reader DC", _ACROBAT_DONE)
     data = _cap("https://zenithsgroupadvisor.com/", [page])
-    facts = build_facts(data)
-    assert facts["lure"]["fake_update_pages"] == ["https://zenithsgroupadvisor.com/"]
-    assert facts["lure"]["open_download_pages"] == ["https://zenithsgroupadvisor.com/"]
+    assert _rows(data, "fake_update_pages") == [{"url": "https://zenithsgroupadvisor.com/"}]
+    assert _rows(data, "open_download_pages") == [{"url": "https://zenithsgroupadvisor.com/"}]
     assert "fake_browser_update" in _hits(data)
 
 
@@ -1724,7 +1741,7 @@ def test_open_instructions_without_update_lure_are_quiet():
     """Install docs that say 'run setup.exe' are not a fake update on their own."""
     page = _page("https://docs.example/", "Install", "Download and run setup.exe to install.")
     data = _cap("https://docs.example/", [page])
-    assert build_facts(data)["lure"]["open_download_pages"]
+    assert _rows(data, "open_download_pages")
     assert "fake_browser_update" not in _hits(data)
 
 
@@ -1767,7 +1784,7 @@ def test_crashfix_repair_lure_fires_and_vendor_crash_page_is_quiet():
 )
 def test_renamed_finger_cradle_is_unambiguous_clickfix(text):
     data = _data("https://x.example/", clipboard=_clip(text))
-    assert build_facts(data)["clipboard"]["clickfix_unambiguous"] == 1
+    assert _traits(data) == ["unambiguous"]
     assert "clickfix_clipboard_command" in _hits(data)
 
 
@@ -1848,9 +1865,9 @@ def test_socketio_polling_relay_fires():
     har = [_req(poll, "POST", post='42["recieveid","x"]\x1e42["send_to_browser",{}]')]
     data = _cap("https://m365-clone.example/", [brand], har=har)
     assert "credential_relay_websocket" in _hits(data)
-    ws = build_facts(data)["websocket"]
-    assert ws["socketio_polling"] == 1
-    assert ws["polling_connections"][0]["events"] == ["recieveid", "send_to_browser"]
+    polls = _rows(data, "foreign_socketio_polling")
+    assert len(polls) == 1
+    assert polls[0]["events"] == ["recieveid", "send_to_browser"]
 
 
 def test_socketio_polling_without_a_credential_prompt_or_to_allowlisted_is_quiet():
@@ -2078,8 +2095,8 @@ def test_runtime_dynamic_execution_ignores_runner_and_playwright_evals():
     Playwright's init-script wrappers go through the page's hooked eval."""
     url = "https://example.com/"
     assert "runtime_dynamic_execution" not in _hits(_cap(url, jsapi=_harness_exec()))
-    js = build_facts(_cap(url, jsapi=_harness_exec()))["js"]
-    assert (js["code_exec_count"], js["code_exec_max_len"]) == (13, 0)
+    (js,) = _rows(_cap(url, jsapi=_harness_exec()), "code_exec")
+    assert (js["runs"], js["max_len"]) == (13, 0)
     # A page that really evals a large packed string next to the harness noise still hits.
     packed = _cap(url, jsapi=_harness_exec(_PACKED, _PACKED[::-1]))
     assert "runtime_dynamic_execution" in _hits(packed)
@@ -2376,9 +2393,7 @@ def test_cache_smuggled_payload_fires_with_explorer_steps():
     url = "https://checker.example-host.com/"
     har = [_img_resp("https://checker.example-host.com/logo.jpg", b"PK\x03\x04")]
     data = _cap(url, [_page(url, text=_EXPLORER_STEPS)], har=har)
-    facts = build_facts(data)
-    assert facts["downloads"]["mislabeled_image"] == 1
-    assert facts["downloads"]["mislabeled_images"][0]["magic"] == "zip"
+    assert [r["magic"] for r in _rows(data, "mislabeled_images")] == ["zip"]
     assert {"cache_smuggled_payload", "mislabeled_image_payload"} <= _hits(data)
 
 
@@ -2398,7 +2413,7 @@ def test_real_images_and_typed_archives_are_not_mislabeled():
         _img_resp("https://cdn.example-host.com/c.zip", b"PK\x03\x04", "application/zip"),
     ]
     data = _cap(url, [_page(url, text=_EXPLORER_STEPS)], har=har)
-    assert build_facts(data)["downloads"]["mislabeled_image"] == 0
+    assert _rows(data, "mislabeled_images") == []
     assert not {"cache_smuggled_payload", "mislabeled_image_payload"} & _hits(data)
 
 
@@ -2416,14 +2431,14 @@ def test_command_blanked_after_write_counts_as_overwritten():
     check, so blank-then-refill evidence wiping was invisible."""
     url = "https://verify.example-host.com/"
     data = _cap(url, [_page(url)], clipboard=[_cwrite(_CMD_WRITE), _cwrite("", gesture=False)])
-    assert build_facts(data)["clipboard"]["overwritten_command"] == 1
+    assert len(_rows(data, "overwritten_commands")) == 1
     assert "clipboard_command_tampering" in _hits(data)
 
 
 def test_command_written_without_gesture_is_the_booster():
     url = "https://verify.example-host.com/"
     data = _cap(url, [_page(url)], clipboard=[_cwrite(_CMD_WRITE, gesture=False)])
-    assert build_facts(data)["clipboard"]["no_gesture_commands"] == 1
+    assert len(_rows(data, "no_gesture_writes")) == 1
     assert "clipboard_command_tampering" in _hits(data)
 
 
@@ -2432,8 +2447,8 @@ def test_docs_copy_button_and_gestureless_share_link_are_quiet():
     link = "https://docs.example-host.com/page"
     clips = [_cwrite(link, gesture=False), _cwrite(_CMD_WRITE), _cwrite(link), _cwrite("")]
     data = _cap(url, [_page(url)], clipboard=clips)
-    clip = build_facts(data)["clipboard"]
-    assert clip["no_gesture_commands"] == 0 and clip["overwritten_command"] == 0
+    assert [r for r in _rows(data, "clipboard_commands") if r["user_activation"] is False] == []
+    assert _rows(data, "overwritten_commands") == []
     assert "clipboard_command_tampering" not in _hits(data)
 
 
@@ -2459,10 +2474,10 @@ def test_search_ms_to_tunnel_with_invoice_pretext_fires():
         [_proto_page(url, "Your invoice is ready", meta=["0;url=" + _SEARCH_MS])],
         blocked=[{"url": _SEARCH_MS, "reason": "scheme 'search-ms' is not allowed"}],
     )
-    nav = build_facts(data)["navigation"]
-    assert nav["protocol_handler_attempts"] >= 1
-    assert nav["protocol_handler_hosts"] == ["files.trycloudflare.com"]
-    assert nav["protocol_handler_tunnel"] and nav["protocol_handler_masquerade"]
+    links = _rows(data, "handler_links")
+    assert links and {h for r in links for h in r["target_hosts"]} == {"files.trycloudflare.com"}
+    lure = _hit_rows(data, "protocol_handler_lure")
+    assert lure and lure[0]["tunnel"] and lure[0]["masquerade"]
     assert {"protocol_handler_lure", "protocol_handler_attempt"} <= _hits(data)
 
 
@@ -2486,7 +2501,7 @@ def test_search_label_and_allowlisted_help_page_are_quiet():
         ],
         allowlisted={"bigblog.com"},
     )
-    assert build_facts(data)["navigation"]["protocol_handler_attempts"] == 0
+    assert _rows(data, "handler_links") == []
     assert not {"protocol_handler_lure", "protocol_handler_attempt"} & _hits(data)
 
 
@@ -2538,9 +2553,7 @@ def test_apps_script_password_page_fires_despite_google_allowlist():
         [_page(_EXEC, "Document"), _page(frame, "Sign in", forms=[PASSWORD_FORM])],
         allowlisted={"google.com", "googleusercontent.com"},
     )
-    forms = build_facts(data)["forms"]
-    assert forms["apps_script_pages"] == 2
-    assert forms["apps_script_credential_pages"] == [frame]
+    assert _hit_rows(data, "apps_script_credential_page") == [{"url": frame}]
     assert "apps_script_credential_page" in _hits(data)
 
 
@@ -2551,7 +2564,6 @@ def test_apps_script_survey_and_google_login_are_quiet():
         [_page("https://accounts.google.com/signin", "Sign in", forms=[PASSWORD_FORM])],
     )
     assert "apps_script_credential_page" not in _hits(survey)
-    assert build_facts(login)["forms"]["apps_script_pages"] == 0
     assert "apps_script_credential_page" not in _hits(login)
 
 
@@ -2562,7 +2574,7 @@ def test_explorer_api_read_on_plain_site_fires_and_dapp_is_quiet():
     url = "https://blog.example-host.com/"
     har = [_req("https://api.ethplorer.io/getAddressHistory/0xabc?apiKey=freekey")]
     data = _cap(url, [_page(url, "Recipes", text="Weekly recipes")], har=har)
-    assert build_facts(data)["web3"]["explorer_api_hosts"] == ["api.ethplorer.io"]
+    assert _hit_rows(data, "explorer_api_dead_drop") == [{"host": "api.ethplorer.io"}]
     assert "explorer_api_dead_drop" in _hits(data)
     dapp = _cap(url, [_page(url, "Portfolio", text="Connect wallet to see balances")], har=har)
     assert "explorer_api_dead_drop" not in _hits(dapp)
@@ -2604,7 +2616,7 @@ def _osu(text, fullscreen=1, keys=True, title="Windows Update"):
 
 def test_fake_os_update_overlay_fires():
     data = _osu(_OS_UPDATE)
-    assert build_facts(data)["lure"]["fake_os_update_pages"]
+    assert _rows(data, "fake_os_update_pages")
     assert "fake_os_update_overlay" in _hits(data)
 
 
@@ -2670,11 +2682,10 @@ def test_fake_window_over_proxied_login_fires_before_the_login_loads():
     url = "https://kit.example-host.org/T7L1Q/x"
     page = _page(url, "Loading content", "Complete verification in the window")
     data = _cap(url, [page], har=_UV_ASSETS, dom_html=[{"url": url, "html": _UV_WINDOW_HTML}])
-    facts = build_facts(data)
     window = _hit(data, "fake_browser_window_frame")["detail"]["facts"]["rows"][0]
     assert window["brand"] == "Microsoft"
     assert window["shown_url"].startswith("onedrive.office.com/")
-    assert facts["network"]["web_proxy_kits"] == ["ultraviolet"]
+    assert {r["kit"] for r in _rows(data, "web_proxy_kits")} == {"ultraviolet"}
     hits = _hits(data)
     assert {"fake_browser_window_frame", "web_proxy_signin_relay"} <= hits
     # No password field ever loaded, so the older BitB rule stays quiet.
@@ -2710,7 +2721,7 @@ def test_web_proxy_without_a_signin_is_only_a_fact():
     # An "unblocker" site runs the same proxy for games and video, with no sign-in.
     url = "https://unblock.example-host.org/"
     data = _cap(url, [_page(url, "Unblocked games")], har=_UV_ASSETS)
-    assert build_facts(data)["network"]["web_proxy_kit_count"] == 1
+    assert {r["kit"] for r in _rows(data, "web_proxy_kits")} == {"ultraviolet"}
     assert "web_proxy_signin_relay" not in _hits(data)
     # With a credential prompt on the proxied page, it is the relay.
     login = _page(url, "Sign in to Microsoft", "Outlook account", forms=[PASSWORD_FORM])
@@ -2718,7 +2729,7 @@ def test_web_proxy_without_a_signin_is_only_a_fact():
     assert "web_proxy_signin_relay" in _hits(data)
     # Allowlisted proxy hosts are not counted.
     vouched = _cap(url, [login], har=_UV_ASSETS, allowlisted={"example-host.org"})
-    assert build_facts(vouched)["network"]["web_proxy_kit_count"] == 0
+    assert _rows(vouched, "web_proxy_kits") == []
 
 
 # --- JSFuck symbol-set YARA (L2-NEW-2) -----------------------------------------------
@@ -2780,7 +2791,7 @@ def test_fake_captcha_paste_steps_fire_when_hidden_after_a_long_page():
     url = "https://site.example/"
     data = _winx_cap(url, f"<html><body>{_FILLER}{_WINX_OVERLAY}</body></html>")
     assert "fake_captcha_paste_instructions" in _hits(data)
-    assert build_facts(data)["clipboard"]["writes"] == 0  # no click, no clipboard write
+    assert _rows(data, "clipboard_writes") == []  # no click, no clipboard write
 
 
 def test_real_challenge_and_helpdesk_paste_steps_are_not_fake_captcha():
@@ -2888,7 +2899,7 @@ def test_dynamic_brand_favicon_login_fires():
     har = [_favicon("mail-provider.example"), _req("https://api.ipify.org/?format=json")]
     data = _cap(url, [page], har=har)
     assert "dynamic_brand_favicon_login" in _hits(data)
-    assert build_facts(data)["brand"]["favicon_lookups"] == ["mail-provider.example"]
+    assert {r["target"] for r in _rows(data, "favicon_lookups")} == {"mail-provider.example"}
 
 
 def test_favicon_grid_and_plain_login_are_not_dynamic_brand():
@@ -2924,9 +2935,8 @@ def test_local_port_scan_fires_on_remote_access_probe():
     blocked, requests = _local_scan(_TMX_PORTS, "https://support-desk.example/js/p.js")
     data = _cap(url, blocked=blocked, requests=requests)
     assert "local_port_scan" in _hits(data)
-    probe = build_facts(data)["network"]["local_probe"]
-    named = {"3389/rdp", "5900/vnc", "5938/teamviewer", "7070/anydesk"}
-    assert named <= set(probe["remote_access"])
+    (probe,) = _hit_rows(data, "local_port_scan")
+    assert {3389, 5900, 5938, 7070} <= set(probe["ports"]) and probe["remote_access"] >= 4
     assert probe["channels"] == ["websocket"]
     assert probe["scripts"] == ["https://support-desk.example/js/p.js"]
     # Two remote-access ports are enough (SSH + RDP over fetch/img to localhost by name).
@@ -2963,7 +2973,12 @@ def test_local_port_scan_quiet_on_fraud_vendor_dev_and_apps():
         blocked, requests = _local_scan(_TMX_PORTS, script)
         data = _cap(url, blocked=blocked, requests=requests)
         assert "local_port_scan" not in _hits(data)
-        assert build_facts(data)["network"]["local_probe"]["fraud_vendor"] == "threatmetrix"
+        vendor = _rows(
+            data,
+            "local_probes | summarize s = make_set(script) | project v = first_name_matching("
+            's, list("network.fraud_vendor_scripts"))',
+        )
+        assert vendor == [{"v": "threatmetrix"}]
     # Blocked WebSockets carry no initiator: the profiler loaded on the page explains them.
     blocked, _ = _local_scan(_TMX_PORTS, None)
     tags = [{"url": "https://h.online-metrix.net/fp/tags.js?org_id=abc&session_id=1"}]
@@ -3027,15 +3042,14 @@ def test_local_port_scan_over_webrtc_turn():
     ]
     data = _cap(url, webrtc=rtc)
     assert "local_port_scan" in _hits(data)
-    probe = build_facts(data)["network"]["local_probe"]
-    assert probe["ports"] == [3389, 5900] and probe["channels"] == ["webrtc"]
+    (probe,) = _hit_rows(data, "local_port_scan")
+    assert sorted(probe["ports"]) == [3389, 5900] and probe["channels"] == ["webrtc"]
     # Ordinary calls: public STUN/TURN servers only.
     public = [{"urls": ["stun:stun.l.google.com:19302", "turns:turn.example.net:443"]}]
     assert "local_port_scan" not in _hits(_cap(url, webrtc=public))
     # LAN TURN servers on the default port count by host.
     lan = [{"urls": [f"turn:10.0.0.{i}" for i in range(1, 11)]}]
-    assert build_facts(_cap(url, webrtc=lan))["network"]["local_probe"]["ports"] == [3478]
-    assert "local_port_scan" in _hits(_cap(url, webrtc=lan))
+    assert [p["ports"] for p in _hit_rows(_cap(url, webrtc=lan), "local_port_scan")] == [[3478]]
 
 
 # --- clipboard writes the command patterns miss ---------------------------------------
@@ -3067,9 +3081,7 @@ def _clip_hits(url, text, writes, allowlisted=()):
 
 def test_unrecognised_payload_with_run_steps_is_the_paste_lure():
     url = "https://verify.example-host.com/"
-    assert (
-        build_facts(_cap(url, clipboard=[_cwrite(_ODD_PAYLOAD)]))["clipboard"]["command_like"] == 0
-    )
+    assert _rows(_cap(url, clipboard=[_cwrite(_ODD_PAYLOAD)]), "clipboard_commands") == []
     assert _clip_hits(url, _RUN_STEPS, [_cwrite(_ODD_PAYLOAD)]) == {
         "clipboard_write_with_paste_lure"
     }
@@ -3136,11 +3148,9 @@ def _tycoon(captcha=True, invisible=True, devtools=True, turnstile=False):
 
 def test_tycoon2fa_kit_fires_on_canvas_captcha_invisible_script_and_ms_clone():
     data = _tycoon()
-    facts = build_facts(data)
-    assert facts["capture"]["custom_captcha"] == 1
-    assert facts["capture"]["gated"] is True
-    assert facts["scripts"]["invisible_unicode"] == 1
-    assert facts["scripts"]["invisible_unicode_details"][0]["chars"] == ["U+3164", "U+FFA0"]
+    assert len(_rows(data, "custom_captcha_pages")) == 1
+    assert _rows(data, "captcha_gates")
+    assert len(_rows(data, "invisible_code")) == 1
     hits = _hits(data)
     assert {"tycoon2fa_kit", "invisible_unicode_obfuscation"} <= hits
     assert "captcha_gated_credential_page" in hits
@@ -3176,16 +3186,11 @@ def test_custom_captcha_needs_canvas_wording_and_input_together():
         "</body>", '<script src="https://www.google.com/recaptcha/api.js"></script></body>'
     )
     for html in (far, provider, "<canvas></canvas><p>Verify you are human</p>"):
-        assert (
-            build_facts(_cap(url, dom_html=[{"url": url, "html": html}]))["capture"][
-                "custom_captcha"
-            ]
-            == 0
-        )
+        assert _rows(_cap(url, dom_html=[{"url": url, "html": html}]), "custom_captcha_pages") == []
     ok = _cap(
         url, dom_html=[{"url": url, "html": _CANVAS_CAPTCHA_HTML}], allowlisted={"shop.example"}
     )
-    assert build_facts(ok)["capture"]["custom_captcha"] == 0
+    assert _rows(ok, "custom_captcha_pages") == []
 
 
 def test_invisible_unicode_ignores_emoji_joiners_and_single_char_padding():
@@ -3194,7 +3199,7 @@ def test_invisible_unicode_ignores_emoji_joiners_and_single_char_padding():
     padding = "var pad='" + "​" * 300 + "';"
     data = _cap(url)
     data.scripts = {"b" * 64: emoji, "c" * 64: padding}
-    assert build_facts(data)["scripts"]["invisible_unicode"] == 0
+    assert _rows(data, "invisible_code") == []
     assert "invisible_unicode_obfuscation" not in _hits(data)
     inline = _cap(url, dom_html=[{"url": url, "html": f"<script>{_INVISIBLE_SCRIPT}</script>"}])
     assert "invisible_unicode_obfuscation" in _hits(inline)
@@ -3214,11 +3219,11 @@ def test_debugger_trap_counts_for_devtools_blocking(code):
     page = _page(url, "Sign in to your account", text="Microsoft", forms=[PASSWORD_FORM])
     data = _cap(url, [page])
     data.scripts = {"d" * 64: code}
-    assert build_facts(data)["evasion"]["debugger_trap"] == 1
+    assert len(_rows(data, "debugger_traps")) == 1
     assert "devtools_blocking" in _hits(data)
 
 
 def test_lone_debugger_statement_is_not_a_trap():
     data = _cap("https://app.example/")
     data.scripts = {"e" * 64: "function f(x){ debugger; return x + 1 }"}
-    assert build_facts(data)["evasion"]["debugger_trap"] == 0
+    assert _rows(data, "debugger_traps") == []
