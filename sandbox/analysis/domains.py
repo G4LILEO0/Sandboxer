@@ -183,12 +183,17 @@ def brand_owner(host: str, brands: list[BrandRef]) -> BrandRef | None:
 
 
 FREE_HOSTING = S.bind(globals(), "FREE_HOSTING", "hosting.free_hosting")
+_REGIONAL_STORAGE = S.bind(globals(), "_REGIONAL_STORAGE", "hosting.regional_storage_hosting")
 
 
 def free_hosting(host: str) -> str | None:
-    """The free hosting platform ``host`` is on, if any."""
+    """The free hosting platform ``host`` is on, if any. Regional storage endpoints
+    (``kit.s3.us-east-1.amazonaws.com``) report their regional platform."""
     host = host.lower().rstrip(".")
-    return next((p for p in FREE_HOSTING if host == p or host.endswith("." + p)), None)
+    platform = next((p for p in FREE_HOSTING if host == p or host.endswith("." + p)), None)
+    if platform is None and (m := _REGIONAL_STORAGE.search(host)):
+        platform = m.group(1)
+    return platform
 
 
 def site(host: str) -> str:

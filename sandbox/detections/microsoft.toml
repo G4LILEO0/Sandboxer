@@ -147,7 +147,7 @@ title = 'Enter-the-code wording'
 description = 'Enter-the-code wording on a device-code phishing page.'
 type = "regex"
 flags = 'i'
-pattern = '\b(enter|use|type|input|copy)\s+(this|the|your|following)?\s*(one-?time\s+)?code\b|\b(device|authentication|sign-?in|verification)\s+code\b'
+pattern = '\b(enter|use|type|input|copy)\s+(this|the|your|following)?\s*(one-?time\s+|access\s+)?code\b|\b(device|authentication|sign-?in|verification|access)\s+code\b'
 
 [device_code_token]
 title = 'Displayed device code'
