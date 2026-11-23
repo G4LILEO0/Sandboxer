@@ -40,7 +40,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-DEFAULTS_DIR = Path(__file__).with_name("defaults")
+DEFAULTS_DIR = Path(__file__).parent
 TYPES = ("regex", "regex_list", "words", "numbers", "table")
 VALUE_TYPES = ("str", "int", "str_list", "int_list", "regex")
 FLAG_BITS = {"i": re.I, "s": re.S, "m": re.M, "x": re.X}

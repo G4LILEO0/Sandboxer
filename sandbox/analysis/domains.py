@@ -12,7 +12,7 @@ import httpx
 import idna
 import tldextract
 
-from sandbox import detection as S
+from sandbox.detections import strings as S
 
 log = logging.getLogger(__name__)
 

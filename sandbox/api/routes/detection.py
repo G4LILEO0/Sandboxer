@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from sandbox import detection
+from sandbox.detections import strings as detection
 from sandbox.api.auth import Engineer
 from sandbox.api.deps import Db
 from sandbox.api.routes.rules import RulesReader

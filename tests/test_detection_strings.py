@@ -1,11 +1,12 @@
-"""Detection strings (sandbox.detection): shipped TOML defaults, bound globals, overrides."""
+"""Detection strings (sandbox.detections.strings): shipped TOML defaults, bound globals, overrides."""
 
 import re
 
 import pytest
 
-from sandbox import detection
-from sandbox.analysis import domains, facts
+from sandbox.analysis import domains
+from sandbox.detections import strings as detection
+from sandbox.detections import clickfix, lures, network
 
 
 @pytest.fixture(autouse=True)
@@ -30,9 +31,9 @@ def test_every_entry_is_used_by_the_code():
 
 
 def test_bound_globals_follow_the_active_value():
-    namespaces = {"facts": vars(facts), "domains": vars(domains)}
     for b in detection._state.bindings:
-        assert any(b.namespace is ns for ns in namespaces.values())
+        module = b.namespace["__name__"]
+        assert module.startswith("sandbox.detections.") or b.namespace is vars(domains), module
         value = detection.get(b.key)
         expected = b.convert(value) if b.convert else value
         assert b.namespace[b.name] == expected, b.name
@@ -40,7 +41,7 @@ def test_bound_globals_follow_the_active_value():
 
 def test_threatmetrix_host_pattern_matches():
     """The shipped host pattern used to carry a stray backspace and never matched."""
-    assert facts._fraud_vendor(["https://h.online-metrix.net/abc.js"]) == "threatmetrix"
+    assert network._fraud_vendor(["https://h.online-metrix.net/abc.js"]) == "threatmetrix"
 
 
 def test_override_changes_detection_and_revert_restores_it():
@@ -61,7 +62,7 @@ def test_override_changes_detection_and_revert_restores_it():
 
 def test_regex_override_reaches_clickfix_traits():
     text = "please run zzfetch https://x.example/a | zzrun"
-    assert facts._clickfix_traits(text) is None
+    assert clickfix._clickfix_traits(text) is None
     entry = detection.entries()["clickfix.unambiguous_traits"]
     items = [*entry.default["items"], {"pattern": r"\bzzfetch\b.*\|\s*zzrun", "flags": "i"}]
     assert (
@@ -70,7 +71,7 @@ def test_regex_override_reaches_clickfix_traits():
         )
         == []
     )
-    assert facts._clickfix_traits(text) == "unambiguous"
+    assert clickfix._clickfix_traits(text) == "unambiguous"
 
 
 def test_a_broken_override_is_skipped_and_the_default_kept():
@@ -83,7 +84,7 @@ def test_a_broken_override_is_skipped_and_the_default_kept():
     assert len(problems) == 2
     entry = detection.entries()["clickfix.run_dialog"]
     assert entry.error and entry.compiled.pattern == entry.default["pattern"]
-    assert facts._RUN_DIALOG.search("Press Win + R")
+    assert lures._RUN_DIALOG.search("Press Win + R")
 
 
 @pytest.mark.parametrize(

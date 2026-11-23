@@ -12,7 +12,8 @@ import pytest
 
 from sandbox.analysis.domains import BrandRef, lookalike, registrable, skeleton
 from sandbox.analysis.engine import behaviour_hits, evaluate
-from sandbox.analysis.facts import CaptureData, build_facts, extract_iocs
+from sandbox.detections.base import CaptureData
+from sandbox.detections.observe import build_facts, extract_iocs
 from sandbox.analysis.local import builtin_behaviour, evaluate_dir
 from sandbox.analysis.scoring import score
 from sandbox.rules import defaults
@@ -406,7 +407,7 @@ def test_registrable_and_skeleton():
 
 
 def _capd(final_url, **result):
-    from sandbox.analysis.facts import CaptureData
+    from sandbox.detections.base import CaptureData
 
     base = {
         "url": final_url,
@@ -487,7 +488,7 @@ def test_clipboard_ioc_extraction_from_command():
 
 
 def test_magic_typing_detects_iso_in_download_head():
-    from sandbox.analysis.facts import _magic_type
+    from sandbox.detections.base import _magic_type
 
     head = b"\x00" * 0x8001 + b"CD001"
     assert _magic_type(head) == "iso"
