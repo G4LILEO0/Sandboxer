@@ -96,6 +96,13 @@ values = [
   'flazio.online',
 ]
 
+[regional_storage_hosting]
+title = 'Regional cloud storage endpoints'
+description = 'Bucket endpoints with a region in the name (kit.s3.us-east-1.amazonaws.com, kit.s3-website-eu-west-1.amazonaws.com, kit.s3.dualstack.us-east-1.amazonaws.com). They are free hosting like s3.amazonaws.com, but there are too many regions to list. Capture group 1 is the platform; the label before it is the tenant. Without this, every bucket counts as amazonaws.com, which is on the Tranco allowlist.'
+type = "regex"
+flags = ''
+pattern = '(?:^|\.)(s3(?:[.-](?:website|dualstack|accesspoint|fips|external-\d|[a-z]{2}(?:-gov|-iso[a-z]?)?-[a-z]+-\d))*\.amazonaws\.com(?:\.cn)?)$'
+
 [abused_cctlds]
 title = 'Abused country-code TLDs'
 description = 'Free or cheap ccTLDs heavily used for abuse; "brand.*" never covers these.'
