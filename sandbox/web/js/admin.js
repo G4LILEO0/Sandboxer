@@ -1,5 +1,5 @@
 // admin.js — admin console: feeds (FED-1..6), rules and rule testing (FED-7..10, FED-13),
-// detection strings (sandbox/detection),
+// detection strings (sandbox/detections),
 // bundles and scoring (FED-9, ANA-7), suppressions/allowlist (FED-10, FED-11), brands
 // (ANA-5), API clients (API-2/3), runtime config (ADM-4) and the audit log (ADM-2).
 
@@ -86,7 +86,8 @@ async function rules() {
         ? btn('Disable', async () => { const reason = prompt(`Why disable ${r.name}? (audited)`); if (reason) act(Api.post(`/v1/rules/${r.id}/disable`, { reason }), 'Disabled; a new bundle is building', rules); })
         : btn('Enable', () => act(Api.post(`/v1/rules/${r.id}/enable`), 'Enabled; a new bundle is building', rules), r.error ? 'hidden' : '');
       return el('tr', {},
-        el('td', {}, el('strong', { className: 'monospace small', textContent: r.name }), el('div', { className: 'small muted', textContent: r.description || '' }),
+        el('td', {}, r.title ? el('strong', { textContent: r.title }) : null,
+          el(r.title ? 'div' : 'strong', { className: 'monospace small', textContent: r.name }), el('div', { className: 'small muted', textContent: r.description || '' }),
           r.error ? el('div', { className: 'error-message small', textContent: r.error.slice(0, 200) }) : null),
         el('td', { textContent: r.engine }), el('td', { className: 'small', textContent: `${r.source} ${r.version}${r.modified_by ? ' · edited' : ''}`, title: r.modified_by ? `Built-in rule edited by ${r.modified_by}` : '' }),
         el('td', {}, el('span', { className: `sev sev-${r.severity}`, textContent: r.severity })),
@@ -103,6 +104,7 @@ async function viewRule(id) {
   const res = await Api.get(`/v1/rules/${id}`);
   if (!res.ok) { Api.toast(res.error, true); return; }
   const r = res.data;
+  if (r.detection) { viewDetection(r); return; }
   const actions = el('div', {},
     r.editable && r.engine !== 'suricata' ? btn('Edit', () => ruleEditor(r)) : null,
     r.modified_by ? btn('Revert to built-in', () => { if (confirm(`Put ${r.name} back to the version that ships with Sandboxer?`)) act(Api.post(`/v1/rules/${r.id}/revert`), 'Reverted; a new bundle is building', () => viewRule(r.id)); }) : null,
@@ -118,13 +120,66 @@ async function viewRule(id) {
       ...r.overrides.map((o) => el('div', { className: 'small', textContent: `${o.at} ${o.by}: ${o.reason} ${o.active ? '(active)' : '(lifted)'}` }))) : null);
 }
 
+// A behaviour rule is a detection in code (sandbox/detections): one model for every
+// rule. Admin shows it as sentences with every signal it reads; it can be disabled,
+// tested, and its severity and tags changed, but its logic changes in code.
+function viewDetection(r) {
+  const d = r.detection;
+  const actions = el('div', {},
+    btn('Test against recent analyses', () => testDetection(r)),
+    btn('Edit severity and tags', () => detectionMetaEditor(r)),
+    btn('Back', rules));
+  fill(
+    el('div', { className: 'row' }, el('h2', { className: 'section-title', textContent: d.title }), actions),
+    el('p', { className: 'small' }, el('span', { className: 'monospace', textContent: d.name }),
+      ` · severity ${r.severity} · score ${d.score} · tags ${r.tags.join(', ') || '—'} · ATT&CK ${r.attack_ids.join(', ') || '—'}`),
+    el('p', { textContent: d.description }),
+    el('pre', { className: 'small', textContent: d.rule }),
+    el('p', { className: 'small muted' }, 'Written in ', el('span', { className: 'monospace', textContent: d.source }),
+      '. To change what it checks, edit it there (docs/detection-rules.md); every detection uses the same model.'),
+    r.error ? el('p', { className: 'error-message small', textContent: r.error }) : null,
+    el('h3', { className: 'section-title', textContent: `Signals it reads (${d.signals.length})` }),
+    table(['Signal', 'How it is computed', 'Computed in'], d.signals.map((s) => el('tr', {},
+      el('td', {}, el('strong', { className: 'small', textContent: s.title }), el('div', { className: 'monospace small muted', textContent: s.path }),
+        s.evidence_only ? el('div', { className: 'small muted', textContent: 'evidence only, not tested' }) : null),
+      el('td', { className: 'small', textContent: s.description }),
+      el('td', { className: 'monospace small', textContent: s.source })))),
+    d.strings.length ? el('p', { className: 'small muted', textContent: `Detection strings used in this area (Admin > Detection strings): ${d.strings.join(', ')}` }) : null,
+    r.overrides.length ? el('div', {}, el('h3', { className: 'section-title', textContent: 'Local overrides' }),
+      ...r.overrides.map((o) => el('div', { className: 'small', textContent: `${o.at} ${o.by}: ${o.reason} ${o.active ? '(active)' : '(lifted)'}` }))) : null,
+    el('div', { id: 'test-out' }));
+}
+
+function detectionMetaEditor(r) {
+  const form = el('form', {},
+    el('div', { className: 'filters' },
+      el('select', { name: 'severity' }, ['info', 'low', 'medium', 'high', 'critical'].map((v) => el('option', { value: v, textContent: v, selected: v === r.severity }))),
+      el('input', { name: 'tags', placeholder: 'tags, comma separated', value: r.tags.join(', ') }),
+      el('input', { name: 'attack_ids', placeholder: 'T1566, …', value: r.attack_ids.join(', ') })),
+    el('p', { className: 'small muted', textContent: 'The score this detection adds is its weight (Admin > Scoring).' }),
+    el('div', { className: 'footer-actions' }, el('button', { className: 'copy-btn', textContent: 'Save' }), btn('Back', () => viewRule(r.id))));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(form));
+    const split = (x) => x.split(',').map((v) => v.trim()).filter(Boolean);
+    const saved = await act(Api.patch(`/v1/rules/${r.id}`, { severity: f.severity, tags: split(f.tags), attack_ids: split(f.attack_ids) }), 'Saved; a new bundle is building');
+    if (saved) viewRule(r.id);
+  });
+  panel.replaceChildren(el('h2', { className: 'section-title', textContent: `Edit ${r.detection.title}` }), form);
+}
+
+function testDetection(r) {
+  const form = el('form', {}, el('input', { type: 'hidden', name: 'body', value: r.name }), el('input', { type: 'hidden', name: 'severity', value: r.severity }));
+  return testRule(form, r);
+}
+
 function ruleEditor(existing) {
   const r = existing && existing.id ? existing : null;
-  const sample = JSON.stringify({ condition: { all: [{ fact: 'forms.password_forms', op: 'gt', value: 0 }, { fact: 'domains.youngest_age_days', op: 'lt', value: 7 }] }, evidence: ['forms.cross_domain_credential_forms', 'domains.young'] }, null, 2);
+  const sample = 'rule my_rule : phishing\n{\n  meta:\n    description = "What this rule finds"\n  strings:\n    $a = "example"\n  condition:\n    $a\n}';
   const severity = r ? r.severity : 'medium';
   const form = el('form', {},
     el('div', { className: 'filters' },
-      el('select', { name: 'engine', disabled: !!r }, ['behaviour', 'yara'].map((v) => el('option', { value: v, textContent: v, selected: r && r.engine === v }))),
+      el('select', { name: 'engine', disabled: !!r }, ['yara'].map((v) => el('option', { value: v, textContent: v, selected: r && r.engine === v }))),
       el('input', { name: 'name', placeholder: 'rule_name', pattern: '[A-Za-z0-9_\\-.:]+', required: true, value: r ? r.name : '', disabled: !!r }),
       el('select', { name: 'severity' }, ['info', 'low', 'medium', 'high', 'critical'].map((v) => el('option', { value: v, textContent: v, selected: v === severity }))),
       el('input', { name: 'tags', placeholder: 'tags, comma separated', value: r ? r.tags.join(', ') : '' }),
@@ -133,7 +188,7 @@ function ruleEditor(existing) {
     el('textarea', { name: 'body', className: 'code-input', value: r ? r.body : sample }),
     el('p', { className: 'small muted', textContent: r
       ? (r.source === 'builtin' ? 'You are editing a built-in rule. Sandboxer updates keep the edit until you click "Revert to built-in". Test the rule before you save it. When you save the rule, Sandboxer builds a new bundle.' : 'Test the rule before you save it. When you save the rule, Sandboxer builds a new bundle.')
-      : 'Behaviour rules read the facts stored with each analysis (see a report\'s "facts" in its JSON export). Test a rule before you save it. A new rule is disabled when you save it.' }),
+      : 'A local rule is a YARA rule over captured content. Behaviour detections are written in code (sandbox/detections, see docs/detection-rules.md). Test a rule before you save it. A new rule is disabled when you save it.' }),
     el('div', { className: 'footer-actions' },
       btn('Test against recent analyses', () => testRule(form, r)),
       el('button', { className: 'copy-btn', textContent: r ? 'Save' : 'Save as disabled' }), btn('Back', r ? () => viewRule(r.id) : rules)),
@@ -172,8 +227,8 @@ async function testRule(form, existing) {
 }
 
 // --- detection strings ---------------------------------------------------------------
-// The keyword patterns, host lists, file types and points the fact builders match
-// captures against (sandbox/detection). An edit is validated on save, audited, and used
+// The keyword patterns, host lists, file types and points the signals match
+// captures against (sandbox/detections). An edit is validated on save, audited, and used
 // by the next analysis or re-analysis; "Revert to shipped" restores the default.
 const stringFilter = { q: '', edited: false };
 const TYPE_LABEL = { regex: 'pattern', regex_list: 'pattern list', words: 'list', numbers: 'numbers', table: 'table' };
@@ -212,7 +267,7 @@ async function strings() {
   editedOnly.addEventListener('change', () => { stringFilter.edited = editedOnly.checked; render(); });
   fill(
     el('div', { className: 'row' }, el('h2', { className: 'section-title', textContent: 'Detection strings' }), btn('Change history', stringHistory)),
-    el('p', { className: 'small muted', textContent: `The words, patterns and lists behind the behaviour facts (ClickFix commands, lure wording, Microsoft sign-in markers, free hosting, collectors…). Edits are checked before they are saved, recorded in the audit log, and used from the next analysis; re-analyse a case to apply them to it. ${res.data.overridden} edited · version ${res.data.version}.` }),
+    el('p', { className: 'small muted', textContent: `The words, patterns and lists behind the detection signals (ClickFix commands, lure wording, Microsoft sign-in markers, free hosting, collectors…). Edits are checked before they are saved, recorded in the audit log, and used from the next analysis; re-analyse a case to apply them to it. ${res.data.overridden} edited · version ${res.data.version}.` }),
     el('div', { className: 'filters' }, search, el('label', { className: 'small' }, editedOnly, ' Edited only')),
     list);
   render();

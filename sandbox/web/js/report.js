@@ -422,7 +422,10 @@ function renderHits(r) {
   box.replaceChildren(table(['Rule', 'Engine', 'Severity', 'Tags', 'ATT&CK', 'Evidence'], hits.map((h) => {
     const desc = (Api.meta.rule_descriptions[h.rule] || {}).description || h.detail.description || '';
     return el('tr', {},
-      el('td', { title: desc }, el('strong', { textContent: h.rule }), el('div', { className: 'small muted', textContent: desc })),
+      el('td', { title: desc },
+        el('strong', { textContent: h.detail.title || h.rule }),
+        h.detail.title ? el('div', { className: 'monospace small muted', textContent: h.rule }) : null,
+        el('div', { className: 'small muted', textContent: desc })),
       el('td', { textContent: h.engine }),
       el('td', {}, el('span', { className: `sev sev-${h.severity}`, textContent: h.severity })),
       el('td', {}, h.tags.map((t) => Api.tagChip(t))),
@@ -444,7 +447,7 @@ async function showEvidence(h) {
   const close = el('button', { className: 'copy-btn', textContent: 'Close', onclick: () => dlg.close() });
   const dlg = el('dialog', { className: 'evidence' },
     el('div', { className: 'evidence-head' },
-      el('div', {}, el('h2', { textContent: h.rule }), el('span', { className: 'small muted', textContent: `${h.engine} · ${h.severity}` })),
+      el('div', {}, el('h2', { textContent: h.detail.title || h.rule }), el('span', { className: 'small muted', textContent: `${h.rule} · ${h.engine} · ${h.severity}` })),
       close),
     body);
   dlg.addEventListener('close', () => dlg.remove());
@@ -456,12 +459,14 @@ async function showEvidence(h) {
   const ev = res.data;
   const parts = [];
   if (ev.description) parts.push(el('p', { className: 'small', textContent: ev.description }));
+  // A detection explains itself: the rule as sentences, then every check it made with
+  // the value it saw (sandbox/detections).
+  if (ev.rule_text) parts.push(el('pre', { className: 'small rule-text', textContent: ev.rule_text }));
   if (ev.condition.length) {
-    parts.push(el('h3', { className: 'section-title', textContent: 'Condition' }),
-      table(['Fact', 'Op', 'Threshold', 'Actual', ''], ev.condition.map((c) => el('tr', { className: c.passed ? '' : 'muted' },
-        el('td', { className: 'monospace small', textContent: `${c.negated ? 'NOT ' : ''}${c.fact}` }),
-        el('td', { className: 'small', textContent: c.op }),
-        el('td', { className: 'monospace small', textContent: fmtValue(c.threshold) }),
+    parts.push(el('h3', { className: 'section-title', textContent: 'Checks' }),
+      table(['Check', 'Signal', 'Value seen', ''], ev.condition.map((c) => el('tr', { className: c.passed ? '' : 'muted' },
+        el('td', { className: 'small', textContent: c.test || `${c.negated ? 'NOT ' : ''}${c.fact} ${c.op} ${fmtValue(c.threshold)}` }),
+        el('td', { className: 'monospace small', textContent: c.fact }),
         el('td', { className: 'monospace small evidence-actual', textContent: c.missing ? '(missing)' : fmtValue(c.actual) }),
         el('td', {}, el('span', { className: `pass ${c.passed ? 'pass-yes' : 'pass-no'}`, textContent: c.passed ? 'pass' : 'fail' }))))));
   } else if (h.engine === 'behaviour' && !ev.rule_found) {

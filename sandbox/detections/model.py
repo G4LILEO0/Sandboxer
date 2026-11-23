@@ -172,14 +172,27 @@ class Test(Condition):
         return False
 
     def check(self, facts: dict[str, Any], seen: dict[str, Any], trace: list[dict]) -> bool:
-        value = get_value(facts, self.path)
+        # The path split and the sentence are fixed per test, so they are worked out once
+        # (on first use, after every signal is declared) and reused for every capture.
+        cached = self.__dict__.get("_cached")
+        if cached is None:
+            cached = (tuple(self.path.split(".")), self.wording())
+            object.__setattr__(self, "_cached", cached)
+        parts, wording = cached
+        value: Any = facts
+        for part in parts:
+            if isinstance(value, dict) and part in value:
+                value = value[part]
+            else:
+                value = _MISSING
+                break
         if value is not _MISSING:
             seen[self.path] = value
         passed = self.passes(value)
         trace.append(
             {
                 "signal": self.path,
-                "test": self.wording(),
+                "test": wording,
                 "value": None if value is _MISSING else value,
                 "passed": passed,
             }
@@ -210,15 +223,16 @@ class Group(Condition):
         if self.kind == "not":
             return self.parts[0].describe(not negated)
         joiner = "all" if (self.kind == "all") != negated else "any"
+        head = "all of:" if joiner == "all" else "any of:"
         lines = []
         for p in self.parts:
             sub = p.describe(negated)
-            if len(sub) == 1:
-                lines.append(sub[0])
+            if len(sub) > 1 and sub[0] == head:
+                # "all of" inside "all of" says nothing extra: list its parts here.
+                lines.extend(line[2:] for line in sub[1:])
             else:
-                lines.append(sub[0])
-                lines.extend("  " + s for s in sub[1:])
-        head = "all of:" if joiner == "all" else "any of:"
+                # A nested group's own lines are already indented under its heading.
+                lines.extend(sub)
         return [head, *("  " + line for line in lines)]
 
 

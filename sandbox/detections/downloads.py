@@ -10,8 +10,8 @@ from sandbox.detections.base import Capture, CaptureData, _all_frames, _magic_ty
 from sandbox.detections.model import all_of, any_of, detection, sig, signal
 
 # Detection strings (keyword patterns, host lists, file types, points) live in
-# sandbox/detection/defaults/*.toml and are edited in Admin > Detection strings; each
-# S.bind() line below names the entry a global follows. See sandbox/detection.
+# sandbox/detections/*.toml and are edited in Admin > Detection strings; each
+# S.bind() line below names the entry a global follows. See sandbox/detections/strings.py.
 
 EXECUTABLE_EXTENSIONS = S.bind(
     globals(), "EXECUTABLE_EXTENSIONS", "downloads.executable_extensions", S.as_set

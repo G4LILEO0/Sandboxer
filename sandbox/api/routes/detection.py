@@ -1,4 +1,4 @@
-"""Detection strings (sandbox.detection): list them, edit or revert one, try a pattern.
+"""Detection strings (sandbox.detections.strings): list them, edit or revert one, try a pattern.
 
 Every edit is validated before it is stored, audited with the old and new value, and
 used by the next analysis or re-analysis. Reverting deletes the override, so the shipped

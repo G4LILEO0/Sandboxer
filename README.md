@@ -76,7 +76,7 @@ Tests: `pytest` runs unit tests anywhere. With `TEST_DATABASE_URL` pointing at a
 | **Orchestrate**: Postgres queue, global concurrency limit, queue position and ETA, time limits, extend / pause / end, reaper, crash recovery and re-adoption | `sandbox/orchestrator/` |
 | **Live sessions**: noVNC streamed through a token-checked API proxy, read-only observers enforced server-side, analyst actions on the timeline, video | `sandbox/api/routes/sessions.py`, `sandbox/api/rfb.py` |
 | **Feeds**: URLhaus, ThreatFox, OpenPhish, Phishing.Database, MalwareBazaar, PhishTank, Tranco allowlist, MITRE ATT&CK, with validation, a 90%-drop guard and freshness checks | `sandbox/feeds/` |
-| **Rules**: YARA, Suricata (ET Open) and declarative behaviour rules in Postgres, local disables, versioned and validated bundles with one-step rollback, rule testing against stored analyses | `sandbox/rules/` |
+| **Detections**: one model for every behaviour detection (signals and detections in `sandbox/detections/`, each explained in the report and Admin; [docs/detections.md](docs/detections.md)). **Rules**: YARA and Suricata (ET Open) in Postgres, local disables, versioned and validated bundles with one-step rollback, rule testing against stored analyses | `sandbox/rules/` |
 | **Analysis**: YARA over DOM, scripts and downloads. Suricata over the pcap (on by default, image pulled from Docker Hub). Feed matching. Behaviour rules (credential forms to other sites, obfuscated JS, automatic or executable downloads, ClickFix clipboard lures, new / punycode / lookalike domains, suspicious redirects, brand impersonation, internal probes). Weighted score and verdict that lists every contribution. IOC extraction, ATT&CK mapping, optional VirusTotal enrichment, re-analysis as new versions | `sandbox/analysis/` |
 | **Report UI**: verdict and explanation, screenshots and video, clickable timeline, network tab, DOM / scripts / forms / frame tree, domains and TLS, IOCs (JSON, CSV, defanged, STIX), notes, tags, overrides, versions, compare, print to PDF | `sandbox/web/report.html` |
 | **IoC lookup**: checks Sandboxer's own feeds and past-analysis IoCs first (`/v1/intel/local`), then VirusTotal / AbuseIPDB enrichment, URL unwrapping, heuristics and a redirect walk. You can detonate URL and domain results | `sandbox/web/index.html` |
@@ -92,8 +92,9 @@ The API generates its documentation at http://127.0.0.1:8000/docs (OpenAPI at `/
 | `sandbox/api` | FastAPI app, routes, auth (dev headers, OIDC, service tokens), report builder |
 | `sandbox/runner` | Code that runs inside the session container |
 | `sandbox/orchestrator` | Worker: queue, Docker backend, supervision, ingest, jobs, maintenance, webhooks |
-| `sandbox/analysis` | Facts, domain intelligence, scoring, engine |
-| `sandbox/feeds`, `sandbox/rules` | Feed parsers and runner, rule import, behaviour rules, bundles, built-in content |
+| `sandbox/analysis` | Domain intelligence, scoring, the analysis engine |
+| `sandbox/feeds`, `sandbox/rules` | Feed parsers and runner, rule import, bundles, built-in YARA |
+| `sandbox/detections` | Behaviour detections: the signals each area computes, its detection strings and its detections, in one file per area |
 | `sandbox/core` | URL normalisation and the SSRF guard, shared by the API and the runner |
 | `sandbox/db` | Models and Alembic migrations |
 | `sandbox/web` | Static UI (no build step) |

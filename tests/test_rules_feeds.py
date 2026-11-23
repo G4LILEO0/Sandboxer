@@ -239,3 +239,10 @@ def test_runner_stdout_protocol():
     assert parse_stdout_line(line)["kind"] == "x"
     assert parse_stdout_line("INFO something") is None
     assert parse_stdout_line(STDOUT_PREFIX + "{broken") is None
+
+
+def test_detection_reference_doc_is_current():
+    """docs/detections.md is generated from the catalog: python -m sandbox.detections.docs."""
+    from sandbox.detections import docs
+
+    assert docs.OUT.read_text(encoding="utf-8") == docs.render()
