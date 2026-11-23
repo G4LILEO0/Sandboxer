@@ -20,7 +20,7 @@ import pyzipper
 from pydantic import SecretStr
 from sqlalchemy import select, text, update
 
-from sandbox import detection
+from sandbox.detections import strings as detection
 from sandbox.api.deps import get_resolver
 from sandbox.api.main import create_app
 from sandbox.config import Settings

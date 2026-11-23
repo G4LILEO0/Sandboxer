@@ -10,7 +10,7 @@ from pathlib import Path
 from sandbox.analysis.dom import parse_dom
 from sandbox.analysis.domains import BrandRef
 from sandbox.analysis.engine import Evaluation, evaluate
-from sandbox.analysis.facts import CaptureData
+from sandbox.detections.base import CaptureData
 from sandbox.rules import defaults
 from sandbox.rules.behaviour import parse_rule
 from sandbox.rules.importer import YARA_COMPILE_OPTIONS, yara_metadata

@@ -16,7 +16,7 @@ from typing import Any
 
 from sqlalchemy import select, text, update
 
-from sandbox import detection
+from sandbox.detections import strings as detection
 from sandbox.analysis.dom import parse_dom
 from sandbox.analysis.domains import (
     BrandRef,
@@ -25,13 +25,8 @@ from sandbox.analysis.domains import (
     registration_age_days,
     site,
 )
-from sandbox.analysis.facts import (
-    CaptureData,
-    build_facts,
-    chain_hosts,
-    contacted_hosts,
-    extract_iocs,
-)
+from sandbox.detections.base import CaptureData, chain_hosts, contacted_hosts
+from sandbox.detections.observe import build_facts, extract_iocs
 from sandbox.analysis.scoring import ScoreResult, score
 from sandbox.core import antibot
 from sandbox.db.audit import record_audit

