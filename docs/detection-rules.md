@@ -81,7 +81,8 @@ Admin and the report show this rule as: *Fires when IdP CDN assets on a foreign 
 3. Declare the `detection(...)` next to it.
 4. Add a test in `tests/test_detections.py` that shows it firing on the true positive and staying quiet on the closest false positive, run `python -m sandbox.detections.docs`, and run the tests.
 5. Dry-run it over stored analyses: Admin > Detection rules > View > **Test against recent analyses** (`POST /v1/rules/test` with `engine: behaviour` and the detection's name as `body`). It shows which verdicts would change.
-6. If it misbehaves in production, disable it with a reason (the disable survives upgrades), or re-activate the previous bundle.
+6. Before an upgrade or after a large change, run `python -m sandbox.detections.verify [--since 2026-11-01]` against the database. It re-runs every enabled detection over the observed values stored with each analysis and lists any analysis whose behaviour hits would differ (read-only, nothing is detonated).
+7. If it misbehaves in production, disable it with a reason (the disable survives upgrades), or re-activate the previous bundle.
 
 New signals that read the HAR, raw DOM snapshots, the A3 request log, the runtime-API log, cookies or the runner's websocket, wallet and blocked-input logs **must degrade to neutral values on captures that predate the artifact** (`0`, `false`, `null` or an empty list, never an error), so stored analyses stay re-evaluable.
 
