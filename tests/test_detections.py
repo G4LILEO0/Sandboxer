@@ -12,11 +12,12 @@ from sandbox.analysis.domains import (
     owned_by,
 )
 from sandbox.analysis.engine import behaviour_hits
+from sandbox.analysis.local import builtin_behaviour
+from sandbox.analysis.scoring import score
+from sandbox.detections import catalog
 from sandbox.detections.base import CaptureData
 from sandbox.detections.observe import build_facts
 from sandbox.detections.scripts import obfuscation
-from sandbox.analysis.local import builtin_behaviour
-from sandbox.analysis.scoring import score
 from sandbox.rules import defaults
 from sandbox.rules.importer import parse_suricata_line, yara_metadata
 
@@ -1326,7 +1327,7 @@ def test_eviltokens_kit_fires_on_relayed_code_without_page_link():
     page = _page(_ET_URL, title="DocuSign", text="Review the document")
     hits = _hits(_cap(_ET_URL, [page], har=_et_har()))
     assert _ET_KIT_RULES <= hits
-    assert defaults.DEFAULT_WEIGHTS["eviltokens_device_code_kit"] >= 70
+    assert catalog.get("eviltokens_device_code_kit").score >= 70
 
 
 def test_eviltokens_kit_without_antibot_header_needs_code_or_handoff():

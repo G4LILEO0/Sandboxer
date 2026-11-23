@@ -5,7 +5,7 @@ validated together, then published to artifact storage:
 
     bundles/<id>/yara.yarc       compiled YARA
     bundles/<id>/suricata.rules  Suricata rule file
-    bundles/<id>/behaviour.json  behaviour rule definitions
+    bundles/<id>/behaviour.json  the enabled behaviour detections (sandbox.detections)
 
 If anything fails to compile the bundle is marked failed and never activated, so a broken
 rule never reaches analysis. Exactly one bundle is active; activating an older one is the
@@ -24,8 +24,8 @@ from sqlalchemy import select, update
 
 from sandbox.db.audit import record_audit
 from sandbox.db.models import Rule, RuleBundle, RuleOverride
+from sandbox.detections import catalog
 from sandbox.ids import new_id
-from sandbox.rules.behaviour import RuleSyntaxError, parse_rule
 from sandbox.rules.importer import YARA_COMPILE_OPTIONS
 
 log = logging.getLogger(__name__)
@@ -49,9 +49,12 @@ def compile_yara(rules: list[Rule]):
 
 
 def behaviour_definitions(rules: list[Rule]) -> list[dict[str, Any]]:
+    """The enabled behaviour detections. A row names a detection in sandbox.detections;
+    severity and tags come from the row, so an edit in Admin applies."""
     out = []
     for r in rules:
-        parsed = parse_rule(r.body)
+        if catalog.get(r.name) is None:
+            raise ValueError(f"behaviour rule {r.name}: no such detection in sandbox.detections")
         out.append(
             {
                 "id": r.id,
@@ -60,7 +63,6 @@ def behaviour_definitions(rules: list[Rule]) -> list[dict[str, Any]]:
                 "tags": list(r.tags),
                 "attack_ids": list(r.attack_ids),
                 "description": r.description,
-                **parsed,
             }
         )
     return out
@@ -94,7 +96,7 @@ async def build_bundle(ctx, *, actor: str = "system", activate: bool = True) -> 
             suricata_note = (
                 await validate_suricata(ctx, suricata_text) if by_engine["suricata"] else None
             )
-        except (RuleSyntaxError, ValueError, RuntimeError, Exception) as exc:  # noqa: BLE001
+        except (ValueError, RuntimeError, Exception) as exc:  # noqa: BLE001
             bundle.status, bundle.error = "failed", f"{type(exc).__name__}: {exc}"[:4000]
             record_audit(
                 db,

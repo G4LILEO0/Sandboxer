@@ -314,7 +314,6 @@ ALICE = {"x-dev-user": "alice@example.org", "x-dev-roles": "analyst"}
 BOB = {"x-dev-user": "bob@example.org", "x-dev-roles": "analyst"}
 SENIOR = {"x-dev-user": "sam@example.org", "x-dev-roles": "senior_analyst"}
 ENGINEER = {"x-dev-user": "eng@example.org", "x-dev-roles": "detection_engineer"}
-RULE_ANY = json.dumps({"condition": {"not": {"fact": "no.such.fact", "op": "exists"}}})
 
 
 @pytest.mark.db
@@ -367,7 +366,7 @@ async def test_rule_test_leaves_out_restricted_analyses(db_client):
         await db.commit()
     response = await db_client.post(
         "/v1/rules/test",
-        json={"engine": "behaviour", "body": RULE_ANY, "limit": 500},
+        json={"engine": "behaviour", "body": "hidden_iframe", "limit": 500},
         headers=ENGINEER,
     )
     assert response.status_code == 200, response.text

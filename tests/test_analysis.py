@@ -12,10 +12,10 @@ import pytest
 
 from sandbox.analysis.domains import BrandRef, lookalike, registrable, skeleton
 from sandbox.analysis.engine import behaviour_hits, evaluate
-from sandbox.detections.base import CaptureData
-from sandbox.detections.observe import build_facts, extract_iocs
 from sandbox.analysis.local import builtin_behaviour, evaluate_dir
 from sandbox.analysis.scoring import score
+from sandbox.detections.base import CaptureData
+from sandbox.detections.observe import build_facts, extract_iocs
 from sandbox.rules import defaults
 
 CAPTURE = Path(__file__).parent / "fixtures" / "captures" / "phish_chain"

@@ -7,6 +7,7 @@ from typing import Any
 
 from sandbox.detections import strings as S
 from sandbox.detections.base import Capture, CaptureData, _all_frames, _magic_type
+from sandbox.detections.model import all_of, any_of, detection, sig, signal
 
 # Detection strings (keyword patterns, host lists, file types, points) live in
 # sandbox/detection/defaults/*.toml and are edited in Admin > Detection strings; each
@@ -218,3 +219,255 @@ def downloads_section(cap: Capture) -> dict[str, Any]:
         "mislabeled_image": len(mislabeled),
         "mislabeled_images": mislabeled[:10],
     }
+
+
+# --- signals: the values this area observes --------------------------------------------
+
+signal(
+    "downloads.unprompted_risky",
+    "Risky downloads without a click",
+    (
+        "Downloads that are executable, archive or disguised and did not start within 10 "
+        "seconds after an analyst click."
+    ),
+)
+
+signal(
+    "downloads.executable",
+    "Executable downloads",
+    (
+        "Downloads with an executable extension (string downloads.executable_extensions) or "
+        "executable file content (string downloads.risky_content_types)."
+    ),
+)
+
+signal(
+    "downloads.archive",
+    "Archive downloads",
+    (
+        "Downloads with an archive extension (string downloads.archive_extensions) or zip, "
+        "rar, 7z or cab content."
+    ),
+)
+
+signal(
+    "downloads.disguised",
+    "Disguised downloads",
+    (
+        "Downloads that hide their type: a decoy extension before an executable one "
+        "(invoice.pdf.exe), or a document extension (string downloads.decoy_extensions) on "
+        "executable content."
+    ),
+)
+
+signal(
+    "downloads.files",
+    "Downloaded files",
+    (
+        "Every download with name, URL, SHA-256, extension, detected type, and whether it was "
+        "executable, archive, disguised or started by a click."
+    ),
+)
+
+signal(
+    "downloads.mislabeled_image",
+    "Payload served as an image",
+    (
+        "Responses with an image/* content type whose bytes are an executable or archive "
+        "(string downloads.smuggled_content_types): a payload smuggled into the browser "
+        "cache."
+    ),
+)
+
+signal(
+    "downloads.mislabeled_images",
+    "Payloads served as images",
+    "URL, claimed type and real type of each payload served as an image (first 10).",
+)
+
+signal(
+    "downloads.archives",
+    "Archive listings",
+    (
+        "The member list of each downloaded zip or tar (names only, never extracted; first "
+        "200 members)."
+    ),
+)
+
+signal(
+    "downloads.archive_inner_risky",
+    "Executables inside archives",
+    ("Archive members with an executable extension (string downloads.executable_extensions)."),
+)
+
+signal(
+    "downloads.archive_encrypted",
+    "Password-protected archives",
+    "Downloaded zip archives with at least one encrypted member.",
+)
+
+signal(
+    "downloads.archive_password_on_page",
+    "Archive password printed on the page",
+    (
+        "A password-protected archive was downloaded and a page prints its password (string "
+        "downloads.archive_password_on_page). This hides the payload from mail and web "
+        "scanners."
+    ),
+)
+
+
+# --- detections ------------------------------------------------------------------------
+
+detection(
+    "automatic_download",
+    title="Risky file downloaded without a click",
+    severity="high",
+    score=45,
+    tags=["malware-download"],
+    attack=["T1189", "T1204.002"],
+    description=(
+        "The page started a download of an executable, archive or disguised file without the "
+        "analyst clicking anything."
+    ),
+    when=sig("downloads.unprompted_risky") > 0,
+    evidence=[
+        "downloads.files",
+    ],
+)
+
+detection(
+    "executable_download",
+    title="Executable file downloaded",
+    severity="high",
+    score=45,
+    tags=["malware-download"],
+    attack=["T1204.002"],
+    description="A downloaded file is an executable, script or disk image.",
+    when=sig("downloads.executable") > 0,
+    evidence=[
+        "downloads.files",
+    ],
+)
+
+detection(
+    "disguised_download",
+    title="Download disguised as another file type",
+    severity="high",
+    score=45,
+    tags=["malware-download", "masquerading"],
+    attack=["T1036.007", "T1036.008"],
+    description=(
+        "A downloaded file hides its type: a double extension (invoice.pdf.exe) or a document "
+        "extension on an executable."
+    ),
+    when=sig("downloads.disguised") > 0,
+    evidence=[
+        "downloads.files",
+    ],
+)
+
+detection(
+    "cache_smuggled_payload",
+    title="Payload smuggled as an image with a paste lure",
+    severity="high",
+    score=55,
+    tags=["filefix", "cache-smuggling", "malware-download"],
+    attack=["T1027.006", "T1204.004", "T1564"],
+    description=(
+        "A response served as an image is really an archive or executable, and the page gives "
+        "FileFix/ClickFix steps. The browser cached a payload with no download prompt, for a "
+        "later File Explorer or Run step to use."
+    ),
+    when=all_of(
+        sig("downloads.mislabeled_image") > 0,
+        any_of(
+            sig("clipboard.path_disguised") > 0,
+            sig("lure.run_dialog_instructions") > 0,
+            sig("clipboard.clickfix_like") > 0,
+        ),
+    ),
+    evidence=[
+        "downloads.mislabeled_images",
+        "clipboard.commands",
+        "lure.run_dialog_pages",
+    ],
+)
+
+detection(
+    "mislabeled_image_payload",
+    title="Payload served as an image",
+    severity="medium",
+    score=30,
+    tags=["cache-smuggling"],
+    attack=["T1027.006", "T1036"],
+    description=(
+        "A response served as an image is really an archive or executable (ZIP, RAR, 7z, PE, "
+        "CAB, OLE). Real CDNs that mislabel content serve another image type, not this."
+    ),
+    when=sig("downloads.mislabeled_image") > 0,
+    evidence=[
+        "downloads.mislabeled_images",
+        "final.url",
+    ],
+)
+
+detection(
+    "html_smuggling_binary_blob",
+    title="File built in the browser (HTML smuggling)",
+    severity="high",
+    score=60,
+    tags=["smuggling", "malware-download"],
+    attack=["T1027.006", "T1204.002"],
+    description=(
+        "The page built a large Blob/File and a risky file download happened in the same "
+        "session: HTML smuggling that assembles the payload in the browser."
+    ),
+    when=all_of(
+        sig("js.blob_constructs") > 0,
+        any_of(
+            sig("downloads.executable") > 0,
+            sig("downloads.disguised") > 0,
+            sig("downloads.archive") > 0,
+        ),
+    ),
+    evidence=[
+        "js.blob_details",
+        "downloads.files",
+    ],
+)
+
+detection(
+    "risky_archive_contents",
+    title="Executable inside a downloaded archive",
+    severity="high",
+    score=50,
+    tags=["malware-download"],
+    attack=["T1204.002", "T1105"],
+    description="A downloaded archive contains an executable, script or shortcut.",
+    when=sig("downloads.archive_inner_risky") > 0,
+    evidence=[
+        "downloads.archives",
+    ],
+)
+
+detection(
+    "password_protected_archive_with_password",
+    title="Password-protected archive with the password on the page",
+    severity="high",
+    score=50,
+    tags=["malware-download", "defense-evasion"],
+    attack=["T1027.013", "T1204.002"],
+    description=(
+        "A downloaded archive is encrypted and the page prints the password. This pattern "
+        "stops SEGs and browsers from scanning the contents."
+    ),
+    when=all_of(
+        sig("downloads.archive_encrypted") > 0,
+        sig("downloads.archive_password_on_page").is_true(),
+    ),
+    evidence=[
+        "downloads.archives",
+        "final.url",
+    ],
+)

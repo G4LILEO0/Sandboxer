@@ -8,6 +8,7 @@ from typing import Any
 
 from sandbox.detections import strings as S
 from sandbox.detections.base import Capture, CaptureData, _top_frames
+from sandbox.detections.model import all_of, any_of, detection, not_, sig, signal
 
 # --- HAR access (pure over the stored HAR) --------------------------------------------
 
@@ -228,3 +229,227 @@ def web3_section(cap: Capture) -> dict[str, Any]:
         )
     )
     return web3
+
+
+# --- signals: the values this area observes --------------------------------------------
+
+signal(
+    "web3.rpc_calls",
+    "Blockchain RPC calls",
+    (
+        "Host, method and contract address of each JSON-RPC 2.0 call the page posted with a "
+        "read method (string web3.jsonrpc_methods), first 20."
+    ),
+)
+
+signal(
+    "web3.etherhiding_rpc",
+    "Blockchain reads without a wallet (EtherHiding)",
+    (
+        "The page made blockchain JSON-RPC read calls without any wallet request, and either "
+        "has no wallet UI (no wallet-connector library, string "
+        "web3.wallet_connector_libraries, and no dApp wording on a top-level page, string "
+        "web3.dapp_ui) or got a kilobyte-sized string answer back. The allowlist is not a "
+        "guard: EtherHiding runs on compromised legitimate sites."
+    ),
+)
+
+signal(
+    "web3.rpc_result_executed",
+    "Blockchain answer decoded and run",
+    (
+        "A large string answer from a blockchain read (or its base64 layer) shares a "
+        "64-character window with code the page ran through eval or Function. Fallback: an "
+        "EtherHiding read with large string answers plus 1 KB or more of eval'd code; on an "
+        "allowlisted site this also needs a fake update or fake CAPTCHA page."
+    ),
+)
+
+signal(
+    "web3.rpc_large_string_results",
+    "Large blockchain string answers",
+    "Kilobyte-sized strings decoded from JSON-RPC answers (ABI-encoded strings).",
+)
+
+signal(
+    "web3.known_malicious_contract",
+    "Known malicious contracts",
+    (
+        "Contract addresses the page called that are on the known-bad list (string "
+        "web3.known_bad_addresses)."
+    ),
+)
+
+signal(
+    "web3.known_contracts",
+    "Known malicious contract addresses",
+    "The known-bad contract addresses called.",
+)
+
+signal(
+    "web3.explorer_dead_drop",
+    "Blockchain explorer read without a wallet",
+    (
+        "The page called a blockchain explorer API (string web3.explorer_api_hosts) with no "
+        "wallet UI and no wallet request, on a site that is not allowlisted: a dead-drop for "
+        "the next stage."
+    ),
+)
+
+signal(
+    "web3.explorer_api_hosts",
+    "Explorer API hosts",
+    "The blockchain explorer API hosts the page called.",
+)
+
+signal(
+    "web3.drainer_lure",
+    "Wallet drainer lure",
+    (
+        "A top-level page with claim, airdrop or wallet-verification wording (string "
+        "web3.drainer_wording) loads a wallet library (string web3.wallet_libraries), on a "
+        "site that is not allowlisted."
+    ),
+)
+
+signal(
+    "web3.wallet_drainer",
+    "Wallet drainer signature requests",
+    (
+        "Requests to the sandbox's fake wallet (only when the fake-wallet profile is on) for "
+        "a Permit/Permit2 signature, an unlimited approval, or approve / setApprovalForAll."
+    ),
+)
+
+signal(
+    "web3.wallet_requests",
+    "Fake wallet requests",
+    "Requests the page made to the sandbox's fake wallet (first 20).",
+)
+
+
+# --- detections ------------------------------------------------------------------------
+
+detection(
+    "web3_rpc_from_non_wallet_page",
+    title="Blockchain read from a page with no wallet (EtherHiding)",
+    severity="high",
+    score=55,
+    tags=["etherhiding", "web3"],
+    attack=["T1102.001", "T1105", "T1189"],
+    description=(
+        "A page that is not a wallet/web3 app (no wallet UI, no wallet use) read a smart "
+        "contract over JSON-RPC (eth_call / eth_getStorageAt). This is the EtherHiding dead- "
+        "drop loader pattern. The rule fires on allowlisted sites too, because EtherHiding "
+        "runs on compromised legitimate sites."
+    ),
+    when=sig("web3.etherhiding_rpc").is_true(),
+    evidence=[
+        "web3.rpc_calls",
+        "final.url",
+    ],
+)
+
+detection(
+    "etherhiding_payload_executed",
+    title="Blockchain-hosted payload decoded and run",
+    severity="critical",
+    score=80,
+    tags=["etherhiding", "web3", "obfuscation"],
+    attack=["T1102.001", "T1027", "T1059.007"],
+    description=(
+        "A page read a smart contract, the answer was a kilobyte-sized string, and that "
+        "string (or its base64 layer) became eval/Function code. The contract is the next- "
+        "stage script store (ClearFake / EtherHiding). Without the direct link, the rule "
+        "needs 1 KB+ of code-only exec (innerHTML/document.write do not count). In that case, "
+        "an allowlisted site also needs a fake update/CAPTCHA lure."
+    ),
+    when=sig("web3.rpc_result_executed").is_true(),
+    evidence=[
+        "web3.rpc_calls",
+        "web3.rpc_large_string_results",
+        "js.code_exec_max_len",
+        "final.url",
+    ],
+)
+
+detection(
+    "web3_known_malicious_contract",
+    title="Known malicious smart contract called",
+    severity="high",
+    score=60,
+    tags=["etherhiding", "web3", "known-bad"],
+    attack=["T1102.001"],
+    description="The page read a smart contract address published in EtherHiding research.",
+    when=sig("web3.known_malicious_contract") > 0,
+    evidence=[
+        "web3.known_contracts",
+        "final.url",
+    ],
+)
+
+detection(
+    "explorer_api_dead_drop",
+    title="Blockchain explorer used as a dead drop",
+    severity="medium",
+    score=30,
+    tags=["web3", "etherhiding", "dead-drop"],
+    attack=["T1102.001"],
+    description=(
+        "A non-allowlisted page with no wallet UI reads a block-explorer API (Ethplorer, "
+        "Blockchair, Etherscan...). EtherHiding variants use this to fetch their next stage "
+        "from a transaction or token note."
+    ),
+    when=sig("web3.explorer_dead_drop").is_true(),
+    evidence=[
+        "web3.explorer_api_hosts",
+        "final.url",
+    ],
+)
+
+detection(
+    "wallet_drainer_lure",
+    title="Wallet drainer lure",
+    severity="medium",
+    score=30,
+    tags=["web3", "drainer", "phishing"],
+    attack=["T1566.002", "T1656"],
+    description=(
+        "Claim/airdrop or wallet-verification wording on a page that loads a wallet library, "
+        "served from a young, lookalike or free-hosting domain."
+    ),
+    when=all_of(
+        sig("web3.drainer_lure").is_true(),
+        any_of(
+            sig("domains.final_age_days") < 60,
+            sig("domains.lookalike") > 0,
+            sig("final.free_hosting").present(),
+        ),
+    ),
+    evidence=[
+        "scripts.libraries",
+        "domains.final_age_days",
+        "final.url",
+    ],
+)
+
+detection(
+    "wallet_drainer_signature",
+    title="Wallet drainer signature request",
+    severity="high",
+    score=60,
+    tags=["crypto", "wallet-drainer"],
+    attack=["T1657", "T1566.002"],
+    description=(
+        "A page asked the (instrumented) wallet to sign a Permit/approval or an unlimited "
+        "token approval right after connect, on a non-allowlisted domain: a drainer."
+    ),
+    when=all_of(
+        sig("web3.wallet_drainer") > 0,
+        not_(sig("final.allowlisted").is_true()),
+    ),
+    evidence=[
+        "web3.wallet_requests",
+        "final.url",
+    ],
+)

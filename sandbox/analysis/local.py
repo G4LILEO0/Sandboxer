@@ -10,9 +10,9 @@ from pathlib import Path
 from sandbox.analysis.dom import parse_dom
 from sandbox.analysis.domains import BrandRef
 from sandbox.analysis.engine import Evaluation, evaluate
+from sandbox.detections import catalog
 from sandbox.detections.base import CaptureData
 from sandbox.rules import defaults
-from sandbox.rules.behaviour import parse_rule
 from sandbox.rules.importer import YARA_COMPILE_OPTIONS, yara_metadata
 
 
@@ -64,10 +64,8 @@ def load_capture(out: Path, *, allowlisted: set[str] | None = None) -> CaptureDa
 
 
 def builtin_behaviour() -> list[dict]:
-    return [
-        {**spec, "id": spec["name"], **parse_rule(spec["body"])}
-        for spec in defaults.BEHAVIOUR_RULES
-    ]
+    """Every shipped detection, as the definitions a rule bundle would hold."""
+    return catalog.definitions()
 
 
 def builtin_yara_hits(out: Path) -> list[dict]:
@@ -102,7 +100,7 @@ def evaluate_dir(out: Path, **kwargs) -> Evaluation:
         yara_hits=builtin_yara_hits(out),
         indicator_hits=[],
         suricata_alerts=[],
-        weights={k: (v, None) for k, v in defaults.DEFAULT_WEIGHTS.items()},
+        weights={k: (v, None) for k, v in catalog.default_weights().items()},
         thresholds={"suspicious": 30, "malicious": 70},
     )
 

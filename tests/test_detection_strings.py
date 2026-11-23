@@ -1,12 +1,12 @@
-"""Detection strings (sandbox.detections.strings): shipped TOML defaults, bound globals, overrides."""
+"""Detection strings (sandbox.detections.strings): TOML defaults, bound globals, overrides."""
 
 import re
 
 import pytest
 
 from sandbox.analysis import domains
-from sandbox.detections import strings as detection
 from sandbox.detections import clickfix, lures, network
+from sandbox.detections import strings as detection
 
 
 @pytest.fixture(autouse=True)

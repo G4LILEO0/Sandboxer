@@ -5,6 +5,7 @@ from typing import Any
 
 from sandbox.detections import strings as S
 from sandbox.detections.base import Capture, CaptureData, _all_frames, _entropy, _inline_scripts
+from sandbox.detections.model import all_of, detection, not_, sig, signal
 from sandbox.runner.page_scripts import is_harness_code
 
 _OBFUSCATION_SIGNALS = S.bind(
@@ -163,3 +164,209 @@ def scripts_section(cap: Capture) -> dict[str, Any]:
 def js_section(cap: Capture) -> dict[str, Any]:
     """Browser APIs the page called (eval, blobs, fullscreen, notifications, history)."""
     return _jsapi_facts(cap.data)
+
+
+# --- signals: the values this area observes --------------------------------------------
+
+signal(
+    "scripts.max_obfuscation_score",
+    "Highest script obfuscation score",
+    (
+        "The highest obfuscation score of any collected script: the sum of the weights of the "
+        "obfuscation traits it has (string scripts.obfuscation_signals: eval of decoded "
+        "strings, packers, long encoded blobs...), +2 for 20 or more obfuscator.io-style "
+        "names (string scripts.obfuscator_io_names)."
+    ),
+)
+
+signal(
+    "scripts.obfuscated",
+    "Obfuscated scripts",
+    (
+        "SHA-256, score and traits of each script with an obfuscation score above 0, highest "
+        "first (first 10)."
+    ),
+)
+
+signal(
+    "scripts.libraries",
+    "Known libraries",
+    ("Known JavaScript libraries the page loaded, by script URL (string scripts.libraries)."),
+)
+
+signal(
+    "scripts.invisible_unicode",
+    "Invisible-character encoded scripts",
+    (
+        "Inline or collected scripts with a run of 64 or more invisible characters (Hangul "
+        "fillers, zero-width characters) using at least two different ones: a payload encoded "
+        "as invisible bits (Tycoon 2FA)."
+    ),
+)
+
+signal(
+    "scripts.invisible_unicode_details",
+    "Invisible-character details",
+    ("Source, longest run and characters of each invisible-character encoded script (first 10)."),
+)
+
+signal(
+    "js.code_exec_count",
+    "Code run through eval or Function",
+    (
+        "Calls to eval, Function or string timers with code, not counting the sandbox's own "
+        "code or readable tag-manager code."
+    ),
+)
+
+signal(
+    "js.code_exec_max_len",
+    "Longest eval'd code",
+    (
+        "Length in characters of the longest code string run through eval, Function or a "
+        "string timer."
+    ),
+)
+
+signal(
+    "js.code_exec_max_entropy",
+    "Highest eval'd code entropy",
+    (
+        "Shannon entropy (bits per character, first 4 KB) of the most random code string run "
+        "through eval or Function. Readable code is about 4 to 4.5; packed code is higher."
+    ),
+)
+
+signal(
+    "js.dynamic_exec_count",
+    "Dynamic code and HTML writes",
+    "Calls to eval, Function, string timers, document.write and innerHTML with markup.",
+)
+
+signal(
+    "js.blob_constructs",
+    "Blobs built in the page",
+    ("Blob objects the page built in script (HTML smuggling builds the payload file this way)."),
+)
+
+signal(
+    "js.blob_details",
+    "Blob details",
+    "Type and size of each blob built (first 10).",
+)
+
+signal(
+    "js.fullscreen",
+    "Fullscreen requests",
+    "Calls to requestFullscreen.",
+)
+
+signal(
+    "js.pointer_lock",
+    "Pointer-lock requests",
+    "Calls to requestPointerLock.",
+)
+
+signal(
+    "js.keyboard_lock",
+    "Keyboard-lock requests",
+    "Calls to navigator.keyboard.lock (stops Esc and other keys leaving fullscreen).",
+)
+
+signal(
+    "js.notification_prompt",
+    "Notification permission requests",
+    "Calls to Notification.requestPermission.",
+)
+
+signal(
+    "js.history_floods",
+    "History entries pushed",
+    (
+        "Calls to history.pushState and history.replaceState (a page that floods history "
+        "traps the Back button)."
+    ),
+)
+
+
+# --- detections ------------------------------------------------------------------------
+
+detection(
+    "obfuscated_javascript",
+    title="Heavily obfuscated script",
+    severity="medium",
+    score=25,
+    tags=["obfuscation"],
+    attack=["T1027"],
+    description=(
+        "A script uses several obfuscation techniques (eval of decoded strings, packers, long "
+        "encoded blobs)."
+    ),
+    when=sig("scripts.max_obfuscation_score") >= 3,
+    evidence=[
+        "scripts.obfuscated",
+    ],
+)
+
+detection(
+    "invisible_unicode_obfuscation",
+    title="Script hidden in invisible characters",
+    severity="medium",
+    score=25,
+    tags=["obfuscation", "evasion"],
+    attack=["T1027", "T1027.010"],
+    description=(
+        "A script holds a run of 64 or more invisible characters (Hangul fillers U+3164 / "
+        "U+FFA0, zero-width spaces and joiners) mixing at least two of them: a payload "
+        "written in binary with invisible code points and decoded at runtime, as Tycoon 2FA "
+        "does to hide its sign-in page from signature scanners."
+    ),
+    when=all_of(
+        sig("scripts.invisible_unicode") > 0,
+        not_(sig("final.allowlisted").is_true()),
+    ),
+    evidence=[
+        "scripts.invisible_unicode_details",
+        "final.url",
+    ],
+)
+
+detection(
+    "runtime_dynamic_execution",
+    title="Packed code run at runtime",
+    severity="medium",
+    score=25,
+    tags=["obfuscation"],
+    attack=["T1027", "T1059.007"],
+    description=(
+        "The page ran large, high-entropy strings through eval/Function/setTimeout at runtime "
+        "(packed code that only appears after decoding)."
+    ),
+    when=all_of(
+        sig("js.code_exec_count") >= 2,
+        sig("js.code_exec_max_len") > 1024,
+        sig("js.code_exec_max_entropy") > 4.5,
+    ),
+    evidence=[
+        "js.dynamic_exec_count",
+        "final.url",
+    ],
+)
+
+detection(
+    "history_flooding",
+    title="Browser history flooded",
+    severity="medium",
+    score=20,
+    tags=["scam", "browser-hijack"],
+    attack=["T1185"],
+    description=(
+        "The page flooded session history (many pushState/replaceState calls): back-button "
+        "hijacking used by browser lockers."
+    ),
+    when=sig("js.history_floods") >= 20,
+    evidence=[
+        "js.history_floods",
+        "final.url",
+    ],
+)
