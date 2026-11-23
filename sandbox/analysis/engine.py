@@ -16,7 +16,6 @@ from typing import Any
 
 from sqlalchemy import select, text, update
 
-from sandbox.detections import strings as detection
 from sandbox.analysis.dom import parse_dom
 from sandbox.analysis.domains import (
     BrandRef,
@@ -25,8 +24,6 @@ from sandbox.analysis.domains import (
     registration_age_days,
     site,
 )
-from sandbox.detections.base import CaptureData, chain_hosts, contacted_hosts
-from sandbox.detections.observe import build_facts, extract_iocs
 from sandbox.analysis.scoring import ScoreResult, score
 from sandbox.core import antibot
 from sandbox.db.audit import record_audit
@@ -44,8 +41,11 @@ from sandbox.db.models import (
     Rule,
     RuleHit,
 )
+from sandbox.detections import catalog
+from sandbox.detections import strings as detection
+from sandbox.detections.base import CaptureData, chain_hosts, contacted_hosts
+from sandbox.detections.observe import build_facts, extract_iocs
 from sandbox.ids import new_id
-from sandbox.rules.behaviour import evaluate as evaluate_rule
 from sandbox.rules.bundles import LoadedBundle, active_bundle
 from sandbox.runtime_config import get_all
 
@@ -73,24 +73,8 @@ class Evaluation:
 def behaviour_hits(
     definitions: list[dict[str, Any]], facts: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    hits = []
-    for rule in definitions:
-        outcome = evaluate_rule(rule, facts)
-        if outcome.matched:
-            hits.append(
-                {
-                    "id": new_id("rh"),
-                    "rule_id": rule.get("id"),
-                    "rule_name": rule["name"],
-                    "engine": "behaviour",
-                    "severity": rule.get("severity", "medium"),
-                    "tags": rule.get("tags", []),
-                    "attack_ids": rule.get("attack_ids", []),
-                    "artifact_id": None,
-                    "detail": {"description": rule.get("description", ""), "facts": outcome.facts},
-                }
-            )
-    return hits
+    """The behaviour detections that fire on one capture (see sandbox.detections)."""
+    return catalog.run(definitions, facts)
 
 
 def tags_from(rule_hits, indicator_hits, suricata_alerts) -> dict[str, list[str]]:
@@ -168,7 +152,10 @@ async def load_weights(db) -> dict[str, tuple[int, int | None]]:
             "WHERE active_from <= now() ORDER BY tag_or_rule, active_from DESC, id DESC"
         )
     )
-    return {key: (weight, cap) for key, weight, cap in rows}
+    # Every detection's own score is the default; a weight set in Admin replaces it.
+    weights = {key: (weight, None) for key, weight in catalog.default_weights().items()}
+    weights.update({key: (weight, cap) for key, weight, cap in rows})
+    return weights
 
 
 async def load_brands(db) -> list[BrandRef]:

@@ -18,6 +18,7 @@ from sandbox.detections.base import (
     _host,
     _inline_scripts,
 )
+from sandbox.detections.model import all_of, any_of, detection, not_, sig, signal
 from sandbox.runner.page_scripts import is_harness_code
 
 
@@ -196,3 +197,124 @@ def capture_section(cap: Capture) -> dict[str, Any]:
 def evasion_section(cap: Capture) -> dict[str, Any]:
     """Anti-analysis tricks: blocked DevTools, context menu, debugger traps."""
     return _evasion(cap.data)
+
+
+# --- signals: the values this area observes --------------------------------------------
+
+signal(
+    "capture.gated",
+    "CAPTCHA gate seen",
+    (
+        "A CAPTCHA or Turnstile challenge was seen in requests, posts or form fields (string "
+        "network.antibot_challenge), or a home-made canvas CAPTCHA (Custom canvas CAPTCHA)."
+    ),
+)
+
+signal(
+    "capture.custom_captcha",
+    "Custom canvas CAPTCHA",
+    (
+        "Pages on a host not owned by a brand and not allowlisted with a <canvas> next to "
+        "CAPTCHA wording and a text box (within 3,000 characters), and no real CAPTCHA "
+        "provider (Tycoon 2FA)."
+    ),
+)
+
+signal(
+    "capture.custom_captcha_pages",
+    "Custom CAPTCHA pages",
+    "The URLs of the custom canvas CAPTCHA pages (first 10).",
+)
+
+signal(
+    "evasion.devtools_blocked",
+    "DevTools keys blocked",
+    "Distinct DevTools shortcuts (F12, Ctrl+Shift+I...) the page blocked.",
+)
+
+signal(
+    "evasion.devtools_blocked_keys",
+    "Blocked DevTools keys",
+    "The DevTools shortcuts the page blocked.",
+)
+
+signal(
+    "evasion.context_menu_blocked",
+    "Right-click blocked",
+    "The page blocked the context menu.",
+)
+
+signal(
+    "evasion.debugger_trap",
+    "Debugger traps",
+    (
+        "Scripts that pause or time the debugger to catch open DevTools: a debugger statement "
+        "on a timer or between clock reads, or built at runtime from a string. A lone "
+        "debugger; statement does not count."
+    ),
+)
+
+signal(
+    "evasion.debugger_trap_sources",
+    "Debugger trap sources",
+    "The scripts with a debugger trap (first 10).",
+)
+
+
+# --- detections ------------------------------------------------------------------------
+
+detection(
+    "captcha_gated_credential_page",
+    title="Credential page behind a CAPTCHA gate",
+    severity="medium",
+    score=25,
+    tags=["phishing", "evasion"],
+    attack=["T1497", "T1566.002"],
+    description=(
+        "A CAPTCHA/Turnstile gate preceded a credential prompt on a non-allowlisted host: "
+        "antibot gating used to keep crawlers off the harvester."
+    ),
+    when=all_of(
+        sig("capture.gated").is_true(),
+        any_of(
+            sig("brand.credential_prompt").is_true(),
+            sig("idp.ms_clone_pages") > 0,
+            sig("forms.password_forms") > 0,
+        ),
+        not_(sig("final.allowlisted").is_true()),
+    ),
+    evidence=[
+        "final.url",
+    ],
+)
+
+detection(
+    "devtools_blocking",
+    title="DevTools blocked on a lure page",
+    severity="medium",
+    score=20,
+    tags=["evasion", "anti-analysis"],
+    attack=["T1622", "T1497"],
+    description=(
+        "The page cancelled DevTools shortcuts (F12, Ctrl+U, Ctrl+Shift+I/J/C) or the context "
+        "menu, or runs a debugger trap (a timed or timer-driven `debugger`), while also "
+        "showing a credential, ClickFix or download lure."
+    ),
+    when=all_of(
+        any_of(
+            sig("evasion.devtools_blocked") > 0,
+            sig("evasion.context_menu_blocked").is_true(),
+            sig("evasion.debugger_trap") > 0,
+        ),
+        any_of(
+            sig("brand.credential_prompt").is_true(),
+            sig("clipboard.command_like") > 0,
+            sig("downloads.unprompted_risky") > 0,
+        ),
+    ),
+    evidence=[
+        "evasion.devtools_blocked_keys",
+        "evasion.debugger_trap_sources",
+        "final.url",
+    ],
+)

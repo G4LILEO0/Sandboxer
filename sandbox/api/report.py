@@ -5,11 +5,11 @@ from typing import Any
 from sqlalchemy import select
 
 from sandbox.db.models import (
+    IOC_TYPES,
     Analysis,
     AnalysisTag,
     AnalysisVersion,
     Artifact,
-    IOC_TYPES,
     IndicatorHit,
     Ioc,
     Note,

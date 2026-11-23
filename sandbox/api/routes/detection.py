@@ -12,12 +12,12 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from sandbox.detections import strings as detection
 from sandbox.api.auth import Engineer
 from sandbox.api.deps import Db
 from sandbox.api.routes.rules import RulesReader
 from sandbox.db.audit import record_audit
 from sandbox.db.models import DetectionOverride
+from sandbox.detections import strings as detection
 
 router = APIRouter(prefix="/v1", tags=["detection"])
 MAX_SAMPLE = 100_000

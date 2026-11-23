@@ -5,9 +5,9 @@ keep Cloudflare from challenging the sandbox in the first place."""
 import json
 
 from sandbox.analysis.engine import evaluate
+from sandbox.core import antibot
 from sandbox.detections.base import CaptureData
 from sandbox.detections.observe import build_facts
-from sandbox.core import antibot
 from sandbox.orchestrator.docker_backend import DockerBackend
 from sandbox.runner.page_scripts import INIT_SCRIPT, init_script
 from sandbox.runner.profiles import PROFILES, get_profile

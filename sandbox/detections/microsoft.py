@@ -22,6 +22,7 @@ from sandbox.detections.base import (
     _page_hosts_with_prompt,
     _prompt_kinds,
 )
+from sandbox.detections.model import all_of, any_of, detection, not_, sig, signal
 
 _IDP_CDN = S.bind(globals(), "_IDP_CDN", "microsoft.idp_cdn")
 
@@ -506,3 +507,624 @@ def _cdn_document_host(data: CaptureData, asset_url: str) -> str | None:
 def idp_section(cap: Capture) -> dict[str, Any]:
     """Identity-provider sign-in: clones, AiTM proxies, OAuth and device-code abuse."""
     return _idp(cap.data, cap.reqs)
+
+
+# --- signals: the values this area observes --------------------------------------------
+
+signal(
+    "idp.ms_clone_pages",
+    "Microsoft sign-in clone pages",
+    (
+        "Page snapshots on a host that is not Microsoft-owned (Admin > Brands) and not "
+        "allowlisted whose raw HTML carries 2 or more Microsoft sign-in markers (string "
+        "microsoft.login_page_markers: ESTS $Config, i0116, idSIButton9, AADCDN assets...) "
+        "and a credential prompt (a password input or sign-in wording)."
+    ),
+)
+
+signal(
+    "idp.ms_clone_page_details",
+    "Microsoft clone page details",
+    "Host, URL and markers found on each Microsoft sign-in clone page (first 10).",
+)
+
+signal(
+    "idp.cdn_assets",
+    "IdP CDN requests",
+    (
+        "URLs requested from an identity-provider CDN (string microsoft.idp_cdn: "
+        "aadcdn.msftauth.net, aadcdn.msauth.net, logincdn.msauth.net, *.oktacdn.com), first "
+        "10."
+    ),
+)
+
+signal(
+    "idp.cdn_assets_on_foreign_page",
+    "IdP CDN assets on a foreign sign-in page",
+    (
+        "True when a request to an identity-provider CDN (string microsoft.idp_cdn) was made "
+        "by a page that shows a credential prompt and is on a host that is not Microsoft- "
+        "owned (Admin > Brands) and not allowlisted. With the browser request log (A3) the "
+        "page that made the request must be that page. Without the log, any IdP CDN request "
+        "plus any such page in the session is enough. Note: only Microsoft ownership is "
+        "checked, so an Okta-hosted page loading oktacdn.com counts unless allowlisted."
+    ),
+)
+
+signal(
+    "idp.ms_paths_on_foreign_host",
+    "Microsoft login paths on a foreign host",
+    (
+        "Requests to a host that is not Microsoft-owned (Admin > Brands) and not allowlisted "
+        "(and not a Microsoft auth host, string microsoft.auth_hosts) whose path is a "
+        "Microsoft login endpoint (string microsoft.auth_path: oauth2/authorize, "
+        "GetCredentialType, kmsi) and whose response carries Microsoft sign-in markers or "
+        "sets an Entra session cookie (string microsoft.ests_cookies): an AiTM reverse proxy."
+    ),
+)
+
+signal(
+    "idp.ms_foreign_paths",
+    "Foreign Microsoft login paths",
+    "Host and path of each Microsoft login endpoint served by a foreign host (first 10).",
+)
+
+signal(
+    "idp.high_risk_consent",
+    "High-risk consent requests",
+    (
+        "Entra authorize or admin-consent URLs (in the chain or requests) for an app that is "
+        "not a Microsoft first-party app (string microsoft.first_party_app_ids) asking for "
+        "high-risk Graph scopes (string microsoft.high_risk_scopes) together with "
+        "offline_access, prompt=consent or admin consent. Silent prompt=none requests are not "
+        "counted."
+    ),
+)
+
+signal(
+    "idp.oauth_authorize_requests",
+    "High-risk consent details",
+    ("Client id, scopes, redirect host and prompt of each high-risk consent request (first 10)."),
+)
+
+signal(
+    "idp.firstparty_loopback_authorize",
+    "First-party app authorize to localhost",
+    (
+        "Entra authorize URLs for a Microsoft first-party, pre-consented app (string "
+        "microsoft.first_party_app_ids, such as Azure CLI) whose redirect_uri is localhost, "
+        "found in the chain, requests, links, raw DOM or scripts of a host that is not "
+        "Microsoft-owned (Admin > Brands) and not allowlisted (string "
+        "microsoft.authorize_url_in_page). The victim signs in for real and pastes the "
+        "localhost URL with the code back (ConsentFix)."
+    ),
+)
+
+signal(
+    "idp.firstparty_loopback_details",
+    "First-party loopback details",
+    (
+        "Client id, page host and redirect host of each first-party loopback authorize URL "
+        "(first 10)."
+    ),
+)
+
+signal(
+    "idp.device_code_handoff",
+    "Hand-off to Microsoft device-code sign-in",
+    (
+        "Links or navigations from a host that is not Microsoft-owned (Admin > Brands) and "
+        "not allowlisted to Microsoft's real device-code page (string "
+        "microsoft.device_login). The victim authenticates on Microsoft itself, so there is "
+        "no clone to see."
+    ),
+)
+
+signal(
+    "idp.device_code_sources",
+    "Device-code hand-off sources",
+    "Source host and target URL of each device-code hand-off (first 10).",
+)
+
+signal(
+    "idp.device_code_lure",
+    "Device-code lure wording",
+    (
+        "A page that hands off to device-code sign-in also shows a code token near code "
+        "wording (strings microsoft.code_wording, microsoft.device_code_token), or a "
+        "document-share pretext (string lures.share_pretext) with an email-only form. Code "
+        "wording alone is not a lure: IT help pages describe the step."
+    ),
+)
+
+signal(
+    "idp.device_code_kit_api",
+    "Device-code kit backends",
+    (
+        "Hosts (a host that is not Microsoft-owned (Admin > Brands) and not allowlisted) that "
+        "served two kinds of device-code kit endpoint (/api/device/start, /status, /gate), or "
+        "received an X-Antibot-Token header (EvilTokens kit)."
+    ),
+)
+
+signal(
+    "idp.device_code_kit_hosts",
+    "Device-code kit hosts",
+    "The device-code kit backend hosts (first 10).",
+)
+
+signal(
+    "idp.device_code_kit_details",
+    "Device-code kit endpoints",
+    "Host, kind, method and path of each kit endpoint request (first 10).",
+)
+
+signal(
+    "idp.device_code_antibot_header",
+    "Kit anti-bot header",
+    "Foreign hosts that received an X-Antibot-Token request header.",
+)
+
+signal(
+    "idp.device_code_relay",
+    "Relayed device codes",
+    (
+        "Responses from foreign hosts that hand the page a live Microsoft device code with "
+        "its verification URL: the backend relays Microsoft's /devicecode answer."
+    ),
+)
+
+signal(
+    "idp.device_code_relay_details",
+    "Relayed device code details",
+    "Host and path of each relayed device code (first 10).",
+)
+
+signal(
+    "idp.device_code_browser_flow",
+    "Device-code grant run from a foreign page",
+    (
+        "Browser calls to Microsoft's /devicecode, or a device_code grant to /token, whose "
+        "Origin or Referer is a foreign page."
+    ),
+)
+
+signal(
+    "idp.device_code_browser_flow_details",
+    "Device-code grant details",
+    "Page host and endpoint of each device-code grant run from a foreign page (first 10).",
+)
+
+signal(
+    "idp.cookies_on_foreign_host",
+    "Entra session cookies set by a foreign host",
+    (
+        "Set-Cookie headers from a host that is not Microsoft-owned (Admin > Brands) and not "
+        "allowlisted that set a Microsoft Entra session cookie (string "
+        "microsoft.ests_cookies): an AiTM proxy relaying the victim's session."
+    ),
+)
+
+signal(
+    "idp.idp_cookies",
+    "Foreign Entra cookie details",
+    "Host and cookie name of each Entra cookie set by a foreign host (first 10).",
+)
+
+signal(
+    "idp.numeric_php_posts",
+    "POSTs to numeric .php paths",
+    (
+        "Hosts not owned by any brand and not allowlisted that received a POST with a body to "
+        "/<5-6 digits>.php (string exfiltration.numeric_php): the Salty2FA exfil shape."
+    ),
+)
+
+signal(
+    "idp.numeric_php_hosts",
+    "Numeric .php hosts",
+    "The hosts counted by POSTs to numeric .php paths (first 10).",
+)
+
+signal(
+    "idp.fake_address_bar",
+    "Drawn address bar (browser in the browser)",
+    (
+        "Page snapshots on a host not owned by a brand and not allowlisted that draw a fake "
+        "address bar showing a URL (string microsoft.fake_address_bar), on a session with a "
+        "password prompt."
+    ),
+)
+
+signal(
+    "idp.fake_address_bar_details",
+    "Drawn address bar details",
+    "Page and shown URL of each fake address bar (first 10).",
+)
+
+signal(
+    "idp.fake_window_frames",
+    "Fake popup window with a framed sign-in",
+    (
+        "Page snapshots on a host not owned by a brand and not allowlisted that draw a brand "
+        "URL as bare text (an address bar) followed within 2,500 characters by an iframe the "
+        "brand does not serve."
+    ),
+)
+
+signal(
+    "idp.fake_window_frame_details",
+    "Fake popup window details",
+    "Page, brand, shown URL and frame source of each fake popup window (first 10).",
+)
+
+
+# --- detections ------------------------------------------------------------------------
+
+detection(
+    "ms_signin_clone_foreign_host",
+    title="Microsoft sign-in clone on a foreign host",
+    severity="high",
+    score=60,
+    tags=["phishing", "aitm", "brand-impersonation"],
+    attack=["T1566.002", "T1056.003", "T1656"],
+    description=(
+        "A non-Microsoft page carries Microsoft sign-in structural markers (ESTS $Config, "
+        "i0116/idSIButton9 ids, AADCDN assets) and shows a credential prompt: a cloned or "
+        "proxied Microsoft login."
+    ),
+    when=sig("idp.ms_clone_pages") > 0,
+    evidence=[
+        "idp.ms_clone_page_details",
+        "final.url",
+    ],
+)
+
+detection(
+    "idp_cdn_assets_foreign_page",
+    title="Sign-in page loads IdP branding from the IdP's CDN",
+    severity="high",
+    score=45,
+    tags=["phishing", "aitm"],
+    attack=["T1566.002", "T1656"],
+    description=(
+        "A page that is not the identity provider loads IdP sign-in branding from the IdP's "
+        "CDN (AADCDN, Okta CDN) and shows a credential prompt."
+    ),
+    when=sig("idp.cdn_assets_on_foreign_page").is_true(),
+    evidence=[
+        "idp.cdn_assets",
+        "final.url",
+    ],
+)
+
+detection(
+    "aitm_ms_paths_foreign_host",
+    title="Microsoft login served by a reverse proxy (AiTM)",
+    severity="critical",
+    score=80,
+    tags=["phishing", "aitm"],
+    attack=["T1557", "T1539", "T1566.002"],
+    description=(
+        "A non-Microsoft host serves Microsoft login endpoints (oauth2/authorize, "
+        "GetCredentialType, kmsi) with ESTS markers or ESTS cookies. This is an AiTM reverse "
+        "proxy."
+    ),
+    when=sig("idp.ms_paths_on_foreign_host") > 0,
+    evidence=[
+        "idp.ms_foreign_paths",
+        "final.url",
+    ],
+)
+
+detection(
+    "illicit_consent_grant",
+    title="Consent request for high-risk Microsoft Graph access",
+    severity="high",
+    score=50,
+    tags=["consent-phishing", "aitm"],
+    attack=["T1528", "T1566.002", "T1550.001"],
+    description=(
+        "An Entra authorize/consent request names a non-first-party client id and asks for "
+        "high-risk Graph scopes (Mail.ReadWrite, Files.ReadWrite.All, offline_access)."
+    ),
+    when=sig("idp.high_risk_consent") > 0,
+    evidence=[
+        "idp.oauth_authorize_requests",
+        "final.url",
+    ],
+)
+
+detection(
+    "consentfix_authcode_paste_back",
+    title="ConsentFix: sign-in code pasted back to the page",
+    severity="critical",
+    score=75,
+    tags=["consent-phishing", "clickfix", "aitm"],
+    attack=["T1528", "T1566.002", "T1204.004"],
+    description=(
+        "A non-Microsoft page shows a real Entra authorize URL for a first-party (pre- "
+        "consented) app, such as Azure CLI, with a localhost redirect_uri. The page tells the "
+        "visitor to paste the resulting URL or code into a box on that page. The attacker "
+        "gets the authorization code (ConsentFix / AuthCodeFix). A page that only describes "
+        "the step (a tutorial) gets the medium rule. Tenant check: Microsoft's tenant "
+        "f8cdef31-a31e-4b4a-93e4-5f571e91255a owns the service principal of a first-party "
+        "app."
+    ),
+    when=all_of(
+        sig("idp.firstparty_loopback_authorize") > 0,
+        sig("lure.paste_back_with_input").is_true(),
+    ),
+    evidence=[
+        "idp.firstparty_loopback_details",
+        "capture.gated",
+        "final.url",
+    ],
+)
+
+detection(
+    "firstparty_app_loopback_authorize",
+    title="Microsoft app authorize to localhost from a foreign page",
+    severity="medium",
+    score=30,
+    tags=["consent-phishing"],
+    attack=["T1528"],
+    description=(
+        "A non-Microsoft, non-allowlisted page shows an Entra authorize URL for a first-party "
+        "app with a localhost redirect_uri. This is the structural half of ConsentFix. The "
+        "rule fires even when the page does not render the paste-back instruction."
+    ),
+    when=sig("idp.firstparty_loopback_authorize") > 0,
+    evidence=[
+        "idp.firstparty_loopback_details",
+        "final.url",
+    ],
+)
+
+detection(
+    "device_code_phishing_lure",
+    title="Device-code phishing lure",
+    severity="high",
+    score=55,
+    tags=["consent-phishing", "phishing"],
+    attack=["T1566.002", "T1528"],
+    description=(
+        "A non-Microsoft page sends the visitor to Microsoft's real device-code sign-in "
+        "(microsoft.com/devicelogin, aka.ms/devicelogin, oauth2/deviceauth). It also shows a "
+        "code to enter, or a shared-document pretext with an email-only form. The victim "
+        "authorises the attacker's device on Microsoft itself, so no clone is present."
+    ),
+    when=all_of(
+        sig("idp.device_code_handoff") > 0,
+        sig("idp.device_code_lure").is_true(),
+    ),
+    evidence=[
+        "idp.device_code_sources",
+        "final.url",
+    ],
+)
+
+detection(
+    "device_code_handoff",
+    title="Foreign page sends to Microsoft device-code sign-in",
+    severity="medium",
+    score=30,
+    tags=["consent-phishing"],
+    attack=["T1528"],
+    description=(
+        "A non-Microsoft, non-allowlisted page links to, opens or navigates to Microsoft's "
+        "device-code sign-in. On its own, this can be an IT help page. With a displayed code, "
+        "it is device_code_phishing_lure."
+    ),
+    when=sig("idp.device_code_handoff") > 0,
+    evidence=[
+        "idp.device_code_sources",
+        "final.url",
+    ],
+)
+
+detection(
+    "eviltokens_device_code_kit",
+    title="EvilTokens device-code phishing kit",
+    severity="critical",
+    score=80,
+    tags=["consent-phishing", "phishing", "eviltokens"],
+    attack=["T1566.002", "T1528", "T1550.001"],
+    description=(
+        "The page drives an EvilTokens-style device-code backend on a non-Microsoft host "
+        "(/api/device/gate, /api/device/start, /api/device/status/<session>) and either sends "
+        "the kit's X-Antibot-Token header (its fingerprint, sent even when the gate shows a "
+        "decoy), gets a Microsoft device code back, or sends the visitor to Microsoft's "
+        "device-code sign-in. The victim signs in to Microsoft for real while the kit polls "
+        "/token for their tokens."
+    ),
+    when=all_of(
+        sig("idp.device_code_kit_api") > 0,
+        any_of(
+            sig("idp.device_code_relay") > 0,
+            sig("idp.device_code_antibot_header") > 0,
+            sig("idp.device_code_handoff") > 0,
+            sig("idp.device_code_lure").is_true(),
+        ),
+    ),
+    evidence=[
+        "idp.device_code_kit_details",
+        "idp.device_code_relay_details",
+        "final.url",
+    ],
+)
+
+detection(
+    "device_code_relay_backend",
+    title="Device-code relay backend",
+    severity="high",
+    score=60,
+    tags=["consent-phishing", "phishing"],
+    attack=["T1566.002", "T1528"],
+    description=(
+        "A non-Microsoft, non-allowlisted host answered the page with a live Microsoft device "
+        "code (user_code with its verification URI), or the page itself ran the device-code "
+        "grant against Microsoft (/devicecode, or /token with a device_code grant). Device "
+        "codes are for TVs and CLIs, not for a web page to show visitors."
+    ),
+    when=any_of(
+        sig("idp.device_code_relay") > 0,
+        sig("idp.device_code_browser_flow") > 0,
+    ),
+    evidence=[
+        "idp.device_code_relay_details",
+        "idp.device_code_browser_flow_details",
+        "final.url",
+    ],
+)
+
+detection(
+    "device_code_kit_endpoints",
+    title="Device-code kit endpoints",
+    severity="medium",
+    score=30,
+    tags=["consent-phishing"],
+    attack=["T1528"],
+    description=(
+        "A non-Microsoft, non-allowlisted host serves two of the EvilTokens device-flow "
+        "endpoints (/api/device/gate, /start, /status/<session>) or receives the X-Antibot- "
+        "Token header. Seen alone when the kit's gate shows its decoy instead of the code; "
+        "with a code or a hand-off it is eviltokens_device_code_kit."
+    ),
+    when=sig("idp.device_code_kit_api") > 0,
+    evidence=[
+        "idp.device_code_kit_details",
+        "idp.device_code_kit_hosts",
+        "final.url",
+    ],
+)
+
+detection(
+    "ms_session_cookie_foreign_host",
+    title="Microsoft session cookie set by a foreign host",
+    severity="critical",
+    score=80,
+    tags=["phishing", "aitm"],
+    attack=["T1539", "T1557"],
+    description=(
+        "A non-Microsoft host set a Microsoft Entra session cookie (ESTSAUTH*): the sign of a "
+        "relayed Microsoft login in an AiTM proxy."
+    ),
+    when=sig("idp.cookies_on_foreign_host") > 0,
+    evidence=[
+        "idp.idp_cookies",
+        "final.url",
+    ],
+)
+
+detection(
+    "browser_in_the_browser_window",
+    title="Browser-in-the-browser sign-in window",
+    severity="high",
+    score=50,
+    tags=["phishing", "bitb", "aitm"],
+    attack=["T1566.002", "T1036"],
+    description=(
+        "A page draws a real sign-in URL as element text in a fake address bar "
+        "(login.microsoftonline.com, accounts.google.com...). It also has a live password "
+        "input. This is a browser-in-the-browser popup (Sneaky2FA). Real pages put URLs in "
+        "href."
+    ),
+    when=sig("idp.fake_address_bar") > 0,
+    evidence=[
+        "idp.fake_address_bar_details",
+        "final.url",
+    ],
+)
+
+detection(
+    "fake_browser_window_frame",
+    title="Fake popup window around a framed sign-in",
+    severity="high",
+    score=55,
+    tags=["phishing", "bitb", "aitm"],
+    attack=["T1566.002", "T1036", "T1656"],
+    description=(
+        "A non-brand page draws a brand's URL (onedrive.office.com/..., "
+        "login.microsoftonline.com/...) as bare text, a fake address bar, right above an "
+        "iframe the brand does not serve: an in-page popup that frames the kit's own page or "
+        "its proxy of the real login. Fires before any password field loads."
+    ),
+    when=sig("idp.fake_window_frames") > 0,
+    evidence=[
+        "idp.fake_window_frame_details",
+        "final.url",
+    ],
+)
+
+detection(
+    "salty2fa_kit",
+    title="Salty2FA phishing kit",
+    severity="high",
+    score=55,
+    tags=["aitm", "phaas", "microsoft"],
+    attack=["T1557", "T1566.002", "T1027"],
+    description=(
+        "The page has four Salty2FA traits together: a Microsoft sign-in clone, a Turnstile- "
+        "style gate, blocked DevTools shortcuts, and a POST to a /<5-6 digits>.php endpoint "
+        "on a host that no brand owns."
+    ),
+    when=all_of(
+        sig("idp.ms_clone_pages") > 0,
+        sig("capture.gated").is_true(),
+        sig("evasion.devtools_blocked") > 0,
+        sig("idp.numeric_php_posts") > 0,
+    ),
+    evidence=[
+        "idp.numeric_php_hosts",
+        "idp.ms_clone_page_details",
+        "evasion.devtools_blocked_keys",
+    ],
+)
+
+detection(
+    "tycoon2fa_kit",
+    title="Tycoon 2FA phishing kit",
+    severity="high",
+    score=55,
+    tags=["aitm", "phaas", "microsoft", "google"],
+    attack=["T1557", "T1566.002", "T1027", "T1622"],
+    description=(
+        "Tycoon 2FA traits together: a Microsoft or Google sign-in on a host the brand does "
+        "not own, behind a CAPTCHA gate, with anti-analysis (DevTools or context menu "
+        "blocked, a debugger trap, invisible-Unicode script) and one trait Salty2FA and "
+        "generic kits lack: the kit's home-made canvas CAPTCHA, invisible-Unicode encoded "
+        "script, or a real-time relay socket."
+    ),
+    when=all_of(
+        any_of(
+            sig("idp.ms_clone_pages") > 0,
+            all_of(
+                sig("brand.credential_prompt").is_true(),
+                sig("brand.name").one_of(["Microsoft", "Google"]),
+            ),
+        ),
+        sig("capture.gated").is_true(),
+        any_of(
+            sig("evasion.devtools_blocked") > 0,
+            sig("evasion.context_menu_blocked").is_true(),
+            sig("evasion.debugger_trap") > 0,
+            sig("scripts.invisible_unicode") > 0,
+        ),
+        any_of(
+            sig("capture.custom_captcha") > 0,
+            sig("scripts.invisible_unicode") > 0,
+            sig("websocket.foreign_count") > 0,
+            sig("websocket.socketio_polling") > 0,
+        ),
+        not_(sig("final.allowlisted").is_true()),
+    ),
+    evidence=[
+        "brand.name",
+        "capture.custom_captcha_pages",
+        "scripts.invisible_unicode_details",
+        "evasion.devtools_blocked_keys",
+        "evasion.debugger_trap_sources",
+        "final.url",
+    ],
+)

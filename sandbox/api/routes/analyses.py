@@ -614,7 +614,7 @@ async def rule_hit_evidence(
     the concrete content behind those facts, and the files they came from."""
     from sandbox.api.evidence import resolve
     from sandbox.api.report import artifact_dict
-    from sandbox.rules.behaviour import RuleSyntaxError, parse_rule
+    from sandbox.detections import catalog
 
     await get_visible(db, principal, analysis_id)
     hit = await db.get(RuleHit, hit_id)
@@ -623,10 +623,7 @@ async def rule_hit_evidence(
     rule = None
     if hit.rule_id and (row := await db.get(Rule, hit.rule_id)) is not None:
         if row.engine == "behaviour":
-            try:
-                rule = {**parse_rule(row.body), "description": row.description}
-            except (RuleSyntaxError, ValueError):
-                rule = {"description": row.description}
+            rule = {"detection": catalog.get(row.name), "description": row.description}
         else:
             rule = {"description": row.description, "source_text": row.body}
     version = await db.scalar(

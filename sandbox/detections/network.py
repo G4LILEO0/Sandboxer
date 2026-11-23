@@ -10,6 +10,7 @@ from sandbox.analysis.domains import (
 )
 from sandbox.detections import strings as S
 from sandbox.detections.base import Capture, CaptureData, _host
+from sandbox.detections.model import all_of, any_of, detection, not_, sig, signal
 from sandbox.detections.navigation import _trusted_redirectors
 
 IP_LOOKUP_HOSTS = S.bind(globals(), "IP_LOOKUP_HOSTS", "exfiltration.ip_lookup_hosts", S.as_set)
@@ -272,3 +273,306 @@ def network_section(cap: Capture) -> dict[str, Any]:
 def websocket_section(cap: Capture) -> dict[str, Any]:
     """WebSocket and Socket.IO connections to other sites."""
     return _websocket(cap.data, cap.reqs)
+
+
+# --- signals: the values this area observes --------------------------------------------
+
+signal(
+    "network.blocked_internal",
+    "Blocked requests to internal addresses",
+    (
+        "Requests the sandbox blocked because they went to a private, loopback or link-local "
+        "address (not blocked schemes)."
+    ),
+)
+
+signal(
+    "network.blocked",
+    "Blocked requests",
+    "Requests the sandbox blocked, with the reason (first 20).",
+)
+
+signal(
+    "network.ip_lookups",
+    "IP and geolocation lookups",
+    (
+        "Hosts of IP or geolocation lookup services the page called (string "
+        "exfiltration.ip_lookup_hosts)."
+    ),
+)
+
+signal(
+    "network.trusted_redirectors",
+    "Trusted redirectors used",
+    (
+        "Hops in the chain through a well-known redirector or link wrapper (string "
+        "network.trusted_redirectors), not counting hops the analyst caused."
+    ),
+)
+
+signal(
+    "network.web_proxy_kit_count",
+    "Web-proxy kit traits",
+    (
+        "Distinct web-proxy kits (built-in path and code patterns in network.py, such as "
+        "Ultraviolet) whose paths appear in requests, or whose code appears in page HTML or "
+        "scripts, on sites that are not allowlisted. Kits like these relay a real sign-in "
+        "page through the attacker."
+    ),
+)
+
+signal(
+    "network.web_proxy_kits",
+    "Web-proxy kits found",
+    "The names of the web-proxy kits found.",
+)
+
+signal(
+    "network.web_proxy_assets",
+    "Web-proxy kit requests",
+    "Request URLs that match a web-proxy kit path (first 10).",
+)
+
+signal(
+    "network.local_probe.port_count",
+    "Local ports probed",
+    (
+        "Distinct ports the page tried on loopback or private addresses (blocked "
+        "HTTP/WebSocket requests and WebRTC ICE servers). Link-local metadata addresses are "
+        "left out."
+    ),
+)
+
+signal(
+    "network.local_probe.host_count",
+    "Local hosts probed",
+    "Distinct loopback or private hosts the page tried to reach.",
+)
+
+signal(
+    "network.local_probe.remote_access_count",
+    "Remote-access ports probed",
+    (
+        "Probed ports that belong to remote-access tools (string network.remote_access_ports: "
+        "RDP, VNC, TeamViewer, AnyDesk...)."
+    ),
+)
+
+signal(
+    "network.local_probe.remote_access",
+    "Remote-access ports (details)",
+    "Each remote-access port probed, with the tool it belongs to.",
+)
+
+signal(
+    "network.local_probe.fraud_vendor",
+    "Fraud-prevention scanner",
+    (
+        "A fraud-prevention vendor (string network.fraud_vendor_scripts, such as "
+        "ThreatMetrix) whose script made the probes, or whose tag is loaded and the probes "
+        "match its own scan exactly (loopback WebSockets on its ports, string "
+        "network.fraud_vendor_ports). Banks use these legitimately."
+    ),
+)
+
+signal(
+    "network.local_probe.local_app",
+    "Local companion app",
+    (
+        "A known local app (string network.local_app_ports) whose ports cover every probed "
+        "port, such as a password manager or a game client."
+    ),
+)
+
+signal(
+    "network.local_probe.ports",
+    "Probed ports",
+    "The local ports probed (first 50).",
+)
+
+signal(
+    "network.local_probe.hosts",
+    "Probed hosts",
+    "The local hosts probed (first 20).",
+)
+
+signal(
+    "network.local_probe.channels",
+    "Probe channels",
+    "How the probes were sent: http, websocket or webrtc.",
+)
+
+signal(
+    "network.local_probe.scripts",
+    "Probing scripts",
+    "The scripts that made the probes, when known (first 10).",
+)
+
+signal(
+    "websocket.connections",
+    "WebSocket connections",
+    (
+        "Each WebSocket the page opened, with frames sent and received and Socket.IO event "
+        "names (first 20)."
+    ),
+)
+
+signal(
+    "websocket.foreign_count",
+    "WebSockets to unknown hosts",
+    (
+        "WebSocket connections to hosts that are not allowlisted and not owned by a known "
+        "brand. Same-site sockets count: kits relay from their own host."
+    ),
+)
+
+signal(
+    "websocket.socketio_polling",
+    "Socket.IO long-polling hosts",
+    (
+        "Hosts (not allowlisted) the page talked to with Socket.IO's HTTP long-polling "
+        "transport (/socket.io/ with transport=polling). AiTM relays often start in or fall "
+        "back to polling, which leaves no WebSocket frames."
+    ),
+)
+
+signal(
+    "websocket.polling_connections",
+    "Socket.IO polling details",
+    "Host, request count and event names of each Socket.IO polling host (first 20).",
+)
+
+
+# --- detections ------------------------------------------------------------------------
+
+detection(
+    "internal_network_probe",
+    title="Requests to internal network addresses",
+    severity="medium",
+    score=25,
+    tags=["internal-probe"],
+    attack=["T1046"],
+    description="The page tried to reach internal or cloud-metadata addresses (blocked).",
+    when=sig("network.blocked_internal") > 0,
+    evidence=[
+        "network.blocked",
+    ],
+)
+
+detection(
+    "local_port_scan",
+    title="Local port scan",
+    severity="medium",
+    score=25,
+    tags=["fingerprinting", "local-port-scan"],
+    attack=["T1046", "T1592.004"],
+    description=(
+        "The page tried several ports on localhost or the LAN (WebSocket, fetch/image or "
+        "WebRTC TURN/STUN). These are often remote-access ports such as RDP, VNC, SSH or "
+        "TeamViewer. This is browser-based local port scanning, used to fingerprint visitors "
+        "or detect remote-access tools. The rule ignores known anti-fraud scripts "
+        "(ThreatMetrix), a desktop app's own helper ports and allowlisted sites."
+    ),
+    when=all_of(
+        any_of(
+            sig("network.local_probe.remote_access_count") >= 2,
+            sig("network.local_probe.port_count") >= 5,
+            sig("network.local_probe.host_count") >= 10,
+        ),
+        not_(sig("network.local_probe.fraud_vendor").present()),
+        not_(sig("network.local_probe.local_app").present()),
+        not_(sig("final.allowlisted").is_true()),
+    ),
+    evidence=[
+        "network.local_probe.remote_access",
+        "network.local_probe.ports",
+        "network.local_probe.hosts",
+        "network.local_probe.channels",
+        "network.local_probe.scripts",
+    ],
+)
+
+detection(
+    "web_proxy_signin_relay",
+    title="Sign-in relayed through a web-proxy kit",
+    severity="critical",
+    score=75,
+    tags=["phishing", "aitm", "proxy"],
+    attack=["T1557", "T1566.002", "T1539"],
+    description=(
+        "A non-allowlisted page runs an interception web proxy (Ultraviolet, Scramjet, "
+        "Rammerhead) and presents a sign-in: a fake browser window, a credential prompt or a "
+        "Microsoft sign-in page. The victim sees the brand's real login, served through the "
+        "attacker's host, which keeps the session (AiTM)."
+    ),
+    when=all_of(
+        sig("network.web_proxy_kit_count") > 0,
+        any_of(
+            sig("idp.fake_window_frames") > 0,
+            sig("idp.fake_address_bar") > 0,
+            sig("idp.ms_clone_pages") > 0,
+            sig("brand.credential_prompt").is_true(),
+        ),
+    ),
+    evidence=[
+        "network.web_proxy_kits",
+        "network.web_proxy_assets",
+        "brand.name",
+        "final.url",
+    ],
+)
+
+detection(
+    "client_side_ip_geo_lookup",
+    title="IP or location lookup on a lure page",
+    severity="medium",
+    score=20,
+    tags=["evasion", "geofencing"],
+    attack=["T1614", "T1497"],
+    description=(
+        "The page queried a client-side IP/ASN/geo lookup service and also showed a "
+        "credential, ClickFix or download lure: geofencing or sandbox filtering."
+    ),
+    when=all_of(
+        sig("network.ip_lookups").present(),
+        any_of(
+            sig("brand.credential_prompt").is_true(),
+            sig("clipboard.command_like") > 0,
+            sig("downloads.unprompted_risky") > 0,
+            sig("forms.sensitive_prompt_pages").present(),
+        ),
+    ),
+    evidence=[
+        "network.ip_lookups",
+        "final.url",
+    ],
+)
+
+detection(
+    "credential_relay_websocket",
+    title="Credentials relayed over a WebSocket",
+    severity="high",
+    score=50,
+    tags=["aitm", "exfil"],
+    attack=["T1557", "T1056.003"],
+    description=(
+        "A brand credential-prompt page opened a WebSocket, or a Socket.IO long-polling "
+        "channel, to a host it does not own. AiTM kits (Mamba/Tycoon) use this real-time "
+        "channel to relay typed credentials."
+    ),
+    when=all_of(
+        any_of(
+            sig("websocket.foreign_count") > 0,
+            sig("websocket.socketio_polling") > 0,
+        ),
+        any_of(
+            sig("brand.credential_prompt").is_true(),
+            sig("idp.ms_clone_pages") > 0,
+        ),
+    ),
+    evidence=[
+        "websocket.connections",
+        "websocket.polling_connections",
+        "final.url",
+    ],
+)

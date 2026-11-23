@@ -26,6 +26,7 @@ from sandbox.detections.base import (
     _host,
     chain_hosts,
 )
+from sandbox.detections.model import all_of, any_of, detection, sig, signal
 
 _TITLE_LURE = S.bind(globals(), "_TITLE_LURE", "lures.title_lure")
 
@@ -286,3 +287,391 @@ def brand_section(cap: Capture) -> dict[str, Any]:
         "favicon_lookups": favicons[:10],
         "favicon_lookup_count": len(favicons),
     }
+
+
+# --- signals: the values this area observes --------------------------------------------
+
+signal(
+    "brand",
+    "Brand claim (all details)",
+    (
+        "The whole brand result: the brand the page most likely imitates, its confidence, the "
+        "reasons, the prompt kind, the page and the brand's real domains."
+    ),
+)
+
+signal(
+    "brand.name",
+    "Imitated brand",
+    (
+        "The brand (from Admin > Brands) a page most likely imitates. Each page is judged on "
+        "its own; a page on the brand's own domains is skipped unless it is a tenant on free "
+        "hosting."
+    ),
+)
+
+signal(
+    "brand.confidence",
+    "Brand imitation confidence",
+    (
+        "0 to 100, for the best-scoring page and brand: brand name in the title +35 (or an "
+        "acronym brand in a title or heading +20), in the text +10 per keyword up to +20, a "
+        "credential prompt + its points (string forms.prompt_points), a cross-site password "
+        "form +10, a lookalike host +20, a brand login title on free hosting +20. Divided by "
+        "3 on an allowlisted site."
+    ),
+)
+
+signal(
+    "brand.credential_prompt",
+    "Brand page asks for a secret",
+    (
+        "The page behind Imitated brand asks for a password, card, one-time code, recovery "
+        "phrase or sign-in name."
+    ),
+)
+
+signal(
+    "brand.free_hosting_lure",
+    "Brand login title on free hosting",
+    (
+        "The page behind Imitated brand is on a free hosting platform (string "
+        "hosting.free_hosting), names the brand in its title, and its title is a login or "
+        "wallet lure (string lures.title_lure). Not set on allowlisted sites."
+    ),
+)
+
+signal(
+    "brand.hosting_label",
+    "Free-hosting tenant named after a brand",
+    (
+        "A free-hosting host whose tenant label carries a brand keyword of 5 or more letters "
+        "(microsoftaccount-kit.<platform>) and whose page asks for a secret. Not on "
+        "allowlisted sites. The page itself may never name the brand."
+    ),
+)
+
+signal(
+    "brand.favicon_lookups",
+    "Favicons fetched for other sites",
+    (
+        "Hosts whose favicon the page fetched through a favicon service (string "
+        "exfiltration.favicon_service), other than sites the session visited (first 10)."
+    ),
+)
+
+signal(
+    "brand.favicon_lookup_count",
+    "Favicon lookups for other sites",
+    (
+        "How many hosts had their favicon fetched through a favicon service. Kits do this to "
+        "show the victim's own mail provider's logo."
+    ),
+)
+
+signal(
+    "final.url",
+    "Final URL",
+    "The URL the session ended on.",
+)
+
+signal(
+    "final.domain",
+    "Final domain",
+    "The registrable domain of the final URL.",
+)
+
+signal(
+    "final.allowlisted",
+    "Final site allowlisted",
+    "The final host's site is in Admin > Allowlist.",
+)
+
+signal(
+    "final.free_hosting",
+    "Final page on free hosting",
+    ("The free hosting platform the final host is on (string hosting.free_hosting), if any."),
+)
+
+signal(
+    "final.ipfs",
+    "Final page on IPFS",
+    "The final URL is an IPFS gateway URL (string web3.ipfs_url).",
+)
+
+signal(
+    "final.abuse_interstitial",
+    "Hosting provider abuse warning",
+    (
+        "The final page is Cloudflare's phishing or malware warning: a form to /cdn- "
+        "cgi/phish-bypass with warning wording (string lures.abuse_warning). Cloudflare has "
+        "already flagged the site."
+    ),
+)
+
+signal(
+    "domains.chain_youngest_age_days",
+    "Youngest domain on the path (days)",
+    (
+        "Registration age in days of the youngest domain the visitor travelled through "
+        "(redirect chain and navigations, not third-party resources). Empty when no age is "
+        "known."
+    ),
+)
+
+signal(
+    "domains.final_age_days",
+    "Final domain age (days)",
+    "Registration age in days of the final URL's domain. Empty when unknown.",
+)
+
+signal(
+    "domains.young",
+    "Young domains",
+    "Contacted domains younger than 30 days, youngest first (first 10).",
+)
+
+signal(
+    "domains.punycode_confusable",
+    "Confusable punycode hosts",
+    (
+        "Contacted hosts with a punycode label that mixes Latin with another script, or uses "
+        "only characters that look Latin. Plain native-script names are not counted."
+    ),
+)
+
+signal(
+    "domains.punycode_hosts",
+    "Punycode hosts",
+    "Every contacted punycode host with its display form.",
+)
+
+signal(
+    "domains.lookalike",
+    "Lookalike hosts",
+    (
+        "Contacted hosts that imitate a brand domain: a homoglyph or typo of it (paypa1.com), "
+        "or the brand name inside a foreign domain (paypal.secure-login.xyz). Allowlisted and "
+        "brand-owned hosts are left out."
+    ),
+)
+
+signal(
+    "domains.lookalikes",
+    "Lookalike host details",
+    "Each lookalike host, the brand domain it imitates and how (first 10).",
+)
+
+signal(
+    "domains.government_lookalike",
+    "Government lookalike hosts",
+    (
+        "Contacted hosts that dress up as a government site without being under a government "
+        "suffix (absher-gov-sa.com, moi.gov.sa.verify-id.com)."
+    ),
+)
+
+signal(
+    "domains.government_lookalikes",
+    "Government lookalike details",
+    "Each government lookalike host and what it imitates (first 10).",
+)
+
+
+# --- detections ------------------------------------------------------------------------
+
+detection(
+    "newly_registered_domain",
+    title="Newly registered domain on the path",
+    severity="medium",
+    score=25,
+    tags=["newly-registered"],
+    attack=["T1583.001"],
+    description=(
+        "The submitted, redirect or final domain was registered less than 30 days ago. Third- "
+        "party resources do not count."
+    ),
+    when=sig("domains.chain_youngest_age_days") < 30,
+    evidence=[
+        "domains.young",
+    ],
+)
+
+detection(
+    "punycode_domain",
+    title="Confusable punycode domain",
+    severity="medium",
+    score=25,
+    tags=["punycode"],
+    attack=["T1583.001", "T1036"],
+    description=(
+        "A domain is an internationalised name that mixes Latin with another script or uses "
+        "only Latin-lookalike characters."
+    ),
+    when=sig("domains.punycode_confusable") > 0,
+    evidence=[
+        "domains.punycode_hosts",
+    ],
+)
+
+detection(
+    "lookalike_domain",
+    title="Lookalike of a brand domain",
+    severity="high",
+    score=45,
+    tags=["lookalike", "phishing"],
+    attack=["T1583.001", "T1036"],
+    description="A domain imitates a known brand's domain.",
+    when=sig("domains.lookalike") > 0,
+    evidence=[
+        "domains.lookalikes",
+    ],
+)
+
+detection(
+    "brand_impersonation",
+    title="Brand impersonation asking for credentials",
+    severity="high",
+    score=45,
+    tags=["phishing", "brand-impersonation"],
+    attack=["T1656"],
+    description=(
+        "A page presents a known brand and asks for credentials, but is not hosted on that "
+        "brand's domains."
+    ),
+    when=all_of(
+        sig("brand.confidence") >= 60,
+        sig("brand.credential_prompt").is_true(),
+    ),
+    evidence=[
+        "brand",
+    ],
+)
+
+detection(
+    "brand_on_free_hosting",
+    title="Brand login page on free hosting",
+    severity="high",
+    score=45,
+    tags=["phishing", "brand-impersonation", "free-hosting"],
+    attack=["T1583.006", "T1656"],
+    description=(
+        "A page on a free hosting or site-builder platform has a brand and login, wallet, "
+        "support or verification wording in its title. Example platforms: pages.dev, "
+        "typedream.app, web.app, blob.core.windows.net. These are the SEO and smishing "
+        "landing pages that send victims to a harvester."
+    ),
+    when=sig("brand.free_hosting_lure").is_true(),
+    evidence=[
+        "brand",
+    ],
+)
+
+detection(
+    "brand_named_free_hosting_login",
+    title="Free-hosting site named after a brand asks for credentials",
+    severity="high",
+    score=50,
+    tags=["phishing", "brand-impersonation", "free-hosting"],
+    attack=["T1583.006", "T1656", "T1566.002"],
+    description=(
+        "A page on a free hosting or site-builder platform asks for a password, sign-in name, "
+        "card, code or recovery phrase. Its tenant name carries a brand (microsoftaccount- "
+        "kit.<builder>, ledger-live-kit.pages.dev). The page itself need not name the brand. "
+        "Builder forms often have no real password field."
+    ),
+    when=sig("brand.hosting_label").present(),
+    evidence=[
+        "brand.hosting_label",
+        "final.url",
+    ],
+)
+
+detection(
+    "hosting_abuse_interstitial",
+    title="Hosting provider already flagged the site",
+    severity="high",
+    score=40,
+    tags=["phishing", "malware-download", "takedown"],
+    attack=["T1583.006"],
+    description=(
+        "The page ended on Cloudflare's 'Suspected Phishing' or 'Suspected Malware' block for "
+        "this hostname. The provider already confirmed abuse. The payload is not visible, but "
+        "the URL is not clean. Run the analysis again only if you need the payload."
+    ),
+    when=sig("final.abuse_interstitial").present(),
+    evidence=[
+        "final.abuse_interstitial",
+        "final.url",
+    ],
+)
+
+detection(
+    "dynamic_brand_favicon_login",
+    title="Login page fetches the victim's brand logo",
+    severity="high",
+    score=50,
+    tags=["phishing", "credential-harvest"],
+    attack=["T1566.002", "T1656"],
+    description=(
+        "A password page fetches another site's favicon through a favicon service (Google "
+        "s2/faviconV2, DuckDuckGo, Clearbit). Webmail kits use this trick to show the "
+        "victim's own mail-provider icon. The page also is on free hosting, is on a domain "
+        "under 30 days old, calls an IP-lookup service or shows verification wording."
+    ),
+    when=all_of(
+        sig("forms.password_forms") > 0,
+        sig("brand.favicon_lookup_count") > 0,
+        sig("brand.favicon_lookup_count") <= 3,
+        any_of(
+            sig("final.free_hosting").present(),
+            sig("domains.final_age_days") < 30,
+            sig("network.ip_lookups").present(),
+            sig("lure.verification_wording").is_true(),
+        ),
+    ),
+    evidence=[
+        "brand.favicon_lookups",
+        "network.ip_lookups",
+        "final.url",
+    ],
+)
+
+detection(
+    "government_lookalike_domain",
+    title="Lookalike of a government domain",
+    severity="high",
+    score=45,
+    tags=["phishing", "government-impersonation"],
+    attack=["T1583.001", "T1656"],
+    description=(
+        "A domain imitates a government site but is not under a government suffix (absher- "
+        "gov-sa.com, moi.gov.sa.verify-id.com, govsa-fines.net)."
+    ),
+    when=sig("domains.government_lookalike") > 0,
+    evidence=[
+        "domains.government_lookalikes",
+    ],
+)
+
+detection(
+    "ipfs_credential_page",
+    title="Credential page on IPFS",
+    severity="high",
+    score=45,
+    tags=["phishing"],
+    attack=["T1566.002", "T1583.006"],
+    description="The final page comes from an IPFS gateway and asks for credentials.",
+    when=all_of(
+        sig("final.ipfs").present(),
+        any_of(
+            sig("forms.password_forms") > 0,
+            sig("brand.credential_prompt").is_true(),
+            sig("forms.otp_forms") > 0,
+        ),
+    ),
+    evidence=[
+        "final.ipfs",
+        "final.url",
+    ],
+)

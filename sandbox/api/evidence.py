@@ -1,12 +1,12 @@
 """Rule-hit evidence (REP-4, ANA-11): what exactly a fired detection matched on.
 
-A behaviour hit stores the facts its condition read; this resolves them at request time,
+A behaviour hit stores the observed values its detection read; this resolves them at request time,
 from the stored capture, into the concrete content behind them: the strings the page
 ran through eval, the clipboard text, the DOM snapshots and scripts, the YARA match
 strings. Working from stored data means it also covers analyses that ran before this
 existed.
 
-``resolve`` is pure: the API passes in the hit, the rule body, the version's facts, the
+``resolve`` is pure: the API passes in the hit, the detection, the version's facts, the
 artifact list, the parsed capture result and a reader for artifact bytes. Content is
 never interpreted, only returned as text (the report shows it with ``textContent``), and
 quarantined files are never read.
@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sandbox.rules.behaviour import _MISSING, _eval, get_fact
+from sandbox.detections.model import _MISSING, SIGNALS, Group, Test, get_value
 
 SAMPLE_CAP = 64 * 1024
 _MAX_SAMPLES = 30
@@ -86,46 +86,43 @@ def entropy(text: str) -> float:
 
 
 def condition_leaves(rule: dict[str, Any] | None, ctx: Context) -> list[dict[str, Any]]:
-    """Each leaf of the condition with the value it saw and whether it passed."""
-    if not rule or "condition" not in rule:
+    """Each test of the detection's condition with the value it saw and whether it passed.
+    ``rule["detection"]`` is the ``Detection`` (sandbox.detections) behind the hit."""
+    detection = (rule or {}).get("detection")
+    if detection is None:
         return []
     out: list[dict[str, Any]] = []
 
-    def walk(cond: dict[str, Any], group: str, negated: bool) -> None:
-        for key in ("all", "any"):
-            if key in cond:
-                for sub in cond[key]:
-                    walk(sub, key, negated)
-                return
-        if "not" in cond:
-            walk(cond["not"], group, not negated)
+    def walk(cond: Any, group: str, negated: bool) -> None:
+        if isinstance(cond, Group):
+            if cond.kind == "not":
+                walk(cond.parts[0], group, not negated)
+            else:
+                for sub in cond.parts:
+                    walk(sub, cond.kind, negated)
             return
-        actual = ctx.facts.get(cond["fact"], _MISSING)
+        assert isinstance(cond, Test)
+        actual = ctx.facts.get(cond.path, _MISSING)
         if actual is _MISSING:
-            actual = get_fact(ctx.all_facts, cond["fact"])
-        tree: dict[str, Any] = {}
-        if actual is not _MISSING:
-            node = tree
-            *parents, last = cond["fact"].split(".")
-            for part in parents:
-                node = node.setdefault(part, {})
-            node[last] = actual
-        passed = _eval(cond, tree, {})
+            actual = get_value(ctx.all_facts, cond.path)
+        passed = cond.passes(actual)
         out.append(
             {
-                "fact": cond["fact"],
-                "op": cond["op"],
-                "threshold": cond.get("value"),
+                "fact": cond.path,
+                "title": SIGNALS[cond.path].title if cond.path in SIGNALS else cond.path,
+                "test": cond.wording(negated),
+                "op": cond.op,
+                "threshold": cond.value,
                 "actual": None if actual is _MISSING else actual,
                 "missing": actual is _MISSING,
                 "negated": negated,
                 "group": group,
-                # A leaf under "not" counts towards the hit when it did NOT hold.
+                # A test under "not" counts towards the hit when it did NOT hold.
                 "passed": passed != negated,
             }
         )
 
-    walk(rule["condition"], "all", False)
+    walk(detection.when, "all", False)
     return out
 
 
@@ -254,6 +251,10 @@ def resolve(
         "description": (rule or {}).get("description") or detail.get("description", ""),
         "rule_found": rule is not None,
         "rule_source": (rule or {}).get("source_text"),
+        "title": detail.get("title") or getattr((rule or {}).get("detection"), "title", None),
+        "rule_text": (
+            (rule or {})["detection"].rule_text() if (rule or {}).get("detection") else None
+        ),
         "condition": leaves,
         "facts": ctx.facts if ctx.facts else {k: v for k, v in detail.items() if k != "facts"},
         "samples": ctx.samples,

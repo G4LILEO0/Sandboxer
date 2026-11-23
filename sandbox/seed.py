@@ -1,5 +1,5 @@
 """Insert built-in rules, weights, brands and feeds that are missing, and keep built-in
-content current.
+content current. Behaviour rule rows mirror the detections in sandbox.detections.
 
 Built-in rule bodies are refreshed when the shipped version changes, unless a detection
 engineer edited the body in Admin: that edit is kept until it is reverted. Disables and
@@ -16,10 +16,16 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sandbox.db.models import Brand, Feed, Rule, RuleBundle, ScoringConfig
+from sandbox.detections import catalog
 from sandbox.ids import new_id
 from sandbox.orchestrator import jobs
 from sandbox.rules import defaults
 from sandbox.rules.importer import content_hash, validate_yara, yara_metadata
+
+LOCAL_BEHAVIOUR_RETIRED = (
+    "Behaviour rules are now detections in code (sandbox/detections). This JSON rule "
+    "no longer runs; add it as a detection instead."
+)
 
 
 def _refresh(rule: Rule, body: str, **values) -> bool:
@@ -44,28 +50,44 @@ async def ensure_defaults(db: AsyncSession) -> None:
         for r in (await db.scalars(select(Rule).where(Rule.source == defaults.BUILTIN_SOURCE)))
     }
     changed = 0
-    for spec in defaults.BEHAVIOUR_RULES:
-        rule = existing_rules.get(("behaviour", spec["name"]))
+    # Behaviour detections are code (sandbox.detections). Each has a rule row so it can
+    # be disabled, re-weighted and listed like any rule; the row's body is the rule as
+    # plain text, refreshed from the code on every start.
+    for d in catalog.detections():
+        body = d.rule_text()
+        rule = existing_rules.get(("behaviour", d.name))
         if rule is None:
             db.add(
                 Rule(
                     id=new_id("ru"),
                     engine="behaviour",
                     source=defaults.BUILTIN_SOURCE,
-                    content_hash=content_hash(spec["body"]),
+                    name=d.name,
+                    body=body,
+                    content_hash=content_hash(body),
                     version="1",
                     licence="internal",
-                    **spec,
+                    severity=d.severity,
+                    tags=list(d.tags),
+                    attack_ids=list(d.attack),
+                    description=d.description,
                 )
             )
             changed += 1
         else:
-            changed += _refresh(
-                rule,
-                spec["body"],
-                description=spec["description"],
-                attack_ids=spec["attack_ids"],
-            )
+            if rule.modified_by:  # a JSON body edited in Admin before detections were code
+                rule.modified_by = None
+                rule.content_hash = ""
+            changed += _refresh(rule, body, description=d.description, attack_ids=list(d.attack))
+    # Behaviour rules written in Admin as JSON no longer run: every behaviour verdict
+    # comes from a detection in code. Keep the rows (and their history) but mark them.
+    for rule in await db.scalars(
+        select(Rule).where(
+            Rule.engine == "behaviour", Rule.source != defaults.BUILTIN_SOURCE, Rule.error.is_(None)
+        )
+    ):
+        rule.error = LOCAL_BEHAVIOUR_RETIRED
+        changed += 1
     for name, raw in defaults.BUILTIN_YARA.items():
         body = raw.strip()
         meta = yara_metadata(body)
@@ -96,7 +118,7 @@ async def ensure_defaults(db: AsyncSession) -> None:
             )
 
     weights = set(await db.scalars(select(ScoringConfig.tag_or_rule)))
-    for key, weight in defaults.DEFAULT_WEIGHTS.items():
+    for key, weight in catalog.default_weights().items():
         if key not in weights:
             db.add(ScoringConfig(tag_or_rule=key, weight=weight, updated_by="seed"))
 

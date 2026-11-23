@@ -4,80 +4,107 @@ import zipfile
 
 import pytest
 
+from sandbox.detections import catalog
+from sandbox.detections.model import SEVERITIES, all_of, any_of, detection, not_, sig
 from sandbox.feeds import parsers
 from sandbox.rules import defaults
-from sandbox.rules.behaviour import RuleSyntaxError, evaluate, parse_rule
 from sandbox.rules.importer import parse_suricata_line, validate_yara, yara_metadata
 from sandbox.runner.events import STDOUT_PREFIX, parse_stdout_line
 from sandbox.storage import LocalStore
 
 FACTS = {"forms": {"cross": 2, "list": ["a"]}, "final": {"host": "x.example", "ok": True}}
+CROSS, OK, HOST, GONE = sig("forms.cross"), sig("final.ok"), sig("final.host"), sig("missing.path")
+
+
+def _detection(when, evidence=()):
+    return detection(
+        "t",
+        title="t",
+        severity="high",
+        score=10,
+        tags=[],
+        attack=[],
+        description="",
+        when=when,
+        evidence=evidence,
+        register=False,
+    )
 
 
 @pytest.mark.parametrize(
     ("condition", "expected"),
     [
-        ({"fact": "forms.cross", "op": "gt", "value": 1}, True),
-        ({"fact": "forms.cross", "op": "lt", "value": 1}, False),
-        ({"fact": "missing.path", "op": "gt", "value": 0}, False),
-        ({"fact": "missing.path", "op": "exists", "value": False}, True),
-        ({"fact": "final.host", "op": "matches", "value": r"\.example$"}, True),
-        ({"fact": "forms.list", "op": "any_matches", "value": "^a$"}, True),
-        (
-            {
-                "all": [
-                    {"fact": "final.ok", "op": "eq", "value": True},
-                    {"not": {"fact": "forms.cross", "op": "eq", "value": 0}},
-                ]
-            },
-            True,
-        ),
-        (
-            {
-                "any": [
-                    {"fact": "forms.cross", "op": "eq", "value": 0},
-                    {"fact": "final.ok", "op": "eq", "value": False},
-                ]
-            },
-            False,
-        ),
-        ({"fact": "final.host", "op": "gt", "value": 3}, False),  # type mismatch is a miss
+        (CROSS > 1, True),
+        (CROSS < 1, False),
+        (GONE > 0, False),
+        (not_(GONE.present()), True),
+        (HOST.one_of(["x.example", "y.example"]), True),
+        (all_of(OK.is_true(), not_(CROSS.equals(0))), True),
+        (any_of(CROSS.equals(0), OK.equals(False)), False),
+        (HOST > 3, False),  # type mismatch is a miss
+        (OK.is_true() & ~(CROSS.equals(0)), True),
+        (CROSS.equals(0) | OK.is_true(), True),
     ],
 )
-def test_behaviour_conditions(condition, expected):
-    assert evaluate(parse_rule({"condition": condition}), FACTS).matched is expected
+def test_detection_conditions(condition, expected):
+    assert _detection(condition).evaluate(FACTS).matched is expected
 
 
-def test_behaviour_records_facts_and_evidence():
-    rule = parse_rule(
-        {"condition": {"fact": "forms.cross", "op": "gt", "value": 0}, "evidence": ["final.host"]}
-    )
-    outcome = evaluate(rule, FACTS)
-    assert outcome.facts == {"forms.cross": 2, "final.host": "x.example"}
+def test_detection_records_values_checks_and_evidence():
+    outcome = _detection(all_of(CROSS > 0, OK.is_true()), evidence=["final.host"]).evaluate(FACTS)
+    assert outcome.facts == {"forms.cross": 2, "final.ok": True, "final.host": "x.example"}
+    assert [c["passed"] for c in outcome.checks] == [True, True]
+    assert outcome.checks[0]["value"] == 2
+
+
+def test_any_of_checks_every_branch():
+    """The report shows every value a rule looked at, so ``any`` never short-circuits."""
+    outcome = _detection(any_of(CROSS > 0, OK.is_true())).evaluate(FACTS)
+    assert len(outcome.checks) == 2
 
 
 @pytest.mark.parametrize(
-    "body",
-    [
-        {},
-        {"condition": {}},
-        {"condition": {"fact": "a"}},
-        {"condition": {"fact": "a", "op": "nope"}},
-        {"condition": {"all": []}},
-        {"condition": {"fact": "a", "op": "matches", "value": "("}},
-        {"condition": {"fact": "a", "op": "eq"}, "evidence": "x"},
-    ],
+    "kwargs",
+    [{"severity": "nope"}, {"score": 101}, {"score": -1}],
 )
-def test_behaviour_syntax_errors(body):
-    with pytest.raises(RuleSyntaxError):
-        parse_rule(body)
+def test_detection_declaration_errors(kwargs):
+    base = dict(
+        title="t",
+        severity="high",
+        score=10,
+        tags=[],
+        attack=[],
+        description="",
+        when=CROSS > 0,
+        register=False,
+    )
+    with pytest.raises(ValueError):
+        detection("t", **{**base, **kwargs})
 
 
-def test_builtin_rules_are_valid():
-    for spec in defaults.BEHAVIOUR_RULES:
-        parse_rule(spec["body"])
+def test_builtin_detections_load_and_are_documented():
+    assert len(catalog.detections()) >= 85
+    for d in catalog.detections():
+        assert d.title and d.description and d.severity in SEVERITIES, d.name
+        for s in d.signals():  # the catalog refuses to load an undeclared signal
+            assert s.title and s.description, (d.name, s.path)
+        assert d.rule_text().startswith("Fires when")
     for name, body in defaults.BUILTIN_YARA.items():
         assert validate_yara(body) is None, name
+
+
+def test_every_signal_is_read_by_a_detection_and_exists_in_the_observed_values():
+    from sandbox.detections.base import CaptureData
+    from sandbox.detections.model import _MISSING, SIGNALS, get_value
+    from sandbox.detections.observe import build_facts
+
+    used = {s.path for d in catalog.detections() for s in d.signals()}
+    assert used == set(SIGNALS)
+    facts = build_facts(CaptureData(result={"url": "https://a.example/", "pages": []}))
+    # Fake-wallet values only exist when the wallet profile ran.
+    optional = {"web3.wallet_requests", "web3.wallet_drainer"}
+    missing = [p for p in SIGNALS if p not in optional and get_value(facts, p) is _MISSING]
+    assert missing == []
 
 
 def test_yara_validation_and_metadata():

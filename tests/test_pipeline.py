@@ -20,11 +20,11 @@ import pyzipper
 from pydantic import SecretStr
 from sqlalchemy import select, text, update
 
-from sandbox.detections import strings as detection
 from sandbox.api.deps import get_resolver
 from sandbox.api.main import create_app
 from sandbox.config import Settings
 from sandbox.db.models import Analysis, Feed, Session
+from sandbox.detections import strings as detection
 from sandbox.orchestrator import maintenance
 from sandbox.orchestrator.backend import SessionHandle, Snapshot
 from sandbox.orchestrator.context import WorkerContext
@@ -690,12 +690,27 @@ async def test_rules_bundles_and_rule_testing(env):
             json={
                 "engine": "behaviour",
                 "severity": "high",
-                "body": '{"condition": {"fact": "clipboard.command_like", "op": "gt", "value": 0}}',
+                "body": "clickfix_clipboard_command",
             },
             headers=ENGINEER,
         )
     ).json()
     assert tested["tested"] == 1 and tested["matched"] == 1
+    assert tested["results"][0]["evidence"]["clipboard.clickfix_like"] >= 1
+    # Behaviour detections are code: no JSON rule can be created or edited in Admin.
+    refused = await client.post(
+        "/v1/rules",
+        json={"engine": "behaviour", "name": "x", "body": '{"condition": {}}'},
+        headers=ENGINEER,
+    )
+    assert refused.status_code == 422
+    edit = await client.patch(f"/v1/rules/{target['id']}", json={"body": "{}"}, headers=ENGINEER)
+    assert edit.status_code == 409 and edit.json()["error"] == "detection_in_code"
+    detail = (await client.get(f"/v1/rules/{target['id']}", headers=ALICE)).json()
+    assert detail["detection"]["title"] == "Hidden third-party iframe"
+    assert detail["detection"]["signals"][0]["path"] == "frames.hidden_iframes"
+    listed = (await client.get("/v1/detections", headers=ALICE)).json()["items"]
+    assert len(listed) >= 85
     yara_test = (
         await client.post(
             "/v1/rules/test",
@@ -871,7 +886,7 @@ async def test_seed_refreshes_builtin_rules_and_merges_brand_domains(env):
         await db.commit()
 
         await db.refresh(rule)
-        assert '"brand.credential_prompt"' in rule.body
+        assert "Brand page asks for a secret" in rule.body  # the rule as plain text
         assert rule.version == "2"
         assert await db.scalar(select(RuleOverride.active).where(RuleOverride.rule_id == rule.id))
         await db.refresh(google)

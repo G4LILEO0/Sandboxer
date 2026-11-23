@@ -22,9 +22,9 @@ from sandbox.db.models import (
     RuleOverride,
     ScoringConfig,
 )
+from sandbox.detections import catalog
 from sandbox.ids import new_id
 from sandbox.orchestrator import jobs
-from sandbox.rules.behaviour import RuleSyntaxError, evaluate, parse_rule
 from sandbox.rules.bundles import activate_bundle
 from sandbox.rules.defaults import BUILTIN_SOURCE, builtin_body
 from sandbox.rules.importer import content_hash, validate_yara, yara_metadata
@@ -61,10 +61,17 @@ def rule_dict(r: Rule, overridden: bool = False, full: bool = False) -> dict[str
         "content_hash": r.content_hash,
         "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         "modified_by": r.modified_by,
-        "editable": r.source in ("local", BUILTIN_SOURCE),
+        # A behaviour rule is a detection in code (sandbox.detections): its row can be
+        # disabled and re-weighted, and severity and tags edited, but not its body.
+        "editable": r.source in ("local", BUILTIN_SOURCE) and r.engine != "behaviour",
     }
+    if r.engine == "behaviour" and (d := catalog.get(r.name)):
+        out["title"] = d.title
+        out["score"] = d.score
     if full:
         out["body"] = r.body
+        if r.engine == "behaviour" and (d := catalog.get(r.name)):
+            out["detection"] = catalog.describe(d)
     return out
 
 
@@ -165,14 +172,17 @@ class RuleCreate(BaseModel):
     enabled: bool = False
 
 
+DETECTION_IN_CODE = (
+    "Behaviour detections are written in code, one model for every rule: add or change "
+    "one in sandbox/detections (see docs/detection-rules.md)."
+)
+
+
 def _validate(engine: str, body: str) -> str | None:
     if engine == "yara":
         return validate_yara(body)
     if engine == "behaviour":
-        try:
-            parse_rule(body)
-        except (RuleSyntaxError, ValueError) as exc:
-            return str(exc)
+        return DETECTION_IN_CODE
     if engine == "suricata" and "sid:" not in body.replace(" ", ""):
         return "Suricata rules need a sid"
     return None
@@ -237,6 +247,8 @@ async def update_rule(
     if rule is None:
         raise _error(404, "not_found", f"No rule {rule_id}")
     if body.body is not None:
+        if rule.engine == "behaviour":
+            raise _error(409, "detection_in_code", DETECTION_IN_CODE)
         if rule.source not in ("local", BUILTIN_SOURCE):
             raise _error(
                 409,
@@ -374,13 +386,22 @@ class RuleTest(BaseModel):
 @router.post("/rules/test")
 async def test_rule(body: RuleTest, principal: Engineer, db: Db, store: Store) -> dict[str, Any]:
     """FED-13: run a draft rule over recent stored analyses and show which verdicts would
-    change. Nothing is saved."""
-    error = _validate(body.engine, body.body)
-    if error:
-        raise _error(422, "invalid_rule", error)
+    change. Nothing is saved. For a behaviour detection, ``body`` is its name: it runs
+    over each analysis's stored observed values, exactly as a re-analysis would."""
+    detection = None
+    if body.engine == "behaviour":
+        detection = catalog.get(body.body.strip())
+        if detection is None:
+            raise _error(422, "invalid_rule", f"No detection named {body.body.strip()!r}")
+    else:
+        error = _validate(body.engine, body.body)
+        if error:
+            raise _error(422, "invalid_rule", error)
     weights = await load_weights(db)
     thresholds = await get_config(db, "verdict_thresholds")
     weight = weights.get(f"severity:{body.severity}", (SEVERITY_FALLBACK[body.severity], None))[0]
+    if detection is not None:
+        weight = weights.get(detection.name, (detection.score, None))[0]
     rows = (
         await db.execute(
             select(Analysis, AnalysisVersion)
@@ -402,12 +423,11 @@ async def test_rule(body: RuleTest, principal: Engineer, db: Db, store: Store) -
         from sandbox.rules.importer import YARA_COMPILE_OPTIONS
 
         compiled = yara.compile(source=body.body, **YARA_COMPILE_OPTIONS)
-    parsed = parse_rule(body.body) if body.engine == "behaviour" else None
     results = []
     for analysis, version in rows:
         matched, evidence = False, {}
-        if parsed is not None:
-            outcome = evaluate(parsed, version.summary.get("facts", {}))
+        if detection is not None:
+            outcome = detection.evaluate(version.summary.get("facts", {}))
             matched, evidence = outcome.matched, outcome.facts
         else:
             artifacts = await db.scalars(
@@ -455,6 +475,13 @@ async def test_rule(body: RuleTest, principal: Engineer, db: Db, store: Store) -
 
 
 # --- bundles ---------------------------------------------------------------------------
+
+
+@router.get("/detections")
+async def list_detections(principal: RulesReader) -> dict[str, Any]:
+    """Every behaviour detection with its rule as sentences, its score, and each signal it
+    reads (title, how it is computed, where the code is)."""
+    return {"items": [catalog.describe(d) for d in catalog.detections()]}
 
 
 def bundle_dict(b: RuleBundle) -> dict[str, Any]:

@@ -21,6 +21,7 @@ from sandbox.detections.base import (
     _same_site,
     _split_analyst_hops,
 )
+from sandbox.detections.model import all_of, any_of, detection, not_, sig, signal
 
 
 def _redirects(data: CaptureData) -> dict[str, Any]:
@@ -230,3 +231,321 @@ def frames_section(cap: Capture) -> dict[str, Any]:
         "smuggled_credential_pages": len(smuggled),
         "smuggled_credential_urls": smuggled[:10],
     }
+
+
+# --- signals: the values this area observes --------------------------------------------
+
+signal(
+    "redirects.count",
+    "Redirect hops",
+    (
+        "Hops in the redirect chain, not counting hops the analyst caused (a click or typed "
+        "URL within 3 seconds)."
+    ),
+)
+
+signal(
+    "redirects.cross_domain",
+    "Cross-site redirect hops",
+    ("Redirect hops that move to a different site (sites of one brand count as the same site)."),
+)
+
+signal(
+    "redirects.https_downgrade",
+    "HTTPS to HTTP redirect",
+    "A redirect hop goes from an https: URL to an http: URL.",
+)
+
+signal(
+    "redirects.chain",
+    "Redirect chain",
+    "From, to, type and timing of each redirect hop (first 30).",
+)
+
+signal(
+    "redirects.oauth_error_bounce_count",
+    "OAuth error bounces",
+    (
+        "A redirect to a real identity provider's authorize endpoint with prompt=none "
+        "(Microsoft or Google) is followed by a redirect to a non-IdP host carrying an OAuth "
+        "error (string microsoft.oauth_error): the IdP's own redirect abused as an open "
+        "redirector."
+    ),
+)
+
+signal(
+    "redirects.oauth_error_bounce",
+    "OAuth error bounce details",
+    "IdP and redirect host of each OAuth error bounce (first 10).",
+)
+
+signal(
+    "navigation.protocol_handler_attempts",
+    "Protocol-handler links",
+    (
+        "Distinct search-ms:, ms-search: or search: links, or WebDAV UNC paths (string "
+        "network.webdav_unc), in links, meta refreshes, raw HTML (string "
+        "network.search_ms_link) or blocked navigations, on sites that are not allowlisted. "
+        "These open Windows Explorer on an attacker share."
+    ),
+)
+
+signal(
+    "navigation.protocol_handler_targets",
+    "Protocol-handler targets",
+    "The protocol-handler links found (first 10).",
+)
+
+signal(
+    "navigation.protocol_handler_hosts",
+    "Protocol-handler hosts",
+    (
+        "The remote hosts the protocol-handler links point at (string "
+        "network.search_location), first 10."
+    ),
+)
+
+signal(
+    "navigation.protocol_handler_tunnel",
+    "Protocol handler points at a tunnel or free host",
+    (
+        "A protocol-handler link points at a host on free hosting or a tunnel service (string "
+        "hosting.free_hosting)."
+    ),
+)
+
+signal(
+    "navigation.protocol_handler_masquerade",
+    "Protocol handler with a fake folder name",
+    "A protocol-handler link sets displayname=, so Explorer shows a harmless folder name.",
+)
+
+signal(
+    "navigation.protocol_handler_pretext",
+    "Document pretext with a protocol handler",
+    (
+        "A page that carries a protocol-handler link also has document wording (string "
+        "lures.document_pretext), such as 'view the invoice'."
+    ),
+)
+
+signal(
+    "navigation.scripted_bounce",
+    "Scripted bounce to a decoy",
+    (
+        "Script, meta-refresh or Refresh-header hops (not caused by the analyst) to a decoy "
+        "host (string network.cloaking_decoy_hosts) or to about:blank: cloaking that hides "
+        "the real page from scanners."
+    ),
+)
+
+signal(
+    "navigation.scripted_bounces",
+    "Scripted bounce details",
+    "Target and type of each scripted bounce (first 10).",
+)
+
+signal(
+    "frames.hidden_iframes",
+    "Hidden third-party iframes",
+    (
+        "Hidden iframes with a real http(s) URL on a different registrable domain from their "
+        "page, not allowlisted."
+    ),
+)
+
+signal(
+    "frames.hidden_iframe_urls",
+    "Hidden iframe URLs",
+    "The URLs of the hidden third-party iframes (first 10).",
+)
+
+signal(
+    "frames.smuggled_credential_pages",
+    "Credential pages in blob: or about: documents",
+    (
+        "Frames whose URL is blob:, about:srcdoc or about:blank and that ask for a secret: a "
+        "sign-in page built in the browser by script (HTML smuggling)."
+    ),
+)
+
+signal(
+    "frames.smuggled_credential_urls",
+    "Smuggled credential page URLs",
+    "The URLs of credential pages in blob: or about: documents (first 10).",
+)
+
+
+# --- detections ------------------------------------------------------------------------
+
+detection(
+    "suspicious_redirect_chain",
+    title="Suspicious redirect chain",
+    severity="medium",
+    score=25,
+    tags=["suspicious-redirect", "cloaking"],
+    attack=["T1608.005"],
+    description=(
+        "Three or more cross-site redirects, a long chain through several sites, or an https "
+        "to http downgrade."
+    ),
+    when=any_of(
+        sig("redirects.cross_domain") >= 3,
+        sig("redirects.https_downgrade").is_true(),
+        all_of(
+            sig("redirects.count") >= 5,
+            sig("redirects.cross_domain") >= 2,
+        ),
+    ),
+    evidence=[
+        "redirects.chain",
+    ],
+)
+
+detection(
+    "hidden_iframe",
+    title="Hidden third-party iframe",
+    severity="low",
+    score=10,
+    tags=["hidden-iframe"],
+    attack=[],
+    description="The page embeds an invisible iframe.",
+    when=sig("frames.hidden_iframes") > 0,
+    evidence=[
+        "frames.hidden_iframe_urls",
+    ],
+)
+
+detection(
+    "oauth_error_redirect_abuse",
+    title="OAuth error redirect used as an open redirector",
+    severity="high",
+    score=55,
+    tags=["phishing", "redirector-abuse"],
+    attack=["T1566.002", "T1204.001"],
+    description=(
+        "A real identity provider rejected an OAuth authorize request with prompt=none "
+        "(error=interaction_required/access_denied) and redirected it to a non-IdP host."
+    ),
+    when=all_of(
+        sig("redirects.oauth_error_bounce_count") > 0,
+        not_(sig("final.allowlisted").is_true()),
+    ),
+    evidence=[
+        "redirects.oauth_error_bounce",
+        "redirects.chain",
+    ],
+)
+
+detection(
+    "protocol_handler_lure",
+    title="Protocol-handler lure (search-ms, WebDAV)",
+    severity="high",
+    score=50,
+    tags=["protocol-handler", "webdav", "malware-download"],
+    attack=["T1204.001", "T1221"],
+    description=(
+        "The page opens Windows search (search-ms:) or a WebDAV share. It also has a document "
+        "pretext, a renamed results view (displayname) or a tunnel host. Explorer then shows "
+        "the attacker's remote files as if they were the visitor's own."
+    ),
+    when=all_of(
+        sig("navigation.protocol_handler_attempts") > 0,
+        any_of(
+            sig("navigation.protocol_handler_pretext").is_true(),
+            sig("navigation.protocol_handler_masquerade").is_true(),
+            sig("navigation.protocol_handler_tunnel").is_true(),
+        ),
+    ),
+    evidence=[
+        "navigation.protocol_handler_targets",
+        "navigation.protocol_handler_hosts",
+    ],
+)
+
+detection(
+    "protocol_handler_attempt",
+    title="Protocol-handler link (search-ms, WebDAV)",
+    severity="medium",
+    score=30,
+    tags=["protocol-handler"],
+    attack=["T1204.001"],
+    description=(
+        "A non-allowlisted page tries to open Windows search (search-ms:) or a WebDAV share. "
+        "Ordinary web pages do not open Explorer."
+    ),
+    when=sig("navigation.protocol_handler_attempts") > 0,
+    evidence=[
+        "navigation.protocol_handler_targets",
+        "final.url",
+    ],
+)
+
+detection(
+    "smuggled_credential_page",
+    title="Credential page built in the browser (HTML smuggling)",
+    severity="high",
+    score=55,
+    tags=["phishing", "smuggling"],
+    attack=["T1027.006", "T1566.002"],
+    description=(
+        "A blob: or about: document created by the page carries a credential form: an HTML- "
+        "smuggled phishing page assembled in the browser."
+    ),
+    when=sig("frames.smuggled_credential_pages") > 0,
+    evidence=[
+        "frames.smuggled_credential_urls",
+        "final.url",
+    ],
+)
+
+detection(
+    "cloaking_scripted_bounce",
+    title="Cloaking bounce to a decoy page",
+    severity="medium",
+    score=30,
+    tags=["cloaking", "evasion"],
+    attack=["T1497", "T1036"],
+    description=(
+        "A script bounced the top-level page to a decoy (about:blank, a 404, a big brand "
+        "homepage) on a young, free-hosted or obfuscated submitted site."
+    ),
+    when=all_of(
+        sig("navigation.scripted_bounce") > 0,
+        any_of(
+            sig("domains.chain_youngest_age_days") < 90,
+            sig("final.free_hosting").present(),
+            sig("scripts.max_obfuscation_score") >= 3,
+        ),
+    ),
+    evidence=[
+        "navigation.scripted_bounces",
+        "final.url",
+    ],
+)
+
+detection(
+    "trusted_redirector_to_lure",
+    title="Trusted redirector leads to a lure",
+    severity="medium",
+    score=20,
+    tags=["redirector-abuse", "phishing"],
+    attack=["T1566.002", "T1204.001"],
+    description=(
+        "The chain included a trusted redirector or open redirect (Google AMP, ad click, Safe "
+        "Links, a URL shortener). The run also tripped a phishing, ClickFix or download "
+        "signal."
+    ),
+    when=all_of(
+        sig("network.trusted_redirectors").present(),
+        any_of(
+            sig("brand.credential_prompt").is_true(),
+            sig("clipboard.command_like") > 0,
+            sig("downloads.unprompted_risky") > 0,
+        ),
+    ),
+    evidence=[
+        "network.trusted_redirectors",
+        "final.url",
+    ],
+)

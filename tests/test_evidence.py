@@ -4,30 +4,41 @@ import hashlib
 
 from sandbox.analysis.engine import behaviour_hits
 from sandbox.api.evidence import SAMPLE_CAP, entropy, resolve
-from sandbox.rules.behaviour import parse_rule
+from sandbox.detections.model import all_of, any_of, detection, not_, sig
 
 PACKED = "".join(chr(33 + (i * 7919) % 90) for i in range(3000))
 SHORT_EVAL = "var x = atob('aGVsbG8='); " * 20
 DYN_SHA = hashlib.sha256(PACKED.encode()).hexdigest()
 
-RUNTIME_RULE = {
-    "id": "r1",
-    "name": "runtime_dynamic_execution",
-    "description": "Packed code run through eval.",
-    **parse_rule(
-        {
-            "condition": {
-                "all": [
-                    {"fact": "js.code_exec_count", "op": "gte", "value": 2},
-                    {"fact": "js.code_exec_max_len", "op": "gt", "value": 1024},
-                    {"fact": "js.code_exec_max_entropy", "op": "gt", "value": 4.5},
-                    {"not": {"fact": "final.allowlisted", "op": "eq", "value": True}},
-                ]
-            },
-            "evidence": ["js.dynamic_exec_count"],
-        }
+
+def _rule(name, when, evidence=(), description=""):
+    """A detection that is not in the catalog, as the engine and the resolver take it."""
+    d = detection(
+        name,
+        title=name,
+        severity="medium",
+        score=25,
+        tags=[],
+        attack=[],
+        description=description,
+        when=when,
+        evidence=evidence,
+        register=False,
+    )
+    return {"id": name, "name": name, "description": description, "detection": d}
+
+
+RUNTIME_RULE = _rule(
+    "runtime_dynamic_execution",
+    all_of(
+        sig("js.code_exec_count") >= 2,
+        sig("js.code_exec_max_len") > 1024,
+        sig("js.code_exec_max_entropy") > 4.5,
+        not_(sig("final.allowlisted").is_true()),
     ),
-}
+    evidence=["js.dynamic_exec_count"],
+    description="Packed code run through eval.",
+)
 
 
 def _artifact(id_, kind, name, sha256="0" * 64, quarantined=False):
@@ -91,7 +102,10 @@ def test_runtime_dynamic_execution_returns_the_evald_code():
         "negated": False,
         "group": "all",
         "passed": True,
+        "title": "Code run through eval or Function",
+        "test": "Code run through eval or Function is at least 2",
     }
+    assert leaves["final.allowlisted"]["test"] == "not: Final site allowlisted"
     assert leaves["final.allowlisted"]["negated"] and leaves["final.allowlisted"]["passed"]
     assert all(c["passed"] for c in ev["condition"])
     # The full decoded script, plus the short eval'd string; the 4 KB prefix of the
@@ -121,19 +135,7 @@ def test_long_samples_are_capped():
 
 
 def test_failed_leaf_under_any_is_marked():
-    rule = {
-        "name": "r",
-        **parse_rule(
-            {
-                "condition": {
-                    "any": [
-                        {"fact": "clipboard.command_like", "op": "gt", "value": 0},
-                        {"fact": "clipboard.writes", "op": "gt", "value": 5},
-                    ]
-                }
-            }
-        ),
-    }
+    rule = _rule("r", any_of(sig("clipboard.command_like") > 0, sig("clipboard.writes") > 5))
     facts = {"clipboard": {"command_like": 1, "writes": 1}}
     [hit] = behaviour_hits([rule], facts)
     ev = resolve(
@@ -170,15 +172,7 @@ def test_yara_hit_links_the_file_and_match_strings():
 
 
 def test_fallback_links_artifacts_named_in_facts():
-    rule = {
-        "name": "risky",
-        **parse_rule(
-            {
-                "condition": {"fact": "network.weird", "op": "gt", "value": 0},
-                "evidence": ["network.details"],
-            }
-        ),
-    }
+    rule = _rule("risky", sig("network.weird") > 0, evidence=["network.details"])
     facts = {"network": {"weird": 1, "details": [{"sha256": "d" * 64}, {"file": "abc.js"}]}}
     [hit] = behaviour_hits([rule], facts)
     ev = resolve(hit, rule, all_facts=facts, artifacts=ARTIFACTS, capture={}, read=_read)
