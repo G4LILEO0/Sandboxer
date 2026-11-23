@@ -13,6 +13,7 @@ from sandbox.analysis.domains import (
 from sandbox.detections import strings as S
 from sandbox.detections.base import (
     _SCRIPT_POST_TYPES,
+    Capture,
     CaptureData,
     _all_frames,
     _frame_script_posted,
@@ -185,3 +186,12 @@ def _script_posted_credentials(
         "script_posted_credentials": sum(p["credential_body"] for p in posts),
         "script_posted_targets": posts[:10],
     }
+
+
+# --- observed values ---------------------------------------------------------------------
+
+
+def forms_section(cap: Capture) -> dict[str, Any]:
+    """Forms and credential prompts, and where their contents are sent."""
+    data = cap.data
+    return {**_forms(data), **_script_posted_credentials(data, cap.reqs), **_apps_script(data)}

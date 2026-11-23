@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from sandbox.detections import strings as S
-from sandbox.detections.base import CaptureData, _all_frames, _magic_type
+from sandbox.detections.base import Capture, CaptureData, _all_frames, _magic_type
 
 # Detection strings (keyword patterns, host lists, file types, points) live in
 # sandbox/detection/defaults/*.toml and are edited in Admin > Detection strings; each
@@ -202,4 +202,19 @@ def _archive_listing(data: CaptureData) -> dict[str, Any]:
         "archive_inner_risky": inner_risky,
         "archive_encrypted": encrypted,
         "archive_password_on_page": password_on_page,
+    }
+
+
+# --- observed values ---------------------------------------------------------------------
+
+
+def downloads_section(cap: Capture) -> dict[str, Any]:
+    """Downloaded files: type, how they started, archive contents."""
+    data = cap.data
+    mislabeled = _mislabeled_images(data)
+    return {
+        **_downloads(data),
+        **_archive_listing(data),
+        "mislabeled_image": len(mislabeled),
+        "mislabeled_images": mislabeled[:10],
     }

@@ -6,18 +6,25 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from sandbox.analysis.domains import (
+    display_host,
     free_hosting,
+    government_lookalike,
+    is_confusable_idn,
+    is_punycode,
     lookalike,
+    registrable,
     site,
 )
 from sandbox.detections import strings as S
 from sandbox.detections.base import (
     PROMPT_POINTS,
+    Capture,
     CaptureData,
     _all_frames,
     _credential_prompt,
     _frames,
     _host,
+    chain_hosts,
 )
 
 _TITLE_LURE = S.bind(globals(), "_TITLE_LURE", "lures.title_lure")
@@ -210,3 +217,72 @@ def _abuse_interstitial(data: CaptureData, final_host: str) -> dict[str, str] | 
         if bypass and warning:
             return {"provider": "cloudflare", "kind": warning.group(1).lower()}
     return None
+
+
+# --- observed values ---------------------------------------------------------------------
+
+
+def final_section(cap: Capture) -> dict[str, Any]:
+    """Where the session ended: the final URL and what is known about its host."""
+    data, final_url, final_host = cap.data, cap.final_url, cap.final_host
+    return {
+        "url": final_url,
+        "host": final_host,
+        "domain": registrable(final_host) if final_host else None,
+        "display_host": display_host(final_host) if final_host else None,
+        "allowlisted": cap.final_allowlisted,
+        "free_hosting": free_hosting(final_host) if final_host else None,
+        "ipfs": _final_ipfs(final_url),
+        "title": data.result.get("title") or "",
+        "abuse_interstitial": _abuse_interstitial(data, final_host) if final_host else None,
+    }
+
+
+def domains_section(cap: Capture) -> dict[str, Any]:
+    """Every contacted host: count, punycode, lookalikes and registration ages."""
+    data, hosts = cap.data, cap.hosts
+    regs = sorted({registrable(h) for h in hosts})
+    looks = [lk for h in hosts if (lk := lookalike(h, data.brands, data.allowlisted))]
+    gov_looks = [g for h in hosts if (g := government_lookalike(h, data.brands, data.allowlisted))]
+    ages = {d: a for d, a in data.domain_ages.items() if a is not None}
+    young = sorted(
+        ({"domain": d, "age_days": a} for d, a in ages.items() if a < 30),
+        key=lambda x: x["age_days"],
+    )
+    # Domains the visitor actually travels through, as opposed to third-party resources
+    # (ad and analytics domains rotate often and are frequently young).
+    chain_regs = {registrable(h) for h in chain_hosts(data)}
+    chain_ages = [a for d, a in ages.items() if d in chain_regs]
+    final_reg = registrable(cap.final_host) if cap.final_host else None
+    return {
+        "count": len(regs),
+        "hosts": hosts[:200],
+        "registrable": regs[:200],
+        "punycode": sum(is_punycode(h) for h in hosts),
+        "punycode_confusable": sum(is_confusable_idn(h) for h in hosts),
+        "punycode_hosts": [
+            {"host": h, "display": display_host(h)} for h in hosts if is_punycode(h)
+        ],
+        "lookalike": len(looks),
+        "lookalikes": looks[:10],
+        "government_lookalike": len(gov_looks),
+        "government_lookalikes": gov_looks[:10],
+        "youngest_age_days": min(ages.values()) if ages else None,
+        "chain_youngest_age_days": min(chain_ages) if chain_ages else None,
+        "final_age_days": ages.get(final_reg) if final_reg else None,
+        "young": young[:10],
+        "ages": ages,
+    }
+
+
+def brand_section(cap: Capture) -> dict[str, Any]:
+    """Which brand the page claims to be, and whether it asks for credentials."""
+    data = cap.data
+    forms = cap.section("forms")
+    favicons = _favicon_lookups(data, cap.reqs)
+    return {
+        **_brand(data, forms["cross_domain_credential_forms"]),
+        "hosting_label": _hosting_brand_label(data),
+        "favicon_lookups": favicons[:10],
+        "favicon_lookup_count": len(favicons),
+    }

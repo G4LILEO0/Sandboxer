@@ -7,6 +7,7 @@ from sandbox.analysis.domains import (
 )
 from sandbox.detections import strings as S
 from sandbox.detections.base import (
+    Capture,
     CaptureData,
     _all_frames,
     _frame_script_posted,
@@ -182,3 +183,19 @@ def _open_download_pages(data: CaptureData) -> list[str]:
             if _OPEN_DOWNLOAD.search(str(frame.get("text", ""))):
                 out.append(frame.get("url", ""))
     return sorted(set(out))[:10]
+
+
+# --- observed values ---------------------------------------------------------------------
+
+
+def lure_section(cap: Capture) -> dict[str, Any]:
+    """Social-engineering wording and fake pages (Run-dialog steps, fake CAPTCHA, fake update)."""
+    data = cap.data
+    return {
+        **_lure(data),
+        **_fake_captcha(data, cap.reqs),
+        "fake_update_pages": _fake_update(data),
+        "open_download_pages": _open_download_pages(data),
+        "crash_repair_pages": _crash_repair(data),
+        "fake_os_update_pages": _fake_os_update(data),
+    }

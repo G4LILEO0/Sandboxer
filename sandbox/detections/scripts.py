@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 from sandbox.detections import strings as S
-from sandbox.detections.base import CaptureData, _all_frames, _entropy, _inline_scripts
+from sandbox.detections.base import Capture, CaptureData, _all_frames, _entropy, _inline_scripts
 from sandbox.runner.page_scripts import is_harness_code
 
 _OBFUSCATION_SIGNALS = S.bind(
@@ -137,3 +137,29 @@ def _invisible_unicode(data: CaptureData) -> dict[str, Any]:
         )
     found.sort(key=lambda f: -f["longest_run"])
     return {"invisible_unicode": len(found), "invisible_unicode_details": found[:10]}
+
+
+# --- observed values ---------------------------------------------------------------------
+
+
+def scripts_section(cap: Capture) -> dict[str, Any]:
+    """Scripts the page loaded: obfuscation score, known libraries, hidden characters."""
+    data = cap.data
+    scripts = []
+    for sha, text in data.scripts.items():
+        score, signals = obfuscation(text)
+        if score:
+            scripts.append({"sha256": sha, "score": score, "signals": signals})
+    scripts.sort(key=lambda s: -s["score"])
+    return {
+        "count": len(data.scripts),
+        "max_obfuscation_score": scripts[0]["score"] if scripts else 0,
+        "obfuscated": scripts[:10],
+        "libraries": _libraries(data),
+        **_invisible_unicode(data),
+    }
+
+
+def js_section(cap: Capture) -> dict[str, Any]:
+    """Browser APIs the page called (eval, blobs, fullscreen, notifications, history)."""
+    return _jsapi_facts(cap.data)
