@@ -1,0 +1,41 @@
+// Requests to an IP address and geolocation service (string exfiltration.ip_lookup_hosts):
+// kits look up the visitor's country to choose a lure or to drop sandboxes.
+let ip_lookups =
+    requests
+    | where host in (list("exfiltration.ip_lookup_hosts"))
+    | distinct host;
+
+// WebSocket connections to a host that is not allowlisted and that no known brand owns
+// (chat and analytics widgets use brand-owned hosts; kits relay from their own host).
+let foreign_websockets =
+    websockets
+    | where isnotempty(host) and not allowlisted(host) and not owned_by(host);
+
+// Socket.IO long-polling to a host that is not allowlisted.
+let foreign_socketio_polling =
+    socketio_polling
+    | where not allowlisted(host);
+
+// An interception web proxy kit (Ultraviolet, Scramjet, Rammerhead) loaded from a host
+// that is not allowlisted, by its file names, its globals in page HTML or a script.
+let web_proxy_kits =
+    union
+        (union (requests | project url, host), (browser_requests | project url, host)
+         | where isnotempty(host) and not allowlisted(host)
+         | extend path = url_path(url)
+         | extend kit = iff(path matches regex @"(?i)/uv\.(?:config|handler|bundle|client|sw)\.js$", "ultraviolet",
+                        iff(path matches regex @"(?i)/scramjet\.(?:all|client|worker|shared|codecs)\.js$", "scramjet",
+                        iff(path matches regex @"(?i)/rammerhead(?:\.min)?\.js$", "rammerhead", "")))
+         | where isnotempty(kit)
+         | project kit, asset = substring(url, 0, 300)),
+        (pages
+         | where isnotempty(host) and not allowlisted(host)
+         | extend kit = iff(html matches regex @"__uv\$config\b", "ultraviolet",
+                        iff(html matches regex @"\$scramjet\b", "scramjet", ""))
+         | where isnotempty(kit)
+         | project kit, asset = url),
+        (scripts
+         | extend kit = iff(text matches regex @"__uv\$config\b", "ultraviolet",
+                        iff(text matches regex @"\$scramjet\b", "scramjet", ""))
+         | where isnotempty(kit)
+         | project kit, asset = strcat("sha256:", sha256));

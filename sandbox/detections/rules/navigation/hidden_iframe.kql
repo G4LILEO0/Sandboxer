@@ -1,0 +1,12 @@
+title: Hidden third-party iframe
+severity: low
+score: 10
+tags: hidden-iframe
+description: The page embeds an invisible iframe.
+---
+// An invisible iframe with a real URL on another site that is not allowlisted. Empty or
+// about:blank frames and same-site or allowlisted helpers are normal.
+iframes
+| where hidden and (src startswith "http:" or src startswith "https:") and isnotempty(host)
+| where registrable(host) != registrable(page_host) and not allowlisted(host)
+| distinct src

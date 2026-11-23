@@ -1,0 +1,22 @@
+title: OAuth error redirect used as an open redirector
+severity: high
+score: 55
+tags: phishing, redirector-abuse
+attack: T1566.002, T1204.001
+description: A real identity provider rejected an OAuth authorize request with prompt=none
+  (error=interaction_required/access_denied) and redirected it to a non-IdP host.
+---
+// A silent sign-in request (prompt=none) to Microsoft's or Google's authorize endpoint ...
+redirects
+| where url_host(to_url) in (list("microsoft.auth_hosts")) or url_host(to_url) == "accounts.google.com"
+| where url_path(to_url) matches regex @"(?i)/oauth2/(v2\.0/)?authorize|/o/oauth2/(v2/)?auth"
+| where tolower(url_param(to_url, "prompt")) == "none"
+// ... whose next hop is its error bounce to a host outside the identity provider.
+| extend next_host = url_host(next_to)
+| where isnotempty(next_host)
+    and next_host !in (list("microsoft.auth_hosts")) and next_host != "accounts.google.com"
+| where url_query(next_to) matches list("microsoft.oauth_error")
+    or url_fragment(next_to) matches list("microsoft.oauth_error")
+// ... on a site that is not allowlisted.
+| where not(exists(final_allowlisted))
+| project idp = url_host(to_url), redirect_host = next_host

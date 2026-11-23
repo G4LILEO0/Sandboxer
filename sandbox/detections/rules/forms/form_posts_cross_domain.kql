@@ -1,0 +1,10 @@
+title: Password form posts to another site
+severity: high
+score: 50
+tags: phishing, credential-harvest
+attack: T1566.002, T1056.003
+description: A form with a password field submits to a different site than the page. Sites
+  of one brand count as the same site (for example live.com and microsoftonline.com).
+---
+cross_site_password_forms
+| project page_url, action, method

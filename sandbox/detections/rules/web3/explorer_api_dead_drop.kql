@@ -1,0 +1,16 @@
+title: Blockchain explorer used as a dead drop
+severity: medium
+score: 30
+tags: web3, etherhiding, dead-drop
+attack: T1102.001
+description: A non-allowlisted page with no wallet UI reads a block-explorer API (Ethplorer,
+  Blockchair, Etherscan...). EtherHiding variants use this to fetch their next stage from a
+  transaction or token note.
+---
+// A page with no wallet UI and no wallet reads a blockchain explorer's API ...
+requests
+| where host in (list("web3.explorer_api_hosts"))
+| where not(exists(wallet_ui)) and not(exists(wallet_requests))
+// ... on a site that is not allowlisted.
+| where not(exists(final_allowlisted))
+| distinct host

@@ -1,0 +1,12 @@
+title: Data sent to a Discord webhook
+severity: high
+score: 65
+tags: phishing, exfil
+attack: T1567, T1102.002
+description: The page posted to a Discord webhook (discord.com/api/webhooks/...) from the
+  browser: webhooks are a server-side drop, not something a normal web page uses.
+---
+requests
+| where host in (list("exfiltration.discord_hosts"))
+    and begins_with_match(path, list("exfiltration.discord_webhook"))
+| project method, host, has_body = isnotempty(post)

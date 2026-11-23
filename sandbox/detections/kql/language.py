@@ -13,7 +13,9 @@ Supported, with the same meaning as in Kusto:
 * operators: ``where``, ``extend``, ``project``, ``summarize ... by ...``, ``distinct``,
   ``count``, ``take``, ``mv-expand``
 * aggregates: ``count()``, ``countif()``, ``dcount()``, ``dcountif()``, ``make_set()``,
-  ``take_any()``, ``min()``, ``max()``, ``sum()``
+  ``make_list()``, ``take_any()``, ``min()``, ``max()``, ``sum()``, and
+  ``arg_max(by, value)`` (``value`` from the first row with the largest ``by``)
+* ``toscalar(<query>)``: the first value of the first row a query returns (null if none)
 * expressions: ``and``, ``or``, ``not(...)``, ``== != < <= > >= =~ !~``, ``in``,
   ``!in``, ``has``, ``!has``, ``contains``, ``!contains``, ``startswith``, ``endswith``,
   ``matches regex``, ``+ -``, ``x["key"]``, function calls, ``"strings"``,
@@ -273,27 +275,50 @@ def list_matches(value: Any, ref: ListRef) -> bool:
         return isinstance(value, str) and data.search(value) is not None
     if isinstance(data, list):
         return isinstance(value, str) and any(i.regex.search(value) for i in data)
-    if isinstance(data, tuple):
-        return _in(value, data)
-    if isinstance(data, dict):
-        return _in(value, tuple(data))
+    if isinstance(data, (tuple, dict)):
+        return _member(value, data)
     return False
 
 
 def _in(value: Any, values: Any) -> bool:
+    """``value in (...)``: letter case is ignored for text. A ``list("key")`` inside the
+    parentheses stands for every value of that detection string."""
     if value is None:
         return False
     if isinstance(values, ListRef):
-        values = list_value(values)
-        if isinstance(values, dict):
-            values = tuple(values)
-        elif not isinstance(values, tuple):
-            return False
+        values = (values,)
+    if not isinstance(values, (tuple, list)):
+        return False
+    low = value.lower() if isinstance(value, str) else None
+    for v in values:
+        if isinstance(v, ListRef):
+            data = list_value(v)
+            if isinstance(data, (tuple, list, dict, set, frozenset)) and _member(value, data):
+                return True
+        elif low is not None:
+            if isinstance(v, str) and v.lower() == low:
+                return True
+        elif v == value and not isinstance(v, str):
+            return True
+    return False
+
+
+_LOWERED: dict[int, tuple[Any, frozenset[str], tuple[Any, ...]]] = {}
+
+
+def _member(value: Any, values: Any) -> bool:
+    hit = _LOWERED.get(id(values))
+    if hit is None or hit[0] is not values:
+        texts = frozenset(v.lower() for v in values if isinstance(v, str))
+        others = tuple(v for v in values if not isinstance(v, str))
+        hit = (values, texts, others)
+        if len(_LOWERED) > 512:
+            _LOWERED.clear()
+        _LOWERED[id(values)] = hit
     if isinstance(value, str):
-        low = value.lower()
-        return any(isinstance(v, str) and v.lower() == low for v in values) or value in values
+        return value.lower() in hit[1]
     try:
-        return value in values
+        return value in hit[2]
     except TypeError:
         return False
 
@@ -432,7 +457,9 @@ AGGREGATES: dict[str, int] = {  # name -> number of arguments
     "dcount": 1,
     "dcountif": 2,
     "make_set": 1,
+    "make_list": 1,
     "take_any": 1,
+    "arg_max": 2,
     "min": 1,
     "max": 1,
     "sum": 1,
@@ -470,6 +497,20 @@ def _aggregate(agg: str, args: list[Expr], rows: list[Row], run: Run) -> Any:
         return len(rows)
     if agg == "countif":
         return sum(1 for r in rows if args[0](r, run) is True)
+    if agg == "arg_max":
+        # The second value from the first row with the largest first value.
+        best, out = None, None
+        for r in rows:
+            v = args[0](r, run)
+            if (
+                isinstance(v, (int, float))
+                and not isinstance(v, bool)
+                and (best is None or v > best)
+            ):
+                best, out = v, args[1](r, run)
+        return out
+    if agg == "make_list":
+        return [v for v in (args[0](r, run) for r in rows) if v is not None]
     vals = [args[0](r, run) for r in rows]
     if agg == "dcountif":
         vals = [v for v, r in zip(vals, rows, strict=True) if args[1](r, run) is True]
@@ -942,12 +983,32 @@ class Parser:
         if name == "exists":
             self.eat("(")
             target = self.name()
+            if target in self.env.tables and target not in self.lets:
+                self.eat(")")
+                table = self.env.tables[target]
+                return lambda r, run: bool(table(run.ctx))
             if not (target in self.lets or target in self.env.shared):
                 self.i -= 1
-                self.fail(f"exists() takes the name of a let or shared query, not {target!r}")
+                self.fail(
+                    f"exists() takes the name of a table, a let or a shared query, not {target!r}"
+                )
             self.eat(")")
             lets = self.lets
             return lambda r, run: bool(run.named_rows(target, lets))
+        if name == "toscalar":
+            self.eat("(")
+            sub = self.pipeline()
+            self.eat(")")
+            key = ("toscalar", id(sub))
+            lets = self.lets
+
+            def scalar(r: Row, run: Run) -> Any:
+                if key not in run.subqueries:
+                    rows = sub.rows(run, lets, label="toscalar(...)")
+                    run.subqueries[key] = next(iter(rows[0].values()), None) if rows else None
+                return run.subqueries[key]
+
+            return scalar
         fn = self.env.functions.get(name)
         if fn is None:
             self.i -= 1

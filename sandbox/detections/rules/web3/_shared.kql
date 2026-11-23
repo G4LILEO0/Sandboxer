@@ -1,0 +1,18 @@
+// Signs of a real dApp: a wallet-connector library, or wallet wording on a top-level
+// page (an ad or price widget iframe saying "connect wallet" does not count).
+let wallet_ui =
+    union
+        (libraries
+         | where name in (list("web3.wallet_connector_libraries"))
+         | project why = name),
+        (frames
+         | where top and content matches list("web3.dapp_ui")
+         | project why = url);
+
+// Blockchain reads from a page with no wallet (EtherHiding): JSON-RPC calls while the
+// fake wallet saw no request, on a page with no wallet UI, or one whose answer is a
+// kilobyte-sized string whatever the page looks like.
+let etherhiding_reads =
+    rpc_calls
+    | where not(exists(wallet_requests))
+    | where not(exists(wallet_ui)) or exists(rpc_strings);

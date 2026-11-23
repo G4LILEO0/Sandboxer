@@ -1,0 +1,46 @@
+// Clipboard writes the page made itself that hold text. An analyst's own Ctrl+C in a live
+// session is not one.
+let clipboard_writes =
+    clipboard
+    | where page_write and isnotempty(text);
+
+// Page clipboard writes whose text reads as a shell command (string clickfix.shell_command,
+// after cmd's caret and empty-quote noise is removed), with how each reads as ClickFix.
+let clipboard_commands =
+    clipboard_writes
+    | where plain matches list("clickfix.shell_command")
+    | extend trait = clickfix_trait(text);
+
+// Clipboard commands with a ClickFix trait: one no copy button produces, or a
+// download-and-run whose source is not a known installer.
+let clickfix_commands =
+    clipboard_commands
+    | where trait in ("unambiguous", "cradle");
+
+// Page clipboard writes that hide a command behind a file path (FileFix): the visitor
+// thinks they paste a path into File Explorer.
+let filefix_writes =
+    clipboard_writes
+    | where text matches list("clickfix.filefix");
+
+// Page clipboard writes made without a user gesture.
+let no_gesture_writes =
+    clipboard_writes
+    | where user_activation == false;
+
+// A clipboard command the page then blanked, or replaced with text the visitor did not
+// copy (a docs page's second copy button is a copy the visitor made).
+let overwritten_commands =
+    clipboard
+    | where page_write and prev_plain matches list("clickfix.shell_command")
+    | where isempty(trim(@"\s", text))
+        or (not(plain matches list("clickfix.shell_command")) and not(user_activation == true));
+
+// 40+ characters on the clipboard that match no command pattern, on a page that tells
+// the visitor to paste into Run or a terminal, on a site that is not allowlisted.
+let paste_lure_writes =
+    clipboard_writes
+    | where strlen(text) >= 40
+    | where not(exists(clipboard_commands))
+        and exists(run_dialog_pages)
+        and not(exists(final_allowlisted));

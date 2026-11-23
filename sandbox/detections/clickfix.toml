@@ -8,14 +8,14 @@ title = 'ClickFix and fake verification'
 
 [shell_command]
 title = 'Shell command on the clipboard'
-description = 'Any shell command in a clipboard write (PowerShell, cmd /c, mshta, curl, finger, for /f ...). Feeds clipboard.command_like.'
+description = 'Any shell command in a clipboard write (PowerShell, cmd /c, mshta, curl, finger, for /f ...). Feeds the clipboard_commands shared query.'
 type = "regex"
 flags = 'i'
 pattern = '\b(powershell|pwsh|cmd(\.exe)?\s*/[ck]|mshta|rundll32|regsvr32|bitsadmin|certutil|wscript|cscript|curl\s+|wget\s+|iex\b|invoke-(expression|webrequest)|msiexec|start-process|bash\s+-c|osascript|finger(\.exe)?\s+\S+@|conhost(\.exe)?\s|forfiles|for\s+/f\b)|%comspec%|\|\s*cmd(\.exe)?\b'
 
 [fetch_and_run]
 title = 'Fetch-then-run cradles'
-description = 'Fetch-then-run cradles: download a script and pipe it to an interpreter. Real package managers install this way too (Homebrew, uv, Bun, Scoop, Chocolatey, rustup), so a cradle whose every source is in Known installer sources is not ClickFix (R-01). Feeds clipboard.clickfix_like.'
+description = 'Fetch-then-run cradles: download a script and pipe it to an interpreter. Real package managers install this way too (Homebrew, uv, Bun, Scoop, Chocolatey, rustup), so a cradle whose every source is in Known installer sources is not ClickFix (R-01). Feeds the clickfix_trait() function.'
 type = "regex_list"
 [[fetch_and_run.items]]
 flags = 'is'
@@ -32,7 +32,7 @@ pattern = '\$\(\s*(curl|wget)\b'
 
 [unambiguous_traits]
 title = 'Unambiguous ClickFix traits'
-description = "Traits no installer uses, so always ClickFix whatever the source: encoded or hidden PowerShell, mshta of a URL, base64 piped to a shell, a fake-CAPTCHA comment, finger.exe or for /f fetch-and-run, cmd started minimised or via %COMSPEC%, CrashFix's renamed finger.exe, msiexec of a remote package, a URL with a backslash after the scheme, and look-alike or zero-width characters in a command. Commands are matched with cmd's ^ escapes and in-word \"\" removed. Feeds clipboard.clickfix_like."
+description = "Traits no installer uses, so always ClickFix whatever the source: encoded or hidden PowerShell, mshta of a URL, base64 piped to a shell, a fake-CAPTCHA comment, finger.exe or for /f fetch-and-run, cmd started minimised or via %COMSPEC%, CrashFix's renamed finger.exe, msiexec of a remote package, a URL with a backslash after the scheme, and look-alike or zero-width characters in a command. Commands are matched with cmd's ^ escapes and in-word \"\" removed. Feeds the clickfix_trait() function."
 type = "regex_list"
 [[unambiguous_traits.items]]
 flags = 'i'
@@ -133,7 +133,7 @@ pattern = '^\s*(powershell|pwsh|cmd|mshta|conhost|curl|rundll32|msiexec)\b.*([ \
 
 [mac_linux_traits]
 title = 'macOS and Linux terminal ClickFix traits'
-description = 'macOS and Linux terminal ClickFix traits, on top of the Windows ones. Feeds clipboard.clickfix_like.'
+description = 'macOS and Linux terminal ClickFix traits, on top of the Windows ones. Feeds the clickfix_trait() function.'
 type = "regex_list"
 [[mac_linux_traits.items]]
 flags = 'i'
@@ -153,14 +153,14 @@ pattern = '\becho\s+[A-Za-z0-9+/=]{40,}\s*\|\s*base64\b'
 
 [run_dialog]
 title = 'Open Run dialog or terminal instructions'
-description = "Instructions to open the Run dialog, a terminal or Explorer's address bar (Win+R, Win+X, Cmd+Space ...). Together with Paste instruction on the same page this feeds lure.run_dialog_instructions."
+description = "Instructions to open the Run dialog, a terminal or Explorer's address bar (Win+R, Win+X, Cmd+Space ...). Together with Paste instruction on the same page this feeds the run_dialog_pages shared query."
 type = "regex"
 flags = 'i'
 pattern = '''(win(dows)?(\s*(key|logo))?\s*\+\s*r\b|⊞|press\s+(and\s+hold\s+)?(the\s+)?windows\s+(key|button)|open\s+(the\s+)?(run\s+dialog|terminal|powershell|windows\s+terminal)|powershell\s*\(\s*admin\s*\)|win\s*\+\s*x|cmd\s*\+\s*space|command\s*\+\s*space|ctrl\s*\+\s*l\b|explorer('s)?\s+address\s+bar|file\s+explorer)'''
 
 [paste]
 title = 'Paste instruction'
-description = 'A paste instruction (Ctrl+V, paste, Arabic لصق). Paired with the Run dialog wording for lure.run_dialog_instructions.'
+description = 'A paste instruction (Ctrl+V, paste, Arabic لصق). Paired with the Run dialog wording for the run_dialog_pages shared query.'
 type = "regex"
 flags = 'i'
 pattern = '(ctrl|cmd|⌘)\s*\+\s*v\b|\bpaste\b|لصق'
@@ -174,17 +174,10 @@ pattern = '(open|launch) terminal|command\s*\+\s*(space|v)|complete .{0,40}in te
 
 [verify_wording]
 title = 'Fake verification wording'
-description = 'Fake verification / CAPTCHA wording (I am not a robot, verify you are human, verification ID). This is the trigger for lure.fake_captcha; the brand words below are evidence only (R-10), because every site behind a real challenge prints them. lure.fake_captcha also needs a copy/paste or press-keys instruction in the same frame.'
+description = 'Fake verification / CAPTCHA wording (I am not a robot, verify you are human, verification ID). A fake CAPTCHA (the fake_captcha_texts shared query) also needs a copy/paste, Run-dialog or press-keys instruction in the same text. CAPTCHA brand words (Cloudflare, Ray ID) are never a trigger, because every site behind a real challenge prints them.'
 type = "regex"
 flags = 'i'
 pattern = '''verify (that )?(you are|you'?re) (a )?human|i'?m not a robot|i am not a robot|verification (id|hash|code|steps?)|prove (that )?you'?re (a )?human|human verification|complete (the )?verification'''
-
-[captcha_brand]
-title = 'CAPTCHA brand words (evidence only)'
-description = 'CAPTCHA brand words (Cloudflare, reCAPTCHA, Ray ID, security check). Evidence only, never the trigger (R-10).'
-type = "regex"
-flags = 'i'
-pattern = 'security check|ray id|recaptcha|cloudflare|turnstile'
 
 [key_instruction]
 title = 'Press keys or copy code instruction'
@@ -202,14 +195,14 @@ pattern = 'challenges\.cloudflare\.com/turnstile|/cdn-cgi/challenge-platform|www
 
 [fake_browser_update]
 title = 'Fake browser / software update wording'
-description = 'Fake browser / software update overlay text, including fake Adobe Acrobat Reader / Flash Player updates that deliver an ISO or installer (lure.fake_update_pages).'
+description = 'Fake browser / software update overlay text, including fake Adobe Acrobat Reader / Flash Player updates that deliver an ISO or installer (the fake_update_pages shared query).'
 type = "regex"
 flags = 'i'
 pattern = '(update|install) (google )?chrome|(chrome|edge|firefox|safari|browser) (is )?(out of date|outdated|update (required|available))|your browser (version )?is (out of date|not supported)|\b(update|upgrade|install)\s+(adobe\s+)?(acrobat(\s+reader)?|reader\s+dc|flash(\s+player)?)\b|\b(acrobat|adobe\s+reader|flash\s+player)\s+(is\s+)?(out\s+of\s+date|outdated|update\s+(required|available))\b|\byour\s+(software\s+)?(update|upgrade)\s+is\s+(downloading|ready)\b'
 
 [open_download_instructions]
 title = 'Open-the-downloaded-file instructions'
-description = 'The page tells the visitor to find and open the file it just downloaded: a disk image, installer or script named next to open / run / double-click wording (lure.open_download_pages). Fake-update kits do this so the visitor runs the payload.'
+description = 'The page tells the visitor to find and open the file it just downloaded: a disk image, installer or script named next to open / run / double-click wording (the open_download_pages shared query). Fake-update kits do this so the visitor runs the payload.'
 type = "regex"
 flags = 'i'
 pattern = '\b(double[\s-]?click|open|run|launch|locate|find)\b[^.]{0,60}?\b[\w()\[\] -]{1,60}\.(iso|img|vhdx?|exe|msi|msix|appx|scr|lnk|hta|vbs|js|bat|cmd|ps1)\b|\b[\w()\[\] -]{1,60}\.(iso|img|vhdx?|exe|msi|msix|appx|scr|lnk|hta|vbs|bat|cmd|ps1)\b[^.]{0,40}?\bdouble[\s-]?click'

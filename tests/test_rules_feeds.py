@@ -1,122 +1,125 @@
 import io
 import json
+import re
 import zipfile
 
 import pytest
 
 from sandbox.detections import catalog
-from sandbox.detections.model import SEVERITIES, all_of, any_of, detection, not_, sig
+from sandbox.detections.base import Capture, CaptureData
+from sandbox.detections.kql.language import QueryError, parse
+from sandbox.detections.kql.rules import RULES_DIR, SEVERITIES, load
+from sandbox.detections.kql.tables import FUNCTIONS, TABLE_FUNCTIONS, TABLES, environment
 from sandbox.feeds import parsers
 from sandbox.rules import defaults
 from sandbox.rules.importer import parse_suricata_line, validate_yara, yara_metadata
 from sandbox.runner.events import STDOUT_PREFIX, parse_stdout_line
 from sandbox.storage import LocalStore
 
-FACTS = {"forms": {"cross": 2, "list": ["a"]}, "final": {"host": "x.example", "ok": True}}
-CROSS, OK, HOST, GONE = sig("forms.cross"), sig("final.ok"), sig("final.host"), sig("missing.path")
-
-
-def _detection(when, evidence=()):
-    return detection(
-        "t",
-        title="t",
-        severity="high",
-        score=10,
-        tags=[],
-        attack=[],
-        description="",
-        when=when,
-        evidence=evidence,
-        register=False,
+CAP = Capture(
+    CaptureData(
+        result={
+            "url": "https://x.example/",
+            "final_url": "https://x.example/login",
+            "clipboard": [{"api": "writeText", "text": "hello"}],
+        }
     )
+)
 
 
 @pytest.mark.parametrize(
-    ("condition", "expected"),
+    ("query", "expected"),
     [
-        (CROSS > 1, True),
-        (CROSS < 1, False),
-        (GONE > 0, False),
-        (not_(GONE.present()), True),
-        (HOST.one_of(["x.example", "y.example"]), True),
-        (all_of(OK.is_true(), not_(CROSS.equals(0))), True),
-        (any_of(CROSS.equals(0), OK.equals(False)), False),
-        (HOST > 3, False),  # type mismatch is a miss
-        (OK.is_true() & ~(CROSS.equals(0)), True),
-        (CROSS.equals(0) | OK.is_true(), True),
+        ('capture | where final_host == "x.example"', True),
+        ('capture | where final_host != "x.example"', False),
+        ("capture | where missing_column > 0", False),  # a missing value is a miss
+        ("capture | where not(isnotempty(missing_column))", True),
+        ('capture | where final_host in ("x.example", "y.example")', True),
+        ('capture | where final_host =~ "X.EXAMPLE" and final_url endswith "/login"', True),
+        ("capture | where final_host > 3", False),  # a type mismatch is a miss
+        ("clipboard | where page_write and strlen(text) == 5", True),
+        ("capture | where toscalar(clipboard | count) == 1", True),
+        ("capture | where exists(clipboard) and not(exists(downloads))", True),
+        ("capture | where toscalar(downloads | summarize max(size)) > 0", False),
     ],
 )
-def test_detection_conditions(condition, expected):
-    assert _detection(condition).evaluate(FACTS).matched is expected
+def test_query_semantics(query, expected):
+    rows, _ = parse(query, environment()).run(CAP, environment())
+    assert bool(rows) is expected
 
 
-def test_detection_records_values_checks_and_evidence():
-    outcome = _detection(all_of(CROSS > 0, OK.is_true()), evidence=["final.host"]).evaluate(FACTS)
-    assert outcome.facts == {"forms.cross": 2, "final.ok": True, "final.host": "x.example"}
-    assert [c["passed"] for c in outcome.checks] == [True, True]
-    assert outcome.checks[0]["value"] == 2
-
-
-def test_any_of_checks_every_branch():
-    """The report shows every value a rule looked at, so ``any`` never short-circuits."""
-    outcome = _detection(any_of(CROSS > 0, OK.is_true())).evaluate(FACTS)
-    assert len(outcome.checks) == 2
+def test_query_records_each_step():
+    q = parse('clipboard | where page_write | where text == "nope"', environment())
+    rows, run = q.run(CAP, environment())
+    assert rows == []
+    assert [s["rows"] for s in run.steps] == [1, 1, 0]
 
 
 @pytest.mark.parametrize(
-    "kwargs",
-    [{"severity": "nope"}, {"score": 101}, {"score": -1}],
+    "query",
+    [
+        "nosuchtable | where x",
+        "capture | where nosuchfunction(final_host)",
+        'capture | where final_host matches list("no.such_string")',
+        "capture | where exists(nosuchquery)",
+        "capture | where (final_host",
+    ],
 )
-def test_detection_declaration_errors(kwargs):
-    base = dict(
-        title="t",
-        severity="high",
-        score=10,
-        tags=[],
-        attack=[],
-        description="",
-        when=CROSS > 0,
-        register=False,
+def test_broken_queries_stop_the_load(query):
+    with pytest.raises(QueryError):
+        parse(query, environment())
+
+
+@pytest.mark.parametrize(
+    ("header", "message"),
+    [
+        ("severity: nope\nscore: 10", "unknown severity"),
+        ("severity: high\nscore: 101", "0 to 100"),
+        ("severity: high\nscore: -1", "0 to 100"),
+        ("severity: high", "missing score"),
+    ],
+)
+def test_rule_header_errors(tmp_path, header, message):
+    area = tmp_path / "pkg" / "detections" / "rules" / "test"
+    area.mkdir(parents=True)
+    (area / "t.kql").write_text(
+        f"title: t\n{header}\ndescription: d\n---\ncapture\n", encoding="utf-8"
     )
-    with pytest.raises(ValueError):
-        detection("t", **{**base, **kwargs})
+    with pytest.raises(QueryError, match=message):
+        load(area.parent)
 
 
 def test_builtin_detections_load_and_are_documented():
     assert len(catalog.detections()) >= 85
     for d in catalog.detections():
         assert d.title and d.description and d.severity in SEVERITIES, d.name
-        if getattr(d, "kind", "") == "query":
-            assert d.rule_text(), d.name  # parsed when the catalog loaded
-            continue
-        for s in d.signals():  # the catalog refuses to load an undeclared signal
-            assert s.title and s.description, (d.name, s.path)
-        assert d.rule_text().startswith("Fires when")
+        assert d.rule_text(), d.name  # parsed when the catalog loaded
     for name, body in defaults.BUILTIN_YARA.items():
         assert validate_yara(body) is None, name
 
 
-def test_every_signal_is_read_by_a_detection_and_exists_in_the_observed_values():
-    import re
+def test_every_table_and_function_is_documented():
+    for name, t in {**TABLES, **TABLE_FUNCTIONS}.items():
+        assert t["description"] and t["columns"], name
+        assert all(c and m for c, m in t["columns"].items()), name
+    for name, f in FUNCTIONS.items():
+        assert f["signature"].startswith(name) and f["description"], name
 
-    from sandbox.detections.base import CaptureData
-    from sandbox.detections.kql.rules import RULES_DIR
-    from sandbox.detections.model import _MISSING, SIGNALS, get_value
-    from sandbox.detections.observe import build_facts
 
-    used = {s.path for d in catalog.detections() for s in d.signals()}
-    # Query rules read values of areas not yet written as queries with signal("...").
-    used |= {
-        path
-        for f in RULES_DIR.glob("*/*.kql")
-        for path in re.findall(r'signal\("([^"]+)"\)', f.read_text(encoding="utf-8"))
-    }
-    assert used == set(SIGNALS)
-    facts = build_facts(CaptureData(result={"url": "https://a.example/", "pages": []}))
-    # Fake-wallet values only exist when the wallet profile ran.
-    optional = {"web3.wallet_requests", "web3.wallet_drainer"}
-    missing = [p for p in SIGNALS if p not in optional and get_value(facts, p) is _MISSING]
-    assert missing == []
+def test_every_shared_query_is_used():
+    texts = [p.read_text(encoding="utf-8") for p in RULES_DIR.glob("*/*.kql")]
+    env = catalog.detections()[0].env
+    for name in env.shared:
+        uses = sum(len(re.findall(rf"\b{name}\b", t)) for t in texts)
+        assert uses > 1, f"shared query {name} is never used"
+
+
+def test_tables_give_the_columns_they_document():
+    data = CaptureData(result={"url": "https://a.example/", "final_url": "https://a.example/"})
+    cap = Capture(data)
+    for name, t in TABLES.items():
+        for row in t["build"](cap):
+            assert set(row) <= set(t["columns"]), name
 
 
 def test_yara_validation_and_metadata():

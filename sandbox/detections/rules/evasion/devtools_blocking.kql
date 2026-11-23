@@ -1,0 +1,21 @@
+title: DevTools blocked on a lure page
+severity: medium
+score: 20
+tags: evasion, anti-analysis
+attack: T1622, T1497
+description: The page cancelled DevTools shortcuts (F12, Ctrl+U, Ctrl+Shift+I/J/C) or the
+  context menu, or runs a debugger trap (a timed or timer-driven `debugger`), while also
+  showing a credential, ClickFix or download lure.
+---
+// The page blocks DevTools keys or the context menu, or sets a debugger trap ...
+capture
+| where exists(devtools_keys_blocked) or exists(context_menu_blocked) or exists(debugger_traps)
+// ... and it is a brand page asking for a secret, puts a command on the clipboard, or
+// starts a risky download without a click.
+| where exists(brand_secret_page)
+    or exists(clipboard_commands)
+    or exists(unprompted_risky_downloads)
+| project final_url,
+          devtools_keys = toscalar(devtools_keys_blocked | summarize make_set(key)),
+          context_menu_blocked = exists(context_menu_blocked),
+          debugger_traps = toscalar(debugger_traps | summarize make_set(source))

@@ -1,0 +1,14 @@
+title: Trusted redirector leads to a lure
+severity: medium
+score: 20
+tags: redirector-abuse, phishing
+attack: T1566.002, T1204.001
+description: The chain included a trusted redirector or open redirect (Google AMP, ad click,
+  Safe Links, a URL shortener). The run also tripped a phishing, ClickFix or download
+  signal.
+---
+// A trusted redirector sent the visitor on ...
+trusted_redirector_hops
+// ... to a brand page asking for a secret, a clipboard command or a risky download.
+| where exists(brand_secret_page) or exists(clipboard_commands) or exists(unprompted_risky_downloads)
+| distinct from_host

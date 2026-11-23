@@ -1,0 +1,21 @@
+// Scripts with an obfuscation score of 3 or more (scripts.obfuscation_signals).
+let obfuscated_scripts =
+    scripts
+    | where obfuscation_score >= 3
+    | project sha256, obfuscation_score, obfuscation_signals;
+
+// Code that carries a payload written in invisible characters (Tycoon 2FA).
+let invisible_code =
+    inline_code
+    | extend longest_run = invisible_run(text)
+    | where longest_run > 0
+    | project source = substring(source, 0, 300), longest_run;
+
+// How many times the page called each browser API, for the APIs that lock or take over
+// the screen and the keyboard.
+let fullscreen_requests = browser_apis | where api == "requestFullscreen" and calls > 0;
+let pointer_lock_requests = browser_apis | where api == "requestPointerLock" and calls > 0;
+let keyboard_lock_requests = browser_apis | where api == "keyboard.lock" and calls > 0;
+let notification_requests =
+    browser_apis
+    | where api == "Notification.requestPermission" and calls > 0;

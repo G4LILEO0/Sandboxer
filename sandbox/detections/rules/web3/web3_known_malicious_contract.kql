@@ -1,0 +1,10 @@
+title: Known malicious smart contract called
+severity: high
+score: 60
+tags: etherhiding, web3, known-bad
+attack: T1102.001
+description: The page read a smart contract address published in EtherHiding research.
+---
+rpc_calls
+| where isnotempty(to) and to in (list("web3.known_bad_addresses"))
+| distinct to

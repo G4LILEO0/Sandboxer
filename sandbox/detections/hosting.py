@@ -1,9 +1,10 @@
-"""hosting"""
+"""Hosting: the contacted hosts (lookalikes, punycode), registered domains and their age,
+the brands pages imitate, and favicon lookups. The rules in rules/hosting/ decide."""
 
 import re
 from functools import lru_cache
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 
 from sandbox.analysis.domains import (
     display_host,
@@ -22,11 +23,11 @@ from sandbox.detections.base import (
     CaptureData,
     _all_frames,
     _credential_prompt,
-    _frames,
     _host,
     chain_hosts,
 )
-from sandbox.detections.model import all_of, any_of, detection, sig, signal
+from sandbox.detections.kql.language import Row
+from sandbox.detections.kql.tables import memo, table
 
 _TITLE_LURE = S.bind(globals(), "_TITLE_LURE", "lures.title_lure")
 
@@ -45,6 +46,10 @@ def _acronym(word: str) -> re.Pattern:
 
 
 def _brand(data: CaptureData, cross_forms: list[dict[str, Any]]) -> dict[str, Any]:
+    return _best_brand(_brand_claims(data, cross_forms))
+
+
+def _best_brand(claims: list[dict[str, Any]]) -> dict[str, Any]:
     """Brand impersonation (ANA-5): a page that presents a brand and asks for credentials
     while not hosted on that brand's domains.
 
@@ -53,7 +58,6 @@ def _brand(data: CaptureData, cross_forms: list[dict[str, Any]]) -> dict[str, An
     for the rule: news, reviews and the brand's own sites on other TLDs mention brands
     constantly, so ``credential_prompt`` must also be set.
     """
-    cross_pages = {f.get("page") for f in cross_forms}
     best: dict[str, Any] = {
         "name": None,
         "confidence": 0,
@@ -61,6 +65,26 @@ def _brand(data: CaptureData, cross_forms: list[dict[str, Any]]) -> dict[str, An
         "credential_prompt": False,
         "free_hosting_lure": False,
     }
+    for claim in claims:
+        if claim["confidence"] > best["confidence"]:
+            best = {
+                "name": claim["brand"],
+                "confidence": claim["confidence"],
+                "evidence": claim["evidence"],
+                "credential_prompt": bool(claim["prompt"]),
+                "prompt": claim["prompt"] or None,
+                "free_hosting_lure": claim["free_hosting_lure"],
+                "url": claim["url"],
+                "host": claim["host"],
+                "legit_domains": claim["legit_domains"],
+            }
+    return best
+
+
+def _brand_claims(data: CaptureData, cross_forms: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per frame and brand the frame names, with the imitation confidence."""
+    cross_pages = {f.get("page") for f in cross_forms}
+    claims: list[dict[str, Any]] = []
     for frame in _all_frames(data):
         url = frame.get("url", "")
         host = _host(url)
@@ -128,96 +152,25 @@ def _brand(data: CaptureData, cross_forms: list[dict[str, Any]]) -> dict[str, An
                 confidence //= 3
                 evidence.append(f"{unit} is allowlisted")
             confidence = min(confidence, 100)
-            if confidence > best["confidence"]:
-                best = {
-                    "name": brand.name,
-                    "confidence": confidence,
-                    "evidence": evidence,
-                    "credential_prompt": prompt is not None,
-                    "prompt": prompt,
-                    "free_hosting_lure": lure_on_hosting and unit not in data.allowlisted,
+            claims.append(
+                {
                     "url": url,
                     "host": host,
+                    "brand": brand.name,
+                    "confidence": confidence,
+                    "evidence": evidence,
+                    "prompt": prompt or "",
+                    "free_hosting_lure": lure_on_hosting and unit not in data.allowlisted,
                     "legit_domains": list(brand.domains),
                 }
-    return best
+            )
+    return claims
 
 
 _LABEL_TOKEN = re.compile(r"[a-z0-9]+")
 
 
-def _hosting_brand_label(data: CaptureData) -> dict[str, Any] | None:
-    """A free-hosting tenant named after a brand (microsoftaccount-kit.<builder>,
-    ledger-live-kit.pages.dev) whose page asks for credentials (LR1-03). The page
-    itself may never name the brand. A label token must start with the keyword's first
-    word, so purchasebank.example.app is not Chase; keywords under 5 letters are skipped."""
-    for frame in _all_frames(data):
-        host = _host(frame.get("url"))
-        platform = free_hosting(host) if host else None
-        if not platform or site(host) in data.allowlisted:
-            continue
-        prompt = _credential_prompt(frame)
-        if not prompt:
-            continue
-        tokens = _LABEL_TOKEN.findall(host[: -len(platform)])
-        joined = "".join(tokens)
-        for brand in data.brands:
-            for keyword in brand.keywords:
-                words = _LABEL_TOKEN.findall(keyword.lower())
-                if keyword.startswith("acronym:") or len("".join(words)) < 5:
-                    continue
-                if "".join(words) in joined and any(t.startswith(words[0]) for t in tokens):
-                    return {
-                        "brand": brand.name,
-                        "host": host,
-                        "platform": platform,
-                        "keyword": keyword,
-                        "prompt": prompt,
-                    }
-    return None
-
-
 _FAVICON_SERVICE = S.bind(globals(), "_FAVICON_SERVICE", "exfiltration.favicon_service")
-
-
-def _favicon_lookups(data: CaptureData, reqs: list[dict[str, Any]]) -> list[str]:
-    """Hosts whose favicon the page fetched through a favicon service, other than the
-    sites the session itself visited."""
-    visited = {site(h) for f in _all_frames(data) if (h := _host(f.get("url")))}
-    out = set()
-    for r in reqs:
-        if not (m := _FAVICON_SERVICE.match(r["url"])):
-            continue
-        target = unquote(m.group(1)).strip().lower()
-        host = _host(target) if "://" in target else target.split("/")[0].removesuffix(".ico")
-        if host and "." in host and site(host) not in visited:
-            out.add(host)
-    return sorted(out)
-
-
-_IPFS_URL = S.bind(globals(), "_IPFS_URL", "web3.ipfs_url")
-
-
-def _final_ipfs(final_url: str | None) -> dict[str, str] | None:
-    return {"url": final_url} if final_url and _IPFS_URL.search(final_url) else None
-
-
-_ABUSE_WARNING = S.bind(globals(), "_ABUSE_WARNING", "lures.abuse_warning")
-
-
-def _abuse_interstitial(data: CaptureData, final_host: str) -> dict[str, str] | None:
-    for frame in _frames(data.result):
-        if _host(frame.get("url")) != final_host:
-            continue
-        bypass = any(
-            urlsplit(f.get("action") or "").path == "/cdn-cgi/phish-bypass"
-            and _host(f.get("action")) == final_host
-            for f in frame.get("forms", [])
-        )
-        warning = _ABUSE_WARNING.search(f"{frame.get('title', '')} {frame.get('text', '')}")
-        if bypass and warning:
-            return {"provider": "cloudflare", "kind": warning.group(1).lower()}
-    return None
 
 
 # --- observed values ---------------------------------------------------------------------
@@ -233,9 +186,7 @@ def final_section(cap: Capture) -> dict[str, Any]:
         "display_host": display_host(final_host) if final_host else None,
         "allowlisted": cap.final_allowlisted,
         "free_hosting": free_hosting(final_host) if final_host else None,
-        "ipfs": _final_ipfs(final_url),
         "title": data.result.get("title") or "",
-        "abuse_interstitial": _abuse_interstitial(data, final_host) if final_host else None,
     }
 
 
@@ -243,8 +194,9 @@ def domains_section(cap: Capture) -> dict[str, Any]:
     """Every contacted host: count, punycode, lookalikes and registration ages."""
     data, hosts = cap.data, cap.hosts
     regs = sorted({registrable(h) for h in hosts})
-    looks = [lk for h in hosts if (lk := lookalike(h, data.brands, data.allowlisted))]
-    gov_looks = [g for h in hosts if (g := government_lookalike(h, data.brands, data.allowlisted))]
+    rows = _hosts_table(cap)
+    looks = [r["lookalike"] for r in rows if r["lookalike"]]
+    gov_looks = [r["government_lookalike"] for r in rows if r["government_lookalike"]]
     ages = {d: a for d, a in data.domain_ages.items() if a is not None}
     young = sorted(
         ({"domain": d, "age_days": a} for d, a in ages.items() if a < 30),
@@ -259,10 +211,10 @@ def domains_section(cap: Capture) -> dict[str, Any]:
         "count": len(regs),
         "hosts": hosts[:200],
         "registrable": regs[:200],
-        "punycode": sum(is_punycode(h) for h in hosts),
-        "punycode_confusable": sum(is_confusable_idn(h) for h in hosts),
+        "punycode": sum(r["punycode"] for r in rows),
+        "punycode_confusable": sum(r["confusable"] for r in rows),
         "punycode_hosts": [
-            {"host": h, "display": display_host(h)} for h in hosts if is_punycode(h)
+            {"host": r["host"], "display": r["display"]} for r in rows if r["punycode"]
         ],
         "lookalike": len(looks),
         "lookalikes": looks[:10],
@@ -277,401 +229,174 @@ def domains_section(cap: Capture) -> dict[str, Any]:
 
 
 def brand_section(cap: Capture) -> dict[str, Any]:
-    """Which brand the page claims to be, and whether it asks for credentials."""
-    data = cap.data
-    forms = cap.section("forms")
-    favicons = _favicon_lookups(data, cap.reqs)
-    return {
-        **_brand(data, forms["cross_domain_credential_forms"]),
-        "hosting_label": _hosting_brand_label(data),
-        "favicon_lookups": favicons[:10],
-        "favicon_lookup_count": len(favicons),
-    }
+    """Which brand the page imitates most (the brand_claims row with the highest
+    confidence), for the report header."""
+    return _best_brand(_brand_claims_table(cap))
 
 
-# --- signals: the values this area observes --------------------------------------------
+# --- tables -------------------------------------------------------------------------------
 
-signal(
-    "brand",
-    "Brand claim (all details)",
-    (
-        "The whole brand result: the brand the page most likely imitates, its confidence, the "
-        "reasons, the prompt kind, the page and the brand's real domains."
-    ),
+
+@table(
+    "hosts",
+    "Every host the session contacted (HAR hosts, redirect hops, navigations, the "
+    "submitted and final URL).",
+    {
+        "host": "The host name",
+        "display": "The host as a browser shows it (punycode decoded)",
+        "punycode": "True for a punycode (xn--) host",
+        "confusable": "True when a punycode label mixes Latin with another script, or is "
+        "made only of characters that look Latin (plain native-script names are not)",
+        "lookalike": "Which brand domain the host imitates and how (homoglyph, typo, brand "
+        "name inside a foreign domain), from Admin > Brands; empty if none. A brand's own "
+        "and allowlisted domains never count",
+        "government_lookalike": "Which government site the host dresses up as without being "
+        "under a government suffix (absher-gov-sa.com); empty if none",
+    },
 )
+def _hosts_table(cap: Capture) -> list[Row]:
+    def build() -> list[Row]:
+        data = cap.data
+        rows = []
+        for h in cap.hosts:
+            rows.append(
+                {
+                    "host": h,
+                    "display": display_host(h),
+                    "punycode": is_punycode(h),
+                    "confusable": is_confusable_idn(h),
+                    "lookalike": lookalike(h, data.brands, data.allowlisted) or "",
+                    "government_lookalike": government_lookalike(h, data.brands, data.allowlisted)
+                    or "",
+                }
+            )
+        return rows
 
-signal(
-    "brand.name",
-    "Imitated brand",
-    (
-        "The brand (from Admin > Brands) a page most likely imitates. Each page is judged on "
-        "its own; a page on the brand's own domains is skipped unless it is a tenant on free "
-        "hosting."
-    ),
+    return memo(cap, "hosts", build)
+
+
+@table(
+    "domains",
+    "Every registered domain the session reached whose registration age is known (RDAP).",
+    {
+        "domain": "The registered domain",
+        "age_days": "Days since it was registered",
+        "on_path": "True when the visitor passed through it: the submitted URL, the page's "
+        "own redirect hops or the final page (not third-party resources, whose ad and "
+        "analytics domains are often young)",
+        "final": "True for the final page's domain",
+    },
 )
+def _domains_table(cap: Capture) -> list[Row]:
+    def build() -> list[Row]:
+        data = cap.data
+        chain_regs = {registrable(h) for h in chain_hosts(data)}
+        final_reg = registrable(cap.final_host) if cap.final_host else None
+        return [
+            {"domain": d, "age_days": a, "on_path": d in chain_regs, "final": d == final_reg}
+            for d, a in data.domain_ages.items()
+            if a is not None
+        ]
 
-signal(
-    "brand.confidence",
-    "Brand imitation confidence",
-    (
-        "0 to 100, for the best-scoring page and brand: brand name in the title +35 (or an "
-        "acronym brand in a title or heading +20), in the text +10 per keyword up to +20, a "
-        "credential prompt + its points (string forms.prompt_points), a cross-site password "
-        "form +10, a lookalike host +20, a brand login title on free hosting +20. Divided by "
-        "3 on an allowlisted site."
-    ),
+    return memo(cap, "domains", build)
+
+
+@table(
+    "brand_claims",
+    "Every frame that names a brand from Admin > Brands while not on that brand's own "
+    "domains (a tenant on a free hosting platform is never the brand), with how strongly "
+    "it imitates the brand.",
+    {
+        "url": "The frame URL",
+        "host": "Its host",
+        "brand": "The brand",
+        "confidence": "Imitation confidence, 0 to 100: 35 for the brand in the title (20 "
+        "for its acronym in the title or a heading, with brand context), 10 per brand word "
+        "in the text (at most 20), the prompt's points (forms.prompt_points), 10 when the "
+        "page posts credentials to another site, 20 for a lookalike host, 20 for a brand "
+        "login or wallet title on free hosting; a third of that on an allowlisted site",
+        "evidence": "Why, in words",
+        "prompt": "The strongest secret the frame asks for, or empty",
+        "free_hosting_lure": "True for a brand login or wallet title on a free hosting "
+        "tenant that is not allowlisted",
+        "legit_domains": "The brand's own domains",
+    },
 )
+def _brand_claims_table(cap: Capture) -> list[Row]:
+    return memo(
+        cap,
+        "brand_claims",
+        lambda: _brand_claims(cap.data, cap.section("forms")["cross_domain_credential_forms"]),
+    )
 
-signal(
-    "brand.credential_prompt",
-    "Brand page asks for a secret",
-    (
-        "The page behind Imitated brand asks for a password, card, one-time code, recovery "
-        "phrase or sign-in name."
-    ),
+
+@table(
+    "brand_labels",
+    "Frames on a free hosting tenant whose host name spells a brand keyword "
+    "(microsoftaccount-kit.<builder>, ledger-live-kit.pages.dev): a label token must start "
+    "with the keyword's first word, and keywords under 5 letters are skipped.",
+    {
+        "url": "The frame URL",
+        "host": "Its host",
+        "platform": "The hosting platform",
+        "brand": "The brand named",
+        "keyword": "The keyword found",
+        "prompt": "The strongest secret the frame asks for, or empty",
+    },
 )
+def _brand_labels(cap: Capture) -> list[Row]:
+    def build() -> list[Row]:
+        rows = []
+        for frame in _all_frames(cap.data):
+            host = _host(frame.get("url"))
+            platform = free_hosting(host) if host else None
+            if not platform:
+                continue
+            tokens = _LABEL_TOKEN.findall(host[: -len(platform)])
+            joined = "".join(tokens)
+            for brand in cap.data.brands:
+                for keyword in brand.keywords:
+                    words = _LABEL_TOKEN.findall(keyword.lower())
+                    if keyword.startswith("acronym:") or len("".join(words)) < 5:
+                        continue
+                    if "".join(words) in joined and any(t.startswith(words[0]) for t in tokens):
+                        rows.append(
+                            {
+                                "url": frame.get("url", ""),
+                                "host": host,
+                                "platform": platform,
+                                "brand": brand.name,
+                                "keyword": keyword,
+                                "prompt": _credential_prompt(frame) or "",
+                            }
+                        )
+        return rows
 
-signal(
-    "brand.free_hosting_lure",
-    "Brand login title on free hosting",
-    (
-        "The page behind Imitated brand is on a free hosting platform (string "
-        "hosting.free_hosting), names the brand in its title, and its title is a login or "
-        "wallet lure (string lures.title_lure). Not set on allowlisted sites."
-    ),
+    return memo(cap, "brand_labels", build)
+
+
+@table(
+    "favicon_lookups",
+    "Requests to a favicon service (string exfiltration.favicon_service) and the site "
+    "whose icon they fetch: kits show the visitor's own mail provider's logo.",
+    {
+        "url": "The request URL",
+        "target": "The host whose favicon was fetched",
+        "visited": "True when the session itself visited that site",
+    },
 )
+def _favicon_table(cap: Capture) -> list[Row]:
+    def build() -> list[Row]:
+        data = cap.data
+        visited = {site(h) for f in _all_frames(data) if (h := _host(f.get("url")))}
+        rows = []
+        for r in cap.reqs:
+            if not (m := _FAVICON_SERVICE.match(r["url"])):
+                continue
+            target = unquote(m.group(1)).strip().lower()
+            host = _host(target) if "://" in target else target.split("/")[0].removesuffix(".ico")
+            if host and "." in host:
+                rows.append({"url": r["url"], "target": host, "visited": site(host) in visited})
+        return rows
 
-signal(
-    "brand.hosting_label",
-    "Free-hosting tenant named after a brand",
-    (
-        "A free-hosting host whose tenant label carries a brand keyword of 5 or more letters "
-        "(microsoftaccount-kit.<platform>) and whose page asks for a secret. Not on "
-        "allowlisted sites. The page itself may never name the brand."
-    ),
-)
-
-signal(
-    "brand.favicon_lookups",
-    "Favicons fetched for other sites",
-    (
-        "Hosts whose favicon the page fetched through a favicon service (string "
-        "exfiltration.favicon_service), other than sites the session visited (first 10)."
-    ),
-)
-
-signal(
-    "brand.favicon_lookup_count",
-    "Favicon lookups for other sites",
-    (
-        "How many hosts had their favicon fetched through a favicon service. Kits do this to "
-        "show the victim's own mail provider's logo."
-    ),
-)
-
-signal(
-    "final.url",
-    "Final URL",
-    "The URL the session ended on.",
-)
-
-signal(
-    "final.domain",
-    "Final domain",
-    "The registrable domain of the final URL.",
-)
-
-signal(
-    "final.allowlisted",
-    "Final site allowlisted",
-    "The final host's site is in Admin > Allowlist.",
-)
-
-signal(
-    "final.free_hosting",
-    "Final page on free hosting",
-    ("The free hosting platform the final host is on (string hosting.free_hosting), if any."),
-)
-
-signal(
-    "final.ipfs",
-    "Final page on IPFS",
-    "The final URL is an IPFS gateway URL (string web3.ipfs_url).",
-)
-
-signal(
-    "final.abuse_interstitial",
-    "Hosting provider abuse warning",
-    (
-        "The final page is Cloudflare's phishing or malware warning: a form to /cdn- "
-        "cgi/phish-bypass with warning wording (string lures.abuse_warning). Cloudflare has "
-        "already flagged the site."
-    ),
-)
-
-signal(
-    "domains.chain_youngest_age_days",
-    "Youngest domain on the path (days)",
-    (
-        "Registration age in days of the youngest domain the visitor travelled through "
-        "(redirect chain and navigations, not third-party resources). Empty when no age is "
-        "known."
-    ),
-)
-
-signal(
-    "domains.final_age_days",
-    "Final domain age (days)",
-    "Registration age in days of the final URL's domain. Empty when unknown.",
-)
-
-signal(
-    "domains.young",
-    "Young domains",
-    "Contacted domains younger than 30 days, youngest first (first 10).",
-)
-
-signal(
-    "domains.punycode_confusable",
-    "Confusable punycode hosts",
-    (
-        "Contacted hosts with a punycode label that mixes Latin with another script, or uses "
-        "only characters that look Latin. Plain native-script names are not counted."
-    ),
-)
-
-signal(
-    "domains.punycode_hosts",
-    "Punycode hosts",
-    "Every contacted punycode host with its display form.",
-)
-
-signal(
-    "domains.lookalike",
-    "Lookalike hosts",
-    (
-        "Contacted hosts that imitate a brand domain: a homoglyph or typo of it (paypa1.com), "
-        "or the brand name inside a foreign domain (paypal.secure-login.xyz). Allowlisted and "
-        "brand-owned hosts are left out."
-    ),
-)
-
-signal(
-    "domains.lookalikes",
-    "Lookalike host details",
-    "Each lookalike host, the brand domain it imitates and how (first 10).",
-)
-
-signal(
-    "domains.government_lookalike",
-    "Government lookalike hosts",
-    (
-        "Contacted hosts that dress up as a government site without being under a government "
-        "suffix (absher-gov-sa.com, moi.gov.sa.verify-id.com)."
-    ),
-)
-
-signal(
-    "domains.government_lookalikes",
-    "Government lookalike details",
-    "Each government lookalike host and what it imitates (first 10).",
-)
-
-
-# --- detections ------------------------------------------------------------------------
-
-detection(
-    "newly_registered_domain",
-    title="Newly registered domain on the path",
-    severity="medium",
-    score=25,
-    tags=["newly-registered"],
-    attack=["T1583.001"],
-    description=(
-        "The submitted, redirect or final domain was registered less than 30 days ago. Third- "
-        "party resources do not count."
-    ),
-    when=sig("domains.chain_youngest_age_days") < 30,
-    evidence=[
-        "domains.young",
-    ],
-)
-
-detection(
-    "punycode_domain",
-    title="Confusable punycode domain",
-    severity="medium",
-    score=25,
-    tags=["punycode"],
-    attack=["T1583.001", "T1036"],
-    description=(
-        "A domain is an internationalised name that mixes Latin with another script or uses "
-        "only Latin-lookalike characters."
-    ),
-    when=sig("domains.punycode_confusable") > 0,
-    evidence=[
-        "domains.punycode_hosts",
-    ],
-)
-
-detection(
-    "lookalike_domain",
-    title="Lookalike of a brand domain",
-    severity="high",
-    score=45,
-    tags=["lookalike", "phishing"],
-    attack=["T1583.001", "T1036"],
-    description="A domain imitates a known brand's domain.",
-    when=sig("domains.lookalike") > 0,
-    evidence=[
-        "domains.lookalikes",
-    ],
-)
-
-detection(
-    "brand_impersonation",
-    title="Brand impersonation asking for credentials",
-    severity="high",
-    score=45,
-    tags=["phishing", "brand-impersonation"],
-    attack=["T1656"],
-    description=(
-        "A page presents a known brand and asks for credentials, but is not hosted on that "
-        "brand's domains."
-    ),
-    when=all_of(
-        sig("brand.confidence") >= 60,
-        sig("brand.credential_prompt").is_true(),
-    ),
-    evidence=[
-        "brand",
-    ],
-)
-
-detection(
-    "brand_on_free_hosting",
-    title="Brand login page on free hosting",
-    severity="high",
-    score=45,
-    tags=["phishing", "brand-impersonation", "free-hosting"],
-    attack=["T1583.006", "T1656"],
-    description=(
-        "A page on a free hosting or site-builder platform has a brand and login, wallet, "
-        "support or verification wording in its title. Example platforms: pages.dev, "
-        "typedream.app, web.app, blob.core.windows.net. These are the SEO and smishing "
-        "landing pages that send victims to a harvester."
-    ),
-    when=sig("brand.free_hosting_lure").is_true(),
-    evidence=[
-        "brand",
-    ],
-)
-
-detection(
-    "brand_named_free_hosting_login",
-    title="Free-hosting site named after a brand asks for credentials",
-    severity="high",
-    score=50,
-    tags=["phishing", "brand-impersonation", "free-hosting"],
-    attack=["T1583.006", "T1656", "T1566.002"],
-    description=(
-        "A page on a free hosting or site-builder platform asks for a password, sign-in name, "
-        "card, code or recovery phrase. Its tenant name carries a brand (microsoftaccount- "
-        "kit.<builder>, ledger-live-kit.pages.dev). The page itself need not name the brand. "
-        "Builder forms often have no real password field."
-    ),
-    when=sig("brand.hosting_label").present(),
-    evidence=[
-        "brand.hosting_label",
-        "final.url",
-    ],
-)
-
-detection(
-    "hosting_abuse_interstitial",
-    title="Hosting provider already flagged the site",
-    severity="high",
-    score=40,
-    tags=["phishing", "malware-download", "takedown"],
-    attack=["T1583.006"],
-    description=(
-        "The page ended on Cloudflare's 'Suspected Phishing' or 'Suspected Malware' block for "
-        "this hostname. The provider already confirmed abuse. The payload is not visible, but "
-        "the URL is not clean. Run the analysis again only if you need the payload."
-    ),
-    when=sig("final.abuse_interstitial").present(),
-    evidence=[
-        "final.abuse_interstitial",
-        "final.url",
-    ],
-)
-
-detection(
-    "dynamic_brand_favicon_login",
-    title="Login page fetches the victim's brand logo",
-    severity="high",
-    score=50,
-    tags=["phishing", "credential-harvest"],
-    attack=["T1566.002", "T1656"],
-    description=(
-        "A password page fetches another site's favicon through a favicon service (Google "
-        "s2/faviconV2, DuckDuckGo, Clearbit). Webmail kits use this trick to show the "
-        "victim's own mail-provider icon. The page also is on free hosting, is on a domain "
-        "under 30 days old, calls an IP-lookup service or shows verification wording."
-    ),
-    when=all_of(
-        sig("forms.password_forms") > 0,
-        sig("brand.favicon_lookup_count") > 0,
-        sig("brand.favicon_lookup_count") <= 3,
-        any_of(
-            sig("final.free_hosting").present(),
-            sig("domains.final_age_days") < 30,
-            sig("network.ip_lookups").present(),
-            sig("lure.verification_wording").is_true(),
-        ),
-    ),
-    evidence=[
-        "brand.favicon_lookups",
-        "network.ip_lookups",
-        "final.url",
-    ],
-)
-
-detection(
-    "government_lookalike_domain",
-    title="Lookalike of a government domain",
-    severity="high",
-    score=45,
-    tags=["phishing", "government-impersonation"],
-    attack=["T1583.001", "T1656"],
-    description=(
-        "A domain imitates a government site but is not under a government suffix (absher- "
-        "gov-sa.com, moi.gov.sa.verify-id.com, govsa-fines.net)."
-    ),
-    when=sig("domains.government_lookalike") > 0,
-    evidence=[
-        "domains.government_lookalikes",
-    ],
-)
-
-detection(
-    "ipfs_credential_page",
-    title="Credential page on IPFS",
-    severity="high",
-    score=45,
-    tags=["phishing"],
-    attack=["T1566.002", "T1583.006"],
-    description="The final page comes from an IPFS gateway and asks for credentials.",
-    when=all_of(
-        sig("final.ipfs").present(),
-        any_of(
-            sig("forms.password_forms") > 0,
-            sig("brand.credential_prompt").is_true(),
-            sig("forms.otp_forms") > 0,
-        ),
-    ),
-    evidence=[
-        "final.ipfs",
-        "final.url",
-    ],
-)
+    return memo(cap, "favicon_lookups", build)

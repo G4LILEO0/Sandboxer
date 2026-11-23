@@ -1,0 +1,15 @@
+title: Cloaking bounce to a decoy page
+severity: medium
+score: 30
+tags: cloaking, evasion
+attack: T1497, T1036
+description: A script bounced the top-level page to a decoy (about:blank, a 404, a big brand
+  homepage) on a young, free-hosted or obfuscated submitted site.
+---
+// A scripted bounce to a decoy ...
+scripted_bounces
+// ... from a young or free-hosted site, or one with obfuscated scripts.
+| where toscalar(domains | where on_path | summarize min(age_days)) < 90
+    or exists(final_free_hosting)
+    or exists(obfuscated_scripts)
+| project to_url = substring(to_url, 0, 300), type

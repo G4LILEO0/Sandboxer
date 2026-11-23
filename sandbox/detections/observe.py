@@ -1,15 +1,20 @@
-"""observe"""
+"""The report summary stored with each analysis, and IOC extraction.
+
+The summary describes the capture for the report (the final page, the redirect chain,
+forms, scripts, downloads, domains, the brand imitated, how the capture went). It decides
+nothing: every verdict comes from the rules in ``sandbox/detections/rules``. Importing
+this module also imports every area module, which registers the tables and functions the
+rules read."""
 
 import re
 from collections.abc import Callable
 from typing import Any
 
 from sandbox.analysis.domains import site
-from sandbox.detections import (
+from sandbox.detections import (  # noqa: F401  (clickfix and lures register tables)
     clickfix,
     downloads,
     evasion,
-    exfiltration,
     forms,
     hosting,
     lures,
@@ -39,26 +44,18 @@ def _dialogs_section(cap: Capture) -> dict[str, Any]:
     return {"count": len(dialogs), "messages": [d.get("message") for d in dialogs][:10]}
 
 
-# Every section of the observed values, in report order. A section is built by the area
-# that owns it; signals name a value inside a section ("clipboard.command_like").
+# Every section of the summary, in report order.
 SECTIONS: dict[str, Callable[[Capture], dict[str, Any]]] = {
     "final": hosting.final_section,
     "capture": evasion.capture_section,
     "forms": forms.forms_section,
     "scripts": scripts.scripts_section,
-    "js": scripts.js_section,
     "downloads": downloads.downloads_section,
-    "clipboard": clickfix.clipboard_section,
-    "lure": lures.lure_section,
-    "exfil": exfiltration.exfil_section,
     "web3": web3.web3_section,
-    "websocket": network.websocket_section,
-    "evasion": evasion.evasion_section,
     "domains": hosting.domains_section,
     "redirects": navigation.redirects_section,
     "brand": hosting.brand_section,
     "network": network.network_section,
-    "navigation": navigation.navigation_section,
     "cookies": _cookies_section,
     "frames": navigation.frames_section,
     "popups": _popups_section,
@@ -67,15 +64,15 @@ SECTIONS: dict[str, Callable[[Capture], dict[str, Any]]] = {
 
 
 class Facts(dict):
-    """The observed values (a plain dict, stored with the analysis) that also carry the
-    capture they came from, so query rules can read its tables in the same run."""
+    """The report summary (a plain dict, stored with the analysis) that also carries the
+    capture it came from, so the rules can read its tables in the same run."""
 
     capture: Capture | None = None
 
 
 def build_facts(data: CaptureData) -> Facts:
-    """Every observed value of one capture, by section: what detections read and what the
-    report shows. Pure: a stored capture gives the same values again."""
+    """The report summary of one capture, by section, carrying the capture for the rules.
+    Pure: a stored capture gives the same values again."""
     cap = Capture(data)
     facts = Facts({name: cap.section(name) for name in SECTIONS})
     facts.capture = cap

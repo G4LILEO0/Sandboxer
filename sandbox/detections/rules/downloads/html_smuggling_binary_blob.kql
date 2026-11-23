@@ -1,0 +1,13 @@
+title: File built in the browser (HTML smuggling)
+severity: high
+score: 60
+tags: smuggling, malware-download
+attack: T1027.006, T1204.002
+description: The page built a large Blob/File and a risky file download happened in the same
+  session: HTML smuggling that assembles the payload in the browser.
+---
+// A Blob built in the page ...
+blobs
+// ... and an executable, disguised or archive download.
+| where exists(executable_downloads) or exists(disguised_downloads) or exists(archive_downloads)
+| project type, size

@@ -1,0 +1,13 @@
+title: Shell command put on the clipboard
+severity: medium
+score: 25
+tags: suspicious-clipboard
+attack: T1204.004
+description: The page wrote a shell command to the clipboard without other ClickFix traits
+  (developer docs with copy buttons do this too).
+---
+// A shell command on the clipboard with none of the ClickFix signs: no ClickFix trait
+// and no paste-into-Run steps (developer docs with copy buttons do this).
+clipboard_commands
+| where not(exists(clickfix_commands)) and not(exists(run_dialog_pages))
+| project command = substring(text, 0, 1000), trait, api, frame_url

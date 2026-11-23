@@ -1,0 +1,10 @@
+title: Payload served as an image
+severity: medium
+score: 30
+tags: cache-smuggling
+attack: T1027.006, T1036
+description: A response served as an image is really an archive or executable (ZIP, RAR, 7z,
+  PE, CAB, OLE). Real CDNs that mislabel content serve another image type, not this.
+---
+mislabeled_images
+| project url, content_type, magic

@@ -1,0 +1,15 @@
+title: Browser history flooded
+severity: medium
+score: 20
+tags: scam, browser-hijack
+attack: T1185
+description: The page flooded session history (many pushState/replaceState calls): back-
+  button hijacking used by browser lockers.
+---
+// 20 or more history entries pushed or replaced: a page that traps the Back button.
+capture
+| extend entries = toscalar(browser_apis
+                            | where api in ("history.pushState", "history.replaceState")
+                            | summarize sum(calls))
+| where entries >= 20
+| project entries

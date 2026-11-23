@@ -1,0 +1,9 @@
+title: Lookalike of a brand domain
+severity: high
+score: 45
+tags: lookalike, phishing
+attack: T1583.001, T1036
+description: A domain imitates a known brand's domain.
+---
+lookalike_hosts
+| project host, lookalike

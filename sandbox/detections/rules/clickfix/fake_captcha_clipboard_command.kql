@@ -1,0 +1,20 @@
+title: Fake CAPTCHA with a clipboard command
+severity: critical
+score: 80
+tags: clickfix
+attack: T1204.004, T1059.001, T1218.005
+description: A fake CAPTCHA / verification page wrote a command to the clipboard, or did so
+  with Run-dialog instructions. When genuine Turnstile/reCAPTCHA resources loaded,
+  verification wording alone is not enough: it then needs Run-dialog instructions or an
+  unambiguous ClickFix trait.
+---
+// A clipboard command ...
+clipboard_commands
+// ... with paste-into-Run steps, or on a page with verification wording. When a real
+// CAPTCHA provider loaded, the wording alone is not enough: the command must then have
+// an unambiguous ClickFix trait.
+| where exists(run_dialog_pages)
+    or (exists(verification_texts)
+        and (toscalar(clipboard_commands | where trait == "unambiguous" | count) > 0
+            or not(exists(genuine_challenge_requests))))
+| project command = substring(text, 0, 1000), trait, frame_url

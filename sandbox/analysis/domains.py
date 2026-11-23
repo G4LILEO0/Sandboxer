@@ -73,6 +73,7 @@ def parent_domains(host: str) -> list[str]:
     return out
 
 
+@lru_cache(maxsize=65536)
 def display_host(host: str) -> str:
     try:
         return idna.decode(host)
@@ -84,6 +85,7 @@ def is_punycode(host: str) -> bool:
     return any(label.startswith("xn--") for label in host.split("."))
 
 
+@lru_cache(maxsize=65536)
 def skeleton(label: str) -> str:
     """Rough confusable skeleton: decode punycode, strip accents, map lookalike chars."""
     text = display_host(label).lower()

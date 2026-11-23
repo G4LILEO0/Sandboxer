@@ -1,0 +1,9 @@
+title: Heavily obfuscated script
+severity: medium
+score: 25
+tags: obfuscation
+attack: T1027
+description: A script uses several obfuscation techniques (eval of decoded strings, packers,
+  long encoded blobs).
+---
+obfuscated_scripts

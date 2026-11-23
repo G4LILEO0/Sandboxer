@@ -1,0 +1,12 @@
+title: Script hidden in invisible characters
+severity: medium
+score: 25
+tags: obfuscation, evasion
+attack: T1027, T1027.010
+description: A script holds a run of 64 or more invisible characters (Hangul fillers U+3164
+  / U+FFA0, zero-width spaces and joiners) mixing at least two of them: a payload written in
+  binary with invisible code points and decoded at runtime, as Tycoon 2FA does to hide its
+  sign-in page from signature scanners.
+---
+invisible_code
+| where not(exists(final_allowlisted))

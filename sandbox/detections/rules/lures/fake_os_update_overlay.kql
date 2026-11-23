@@ -1,0 +1,14 @@
+title: Fake operating-system update screen
+severity: high
+score: 55
+tags: clickfix, fake-update, jackfix
+attack: T1204.004, T1036, T1059
+description: A non-vendor page goes full screen with fake 'installing updates... 37%' OS
+  update text and blocks DevTools/keys or stages a clipboard command (JackFix). This
+  prepares the visitor for paste-and-run steps.
+---
+// A fake OS-update screen that goes fullscreen ...
+fake_os_update_pages
+| where exists(fullscreen_requests)
+// ... and blocks DevTools, locks the keyboard or puts a command on the clipboard.
+| where exists(devtools_keys_blocked) or exists(keyboard_lock_requests) or exists(clipboard_commands)

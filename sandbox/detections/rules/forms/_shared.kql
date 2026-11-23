@@ -1,0 +1,50 @@
+// Frames with a password field, in a form or not.
+let password_pages =
+    frames
+    | where set_has(prompts, "password");
+
+// Frames not run by a known brand or an allowlisted site that ask for a card number with
+// a CVV or expiry, a one-time code, or a wallet recovery phrase, one row per secret.
+let secret_prompts =
+    frames
+    | where isnotempty(host) and not allowlisted(host) and not owned_by(host)
+    | mv-expand kind = prompts
+    | where kind in ("payment", "otp", "seed");
+
+let card_pages = secret_prompts | where kind == "payment";
+let otp_pages = secret_prompts | where kind == "otp";
+let seed_pages = secret_prompts | where kind == "seed";
+
+// Password forms that post to another site (sites of one brand count as one site), or to
+// a target that is not http(s) (mailto:, data:). A javascript: target is the page's own
+// script.
+let cross_site_password_forms =
+    forms
+    | where has_password and not loose and action_scheme != "javascript"
+    | where action_scheme !in ("http", "https")
+        or (isnotempty(action_host) and isnotempty(page_host)
+            and not same_site(page_host, action_host));
+
+// Hosts of pages with a password field that no real form action submits: a field
+// outside any form, or a form with no action, a javascript: action or one that posts
+// back to the page itself. Their script does the sending.
+let script_password_hosts =
+    forms
+    | where loose
+        or (has_password
+            and (isempty(raw_action)
+                or url_scheme(raw_action) in ("", "javascript")
+                or same_url(raw_action, page_url)))
+    | where isnotempty(page_host)
+    | distinct page_host;
+
+// POST and PUT requests a script sent (fetch, XHR, beacon, WebSocket) from such a page to
+// another site that is not allowlisted, and whether the body carries a credential field.
+// Needs the browser request log.
+let script_posts =
+    browser_requests
+    | where method in ("POST", "PUT") and type in ("fetch", "xhr", "ping", "websocket")
+    | where frame_host in (script_password_hosts) and isnotempty(host)
+    | where not same_site(frame_host, host) and not allowlisted(host)
+    | extend credential_body = credential_body(har_bodies)
+    | project from_host = frame_host, to_host = host, type, credential_body, url = substring(url, 0, 300);

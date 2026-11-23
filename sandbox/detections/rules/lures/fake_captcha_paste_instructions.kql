@@ -1,0 +1,14 @@
+title: Fake CAPTCHA with paste-into-Run steps
+severity: high
+score: 55
+tags: clickfix
+attack: T1204.004, T1059.001
+description: A fake verification page tells the visitor to open Run or a terminal (Win+R,
+  Win+X) and paste. Kits write the command only after the checkbox click, so an automated
+  run sees the steps but no clipboard write. Hidden steps count. A real challenge page never
+  asks for either.
+---
+// A fake CAPTCHA with paste-into-Run steps.
+fake_captcha_texts
+| where exists(run_dialog_pages)
+| distinct url

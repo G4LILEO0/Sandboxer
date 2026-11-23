@@ -1,0 +1,17 @@
+title: Page wrote to the clipboard
+severity: low
+score: 5
+tags: clipboard
+attack: T1115
+description: The page wrote to the clipboard (informational). Copy buttons, share links and
+  coupon codes do this on a click. The rule exists so that the report shows every write,
+  command or not. It does not fire alongside another clipboard rule.
+---
+// The page wrote to the clipboard, and no other clipboard rule applies: no command, no
+// path disguise, no write without a click and no paste-into-Run payload.
+clipboard_writes
+| where not(exists(clipboard_commands))
+    and not(exists(filefix_writes))
+    and not(exists(no_gesture_writes))
+    and not(exists(paste_lure_writes))
+| project text = substring(text, 0, 300), api, user_activation, frame_url

@@ -1,0 +1,13 @@
+title: Data sent to a Telegram bot
+severity: critical
+score: 80
+tags: phishing, exfil-telegram
+attack: T1567, T1102.002, T1056.003
+description: The page called the Telegram Bot API from the browser
+  (api.telegram.org/bot<token>/sendMessage or similar). Phishing kits use a Telegram bot as
+  their drop.
+---
+requests
+| where host == "api.telegram.org"
+    and begins_with_match(path, list("exfiltration.telegram_bot"))
+| project method, url = substring(url, 0, 300), has_body = isnotempty(post)

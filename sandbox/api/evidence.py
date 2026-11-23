@@ -1,10 +1,11 @@
 """Rule-hit evidence (REP-4, ANA-11): what exactly a fired detection matched on.
 
-A behaviour hit stores the observed values its detection read; this resolves them at request time,
-from the stored capture, into the concrete content behind them: the strings the page
-ran through eval, the clipboard text, the DOM snapshots and scripts, the YARA match
-strings. Working from stored data means it also covers analyses that ran before this
-existed.
+A behaviour hit stores the rows its rule returned and how each step of the query narrowed
+them down. This adds, at request time and from the stored capture, the concrete content
+behind the tables the rule reads: the strings the page ran through eval, the clipboard
+text, the DOM snapshots and scripts, the YARA match strings. Hits recorded before rules
+were queries stored the values their detection read under dotted names
+("clipboard.commands"); those are resolved by name, so old analyses keep their evidence.
 
 ``resolve`` is pure: the API passes in the hit, the detection, the version's facts, the
 artifact list, the parsed capture result and a reader for artifact bytes. Content is
@@ -19,8 +20,6 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
-
-from sandbox.detections.model import _MISSING, SIGNALS, Group, Test, get_value
 
 SAMPLE_CAP = 64 * 1024
 _MAX_SAMPLES = 30
@@ -80,50 +79,6 @@ def entropy(text: str) -> float:
         return 0.0
     n = len(text)
     return round(-sum(c / n * math.log2(c / n) for c in Counter(text).values()), 2)
-
-
-# --- the rule's condition -------------------------------------------------------------
-
-
-def condition_leaves(rule: dict[str, Any] | None, ctx: Context) -> list[dict[str, Any]]:
-    """Each test of the detection's condition with the value it saw and whether it passed.
-    ``rule["detection"]`` is the ``Detection`` (sandbox.detections) behind the hit."""
-    detection = (rule or {}).get("detection")
-    if detection is None or getattr(detection, "when", None) is None:
-        return []  # a query rule explains itself with its steps and rows instead
-    out: list[dict[str, Any]] = []
-
-    def walk(cond: Any, group: str, negated: bool) -> None:
-        if isinstance(cond, Group):
-            if cond.kind == "not":
-                walk(cond.parts[0], group, not negated)
-            else:
-                for sub in cond.parts:
-                    walk(sub, cond.kind, negated)
-            return
-        assert isinstance(cond, Test)
-        actual = ctx.facts.get(cond.path, _MISSING)
-        if actual is _MISSING:
-            actual = get_value(ctx.all_facts, cond.path)
-        passed = cond.passes(actual)
-        out.append(
-            {
-                "fact": cond.path,
-                "title": SIGNALS[cond.path].title if cond.path in SIGNALS else cond.path,
-                "test": cond.wording(negated),
-                "op": cond.op,
-                "threshold": cond.value,
-                "actual": None if actual is _MISSING else actual,
-                "missing": actual is _MISSING,
-                "negated": negated,
-                "group": group,
-                # A test under "not" counts towards the hit when it did NOT hold.
-                "passed": passed != negated,
-            }
-        )
-
-    walk(detection.when, "all", False)
-    return out
 
 
 # --- resolvers, keyed by fact-path prefix ----------------------------------------------
@@ -190,6 +145,7 @@ def _scripts(ctx: Context) -> None:
             ctx.add_file(a, "script named in the facts")
 
 
+# Old hits: by the dotted name of a value they recorded.
 RESOLVERS: list[tuple[tuple[str, ...], Callable[[Context], None]]] = [
     (("js.code_exec_", "js.dynamic_exec_", "web3.rpc_result_linked_exec"), _dynamic_code),
     (("js.blob_",), _blobs),
@@ -199,6 +155,24 @@ RESOLVERS: list[tuple[tuple[str, ...], Callable[[Context], None]]] = [
     (_DOM_FACTS, _dom),
     (("scripts.",), _scripts),
 ]
+
+
+# Query hits: by the tables the rule (or a shared query it uses) reads.
+TABLE_RESOLVERS: dict[str, Callable[[Context], None]] = {
+    "code_exec": _dynamic_code,
+    "rpc_strings": _dynamic_code,
+    "blobs": _blobs,
+    "clipboard": _clipboard,
+    "downloads": _downloads,
+    "archive_entries": _downloads,
+    "forms": _forms,
+    "frames": _dom,
+    "pages": _dom,
+    "lure_texts": _dom,
+    "brand_claims": _dom,
+    "scripts": _scripts,
+    "inline_code": _scripts,
+}
 
 
 def _yara(ctx: Context) -> None:
@@ -234,13 +208,22 @@ def resolve(
 ) -> dict[str, Any]:
     detail = hit.get("detail") or {}
     ctx = Context(hit, detail.get("facts") or {}, all_facts, artifacts, capture, read)
-    leaves = condition_leaves(rule, ctx)
+    detection = (rule or {}).get("detection")
     if hit.get("engine") == "yara":
         _yara(ctx)
+    elif detail.get("kind") == "query":
+        if detection is not None:
+            from sandbox.detections import catalog
+
+            tables = {t["name"] for t in catalog.describe(detection)["tables"]}
+            done: set[Callable[[Context], None]] = set()
+            for name, resolver in TABLE_RESOLVERS.items():
+                if name in tables and resolver not in done:
+                    done.add(resolver)
+                    resolver(ctx)
     else:
-        paths = set(ctx.facts) | {leaf["fact"] for leaf in leaves}
         for prefixes, resolver in RESOLVERS:
-            if any(p.startswith(prefixes) for p in paths):
+            if any(p.startswith(prefixes) for p in ctx.facts):
                 resolver(ctx)
     _link_mentioned(ctx)
     return {
@@ -251,11 +234,8 @@ def resolve(
         "description": (rule or {}).get("description") or detail.get("description", ""),
         "rule_found": rule is not None,
         "rule_source": (rule or {}).get("source_text"),
-        "title": detail.get("title") or getattr((rule or {}).get("detection"), "title", None),
-        "rule_text": (
-            (rule or {})["detection"].rule_text() if (rule or {}).get("detection") else None
-        ),
-        "condition": leaves,
+        "title": detail.get("title") or getattr(detection, "title", None),
+        "rule_text": detection.rule_text() if detection is not None else None,
         **_query_parts(rule, detail),
         "facts": ctx.facts if ctx.facts else {k: v for k, v in detail.items() if k != "facts"},
         "samples": ctx.samples,
@@ -278,7 +258,7 @@ def _query_parts(rule: dict[str, Any] | None, detail: dict[str, Any]) -> dict[st
         "shared": [],
     }
     detection = (rule or {}).get("detection")
-    if detection is not None and getattr(detection, "kind", "") == "query":
+    if detection is not None:
         from sandbox.detections import catalog
 
         out["shared"] = catalog.describe(detection)["shared"]

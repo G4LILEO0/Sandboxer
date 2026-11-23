@@ -120,35 +120,11 @@ async function viewRule(id) {
       ...r.overrides.map((o) => el('div', { className: 'small', textContent: `${o.at} ${o.by}: ${o.reason} ${o.active ? '(active)' : '(lifted)'}` }))) : null);
 }
 
-// A behaviour rule is a detection in code (sandbox/detections): one model for every
-// rule. Admin shows it as sentences with every signal it reads; it can be disabled,
-// tested, and its severity and tags changed, but its logic changes in code.
+// A behaviour rule is a rule file in sandbox/detections/rules: a query over the capture's
+// tables, the same for every detection. Admin shows the query, the shared named queries it
+// uses and what each table, function and detection string it names means.
 function viewDetection(r) {
-  const d = r.detection;
-  if (d.kind === 'query') { viewQueryRule(r); return; }
-  const actions = el('div', {},
-    btn('Test against recent analyses', () => testDetection(r)),
-    btn('Edit severity and tags', () => detectionMetaEditor(r)),
-    btn('Back', rules));
-  fill(
-    el('div', { className: 'row' }, el('h2', { className: 'section-title', textContent: d.title }), actions),
-    el('p', { className: 'small' }, el('span', { className: 'monospace', textContent: d.name }),
-      ` · severity ${r.severity} · score ${d.score} · tags ${r.tags.join(', ') || '—'} · ATT&CK ${r.attack_ids.join(', ') || '—'}`),
-    el('p', { textContent: d.description }),
-    el('pre', { className: 'small', textContent: d.rule }),
-    el('p', { className: 'small muted' }, 'Written in ', el('span', { className: 'monospace', textContent: d.source }),
-      '. To change what it checks, edit it there (docs/detection-rules.md); every detection uses the same model.'),
-    r.error ? el('p', { className: 'error-message small', textContent: r.error }) : null,
-    el('h3', { className: 'section-title', textContent: `Signals it reads (${d.signals.length})` }),
-    table(['Signal', 'How it is computed', 'Computed in'], d.signals.map((s) => el('tr', {},
-      el('td', {}, el('strong', { className: 'small', textContent: s.title }), el('div', { className: 'monospace small muted', textContent: s.path }),
-        s.evidence_only ? el('div', { className: 'small muted', textContent: 'evidence only, not tested' }) : null),
-      el('td', { className: 'small', textContent: s.description }),
-      el('td', { className: 'monospace small', textContent: s.source })))),
-    d.strings.length ? el('p', { className: 'small muted', textContent: `Detection strings used in this area (Admin > Detection strings): ${d.strings.join(', ')}` }) : null,
-    r.overrides.length ? el('div', {}, el('h3', { className: 'section-title', textContent: 'Local overrides' }),
-      ...r.overrides.map((o) => el('div', { className: 'small', textContent: `${o.at} ${o.by}: ${o.reason} ${o.active ? '(active)' : '(lifted)'}` }))) : null,
-    el('div', { id: 'test-out' }));
+  viewQueryRule(r);
 }
 
 // A query rule: the KQL-style query in sandbox/detections/rules, the shared named
@@ -261,7 +237,7 @@ async function testRule(form, existing) {
 }
 
 // --- detection strings ---------------------------------------------------------------
-// The keyword patterns, host lists, file types and points the signals match
+// The keyword patterns, host lists, file types and points the rules match
 // captures against (sandbox/detections). An edit is validated on save, audited, and used
 // by the next analysis or re-analysis; "Revert to shipped" restores the default.
 const stringFilter = { q: '', edited: false };
@@ -301,7 +277,7 @@ async function strings() {
   editedOnly.addEventListener('change', () => { stringFilter.edited = editedOnly.checked; render(); });
   fill(
     el('div', { className: 'row' }, el('h2', { className: 'section-title', textContent: 'Detection strings' }), btn('Change history', stringHistory)),
-    el('p', { className: 'small muted', textContent: `The words, patterns and lists behind the detection signals (ClickFix commands, lure wording, Microsoft sign-in markers, free hosting, collectors…). Edits are checked before they are saved, recorded in the audit log, and used from the next analysis; re-analyse a case to apply them to it. ${res.data.overridden} edited · version ${res.data.version}.` }),
+    el('p', { className: 'small muted', textContent: `The words, patterns and lists the detection rules use with list("key") (ClickFix commands, lure wording, Microsoft sign-in markers, free hosting, collectors…). Edits are checked before they are saved, recorded in the audit log, and used from the next analysis; re-analyse a case to apply them to it. ${res.data.overridden} edited · version ${res.data.version}.` }),
     el('div', { className: 'filters' }, search, el('label', { className: 'small' }, editedOnly, ' Edited only')),
     list);
   render();

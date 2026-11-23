@@ -1,0 +1,11 @@
+title: Requests to internal network addresses
+severity: medium
+score: 25
+tags: internal-probe
+attack: T1046
+description: The page tried to reach internal or cloud-metadata addresses (blocked).
+---
+// Requests the egress guard refused because they targeted an internal address.
+blocked
+| where not(reason matches regex "scheme")
+| project url = substring(url, 0, 300), reason

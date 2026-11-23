@@ -1,0 +1,39 @@
+title: Local port scan
+severity: medium
+score: 25
+tags: fingerprinting, local-port-scan
+attack: T1046, T1592.004
+description: The page tried several ports on localhost or the LAN (WebSocket, fetch/image or
+  WebRTC TURN/STUN). These are often remote-access ports such as RDP, VNC, SSH or
+  TeamViewer. This is browser-based local port scanning, used to fingerprint visitors or
+  detect remote-access tools. The rule ignores known anti-fraud scripts (ThreatMetrix), a
+  desktop app's own helper ports and allowlisted sites.
+---
+local_probes
+| summarize ports = make_set(port), hosts = make_set(host), channels = make_set(channel),
+            scripts = make_set(script), host_count = dcount(host),
+            loopback_hosts = dcountif(host, kind == "loopback")
+| extend port_count = array_length(ports),
+         remote_access = count_in(ports, list("network.remote_access_ports"))
+// Two or more remote-access ports, five or more ports, or ten or more hosts ...
+| where remote_access >= 2 or port_count >= 5 or host_count >= 10
+// ... not explained by a fraud-prevention profiler. Its scripts made the probes; or,
+// when the probes name no script, it is loaded and the probes look exactly like its own
+// scan (loopback WebSockets on its ports only) ...
+| extend vendor = first_name_matching(scripts, list("network.fraud_vendor_scripts"))
+| extend loaded_vendor = iff(isempty(vendor) and array_length(scripts) == 0,
+                             first_name_matching(toscalar(loaded_urls | summarize make_set(url)),
+                                                 list("network.fraud_vendor_scripts")),
+                             "")
+| extend vendor = iff(isnotempty(vendor), vendor,
+                      iff(isnotempty(loaded_vendor)
+                          and array_length(channels) == 1 and set_has(channels, "websocket")
+                          and loopback_hosts == host_count
+                          and is_subset(ports, list_item(list("network.fraud_vendor_ports"), loaded_vendor)),
+                          loaded_vendor, ""))
+| where isempty(vendor)
+// ... nor by a local companion app (every port is one of its ports) ...
+| where isempty(first_name_covering(ports, list("network.local_app_ports")))
+// ... on a site that is not allowlisted.
+| where not(exists(final_allowlisted))
+| project ports, hosts, channels, scripts, remote_access

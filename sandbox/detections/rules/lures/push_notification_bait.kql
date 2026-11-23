@@ -1,0 +1,12 @@
+title: Notification permission bait
+severity: medium
+score: 30
+tags: scam, push-abuse
+attack: T1204.001, T1566
+description: The page asked for notification permission with 'click Allow to
+  continue/verify' coercion wording.
+---
+// The page asks for notification permission and tells the visitor to press Allow.
+notification_bait_frames
+| where exists(notification_requests)
+| distinct url

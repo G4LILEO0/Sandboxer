@@ -1,0 +1,11 @@
+title: Unknown payload on the clipboard with paste-into-Run steps
+severity: high
+score: 50
+tags: clickfix, suspicious-clipboard
+attack: T1204.004
+description: The page wrote 40+ characters to the clipboard that match no known command
+  pattern. The page also tells the visitor to paste into Run or a terminal. This is an
+  obfuscated or unusual ClickFix payload.
+---
+paste_lure_writes
+| project text = substring(text, 0, 300), api, user_activation, frame_url

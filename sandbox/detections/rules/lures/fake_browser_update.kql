@@ -1,0 +1,18 @@
+title: Fake browser update
+severity: critical
+score: 70
+tags: fake-update, malware-download
+attack: T1189, T1204.002, T1036.005
+description: A non-vendor page shows a browser/software update lure and either downloads (or
+  tries to download) a risky file, tells the visitor to open the file it delivered, or
+  writes a clipboard command (ClearFake / SocGholish / fake Acrobat update).
+---
+// A fake browser-update page ...
+fake_update_pages
+// ... with a download, open-the-download steps, a clipboard command or an EtherHiding
+// blockchain read (the update script's loader).
+| where exists(unprompted_risky_downloads)
+    or exists(executable_downloads)
+    or exists(open_download_pages)
+    or exists(clipboard_commands)
+    or exists(etherhiding_reads)

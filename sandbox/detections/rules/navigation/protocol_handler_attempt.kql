@@ -1,0 +1,10 @@
+title: Protocol-handler link (search-ms, WebDAV)
+severity: medium
+score: 30
+tags: protocol-handler
+attack: T1204.001
+description: A non-allowlisted page tries to open Windows search (search-ms:) or a WebDAV
+  share. Ordinary web pages do not open Explorer.
+---
+handler_links
+| project target = substring(target, 0, 300), page_url

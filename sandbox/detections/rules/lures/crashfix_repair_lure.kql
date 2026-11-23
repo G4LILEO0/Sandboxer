@@ -1,0 +1,12 @@
+title: Fake crash-repair lure
+severity: high
+score: 55
+tags: clickfix, crashfix
+attack: T1176.001, T1204.004
+description: A non-vendor page shows a fake browser-crash / 'security issues detected'
+  repair popup. It also writes a command to the clipboard or tells the visitor to paste one
+  into Run. This is CrashFix / KongTuke, often after a malicious extension freezes the
+  browser.
+---
+crash_repair_pages
+| where exists(clipboard_commands) or exists(run_dialog_pages)

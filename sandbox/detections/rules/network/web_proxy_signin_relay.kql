@@ -8,15 +8,13 @@ description: A non-allowlisted page runs an interception web proxy (Ultraviolet,
   Microsoft sign-in page. The victim sees the brand's real login, served through the
   attacker's host, which keeps the session (AiTM).
 ---
-capture
 // An interception web proxy (Ultraviolet, Scramjet, Rammerhead) loaded from a host that
 // is not allowlisted ...
-| where signal("network.web_proxy_kit_count") > 0
+web_proxy_kits
 // ... presenting a sign-in: a fake browser window, a fake address bar, a Microsoft
 // sign-in clone or a brand credential prompt.
 | where exists(fake_window_frames)
     or exists(fake_address_bars)
     or exists(ms_clone_pages)
-    or signal("brand.credential_prompt") == true
-| project kits = signal("network.web_proxy_kits"), assets = signal("network.web_proxy_assets"),
-          brand = signal("brand.name"), final_url = signal("final.url")
+    or exists(brand_secret_page)
+| project kit, asset, brand = toscalar(brand_claim | project brand)

@@ -1,0 +1,24 @@
+title: Protocol-handler lure (search-ms, WebDAV)
+severity: high
+score: 50
+tags: protocol-handler, webdav, malware-download
+attack: T1204.001, T1221
+description: The page opens Windows search (search-ms:) or a WebDAV share. It also has a
+  document pretext, a renamed results view (displayname) or a tunnel host. Explorer then
+  shows the attacker's remote files as if they were the visitor's own.
+---
+// A protocol-handler link ...
+handler_links
+// ... with a document pretext on its page, a fake folder name, or a target on a tunnel or
+// free host.
+| extend pretext = toscalar(frames
+                            | where url in (handler_links | project page_url)
+                            | where strcat(text, " ", title) matches list("lures.document_pretext")
+                            | count) > 0,
+         masquerade = toscalar(handler_links | where decoded contains "displayname=" | count) > 0,
+         tunnel = toscalar(handler_links
+                           | mv-expand target_host = target_hosts
+                           | where isnotempty(free_hosting(target_host))
+                           | count) > 0
+| where pretext or masquerade or tunnel
+| project target = substring(target, 0, 300), page_url, pretext, masquerade, tunnel

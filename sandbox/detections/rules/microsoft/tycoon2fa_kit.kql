@@ -12,26 +12,25 @@ description: Tycoon 2FA traits together: a Microsoft or Google sign-in on a host
 capture
 // A Microsoft or Google sign-in clone ...
 | where exists(ms_clone_pages)
-    or (signal("brand.credential_prompt") == true
-        and signal("brand.name") in ("Microsoft", "Google"))
+    or toscalar(brand_secret_page | where brand in ("Microsoft", "Google") | count) > 0
 // ... behind a CAPTCHA ...
-| where signal("capture.gated") == true
+| where exists(captcha_gates)
 // ... with anti-analysis: DevTools or the context menu blocked, a debugger trap, or
 // invisible-character code ...
-| where signal("evasion.devtools_blocked") > 0
-    or signal("evasion.context_menu_blocked") == true
-    or signal("evasion.debugger_trap") > 0
-    or signal("scripts.invisible_unicode") > 0
+| where exists(devtools_keys_blocked)
+    or exists(context_menu_blocked)
+    or exists(debugger_traps)
+    or exists(invisible_code)
 // ... and Tycoon's plumbing: its own canvas CAPTCHA, invisible-character code, or a
-// Socket.IO channel to a foreign host.
-| where signal("capture.custom_captcha") > 0
-    or signal("scripts.invisible_unicode") > 0
-    or signal("websocket.foreign_count") > 0
-    or signal("websocket.socketio_polling") > 0
-| where signal("final.allowlisted") != true
-| project brand = signal("brand.name"),
-          custom_captcha_pages = signal("capture.custom_captcha_pages"),
-          invisible_unicode = signal("scripts.invisible_unicode_details"),
-          devtools_keys = signal("evasion.devtools_blocked_keys"),
-          debugger_traps = signal("evasion.debugger_trap_sources"),
+// relay channel to a foreign host.
+| where exists(custom_captcha_pages)
+    or exists(invisible_code)
+    or exists(foreign_websockets)
+    or exists(foreign_socketio_polling)
+| where not(exists(final_allowlisted))
+| project brand = toscalar(brand_claim | project brand),
+          custom_captcha_pages = toscalar(custom_captcha_pages | summarize make_set(url)),
+          invisible_code = toscalar(invisible_code | summarize make_set(source)),
+          devtools_keys = toscalar(devtools_keys_blocked | summarize make_set(key)),
+          debugger_traps = toscalar(debugger_traps | summarize make_set(source)),
           final_url

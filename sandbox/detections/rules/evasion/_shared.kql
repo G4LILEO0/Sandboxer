@@ -1,0 +1,46 @@
+// DevTools keys (F12, Ctrl+Shift+I, ...) the page swallowed.
+let devtools_keys_blocked =
+    blocked_input
+    | where kind == "devtools_key"
+    | distinct key;
+
+// The page blocked the right-click menu.
+let context_menu_blocked =
+    blocked_input
+    | where kind == "contextmenu";
+
+// Code that pauses or times the debugger to catch an open DevTools window: a debugger
+// statement on a timer or between two clock reads, or one built from a string. A lone
+// debugger; left in by a developer is none of these.
+let debugger_traps =
+    inline_code
+    | where text contains "debu" and not harness_code(text)
+    | extend sample = substring(text, 0, 2000000)
+    | where sample matches regex @"(?s)\bset(?:Interval|Timeout)\s*\([^;]{0,200}?\bdebugger\b"
+        or sample matches regex @"(?s)(?:performance\.now|Date\.now|new\s+Date)\s*\(\s*\)[^;]{0,120};?\s*debugger\b.{0,200}?(?:performance\.now|Date\.now|new\s+Date)\s*\("
+        or sample matches regex @"(?:constructor|Function)\s*\(\s*(['""`])\s*debugger\s*\1"
+        or sample matches regex @"(['""`])debu\1\s*\+\s*(['""`])gger\2"
+    | project source = substring(source, 0, 300);
+
+// A home-made canvas CAPTCHA no provider serves (Tycoon 2FA), on a page that is not
+// allowlisted, not run by a known brand and loads no real CAPTCHA widget.
+let custom_captcha_pages =
+    pages
+    | where isnotempty(host) and not allowlisted(host) and not owned_by(host)
+    | where not(html matches list("network.antibot_challenge"))
+    | where canvas_captcha(html)
+    | distinct url;
+
+// A CAPTCHA or Turnstile gate seen this session: a challenge request or form field
+// (string network.antibot_challenge), or a home-made canvas CAPTCHA.
+let captcha_gates =
+    union
+        (requests
+         | where url matches list("network.antibot_challenge")
+             or post matches list("network.antibot_challenge")
+         | project gate = "challenge request", url = substring(url, 0, 300)),
+        (forms
+         | mv-expand field = field_names
+         | where field matches list("network.antibot_challenge")
+         | project gate = "challenge form field", url = page_url),
+        (custom_captcha_pages | project gate = "canvas CAPTCHA", url);

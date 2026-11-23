@@ -1,0 +1,15 @@
+title: IP or location lookup on a lure page
+severity: medium
+score: 20
+tags: evasion, geofencing
+attack: T1614, T1497
+description: The page queried a client-side IP/ASN/geo lookup service and also showed a
+  credential, ClickFix or download lure: geofencing or sandbox filtering.
+---
+// The page looks up the visitor's IP address or location ...
+ip_lookups
+// ... and asks for a secret, puts a command on the clipboard or starts a risky download.
+| where exists(brand_secret_page)
+    or exists(clipboard_commands)
+    or exists(unprompted_risky_downloads)
+    or exists(secret_prompts)

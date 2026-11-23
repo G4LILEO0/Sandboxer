@@ -1,0 +1,14 @@
+title: Free-hosting site named after a brand asks for credentials
+severity: high
+score: 50
+tags: phishing, brand-impersonation, free-hosting
+attack: T1583.006, T1656, T1566.002
+description: A page on a free hosting or site-builder platform asks for a password, sign-in
+  name, card, code or recovery phrase. Its tenant name carries a brand (microsoftaccount-
+  kit.<builder>, ledger-live-kit.pages.dev). The page itself need not name the brand.
+  Builder forms often have no real password field.
+---
+// A free hosting tenant whose name spells a brand, asking for a secret, not allowlisted.
+brand_labels
+| where isnotempty(prompt) and not allowlisted(host)
+| project brand, keyword, host, platform, prompt
