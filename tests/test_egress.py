@@ -136,7 +136,7 @@ def test_check_access_raises_a_clear_error():
         backend.check_access()
 
 
-def test_compose_lets_the_worker_use_the_socket_under_selinux():
+def test_compose_keeps_the_socket_in_the_proxy_only():
     from pathlib import Path
 
     compose = Path(__file__).resolve().parents[1] / "compose.yaml"
@@ -145,8 +145,22 @@ def test_compose_lets_the_worker_use_the_socket_under_selinux():
     import yaml
 
     services = yaml.safe_load(compose.read_text())["services"]
-    assert "label=disable" in services["worker"]["security_opt"]
-    assert not any(":z" in v or ":Z" in v for v in services["worker"]["volumes"])
+    # SR-19: the worker reaches Docker only through docker-proxy, as a non-root user.
+    worker, proxy = services["worker"], services["docker-proxy"]
+    assert not any("docker.sock" in v for v in worker["volumes"])
+    assert "user" not in worker and "security_opt" not in worker
+    assert worker["environment"]["SANDBOX_DOCKER_URL"] == "tcp://docker-proxy:2375"
+    assert list(proxy["networks"]) == ["docker-api"]
+    assert yaml.safe_load(compose.read_text())["networks"]["docker-api"]["internal"]
+    only_worker = [n for n, s in services.items() if "docker-api" in (s.get("networks") or {})]
+    assert sorted(only_worker) == ["docker-proxy", "worker"]
+    sockets = [
+        n for n, s in services.items() if any("docker.sock" in v for v in s.get("volumes", []))
+    ]
+    assert sockets == ["docker-proxy"]
+    # SELinux hosts: the proxy may open the socket; the socket is never relabelled.
+    assert "label=disable" in proxy["security_opt"]
+    assert not any(":z" in v or ":Z" in v for v in proxy["volumes"])
     assert "SANDBOX_EGRESS_IPTABLES" in services["egress-guard"]["environment"]
 
 

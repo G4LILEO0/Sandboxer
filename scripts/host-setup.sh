@@ -148,9 +148,9 @@ if have getenforce; then
     mode="$(getenforce 2>/dev/null)"
     if [ "$mode" = "Enforcing" ]; then
         if grep -q 'label=disable' compose.yaml 2>/dev/null; then
-            ok "SELinux is enforcing; compose.yaml runs the worker with label=disable so it can use the Docker socket"
+            ok "SELinux is enforcing; compose.yaml runs docker-proxy with label=disable so it can use the Docker socket"
         else
-            fail "SELinux is enforcing but compose.yaml has no label=disable for the worker: update compose.yaml"
+            fail "SELinux is enforcing but compose.yaml has no label=disable for docker-proxy: update compose.yaml"
         fi
     else
         ok "SELinux is ${mode:-not reported}"

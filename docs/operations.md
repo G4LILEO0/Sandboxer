@@ -79,7 +79,7 @@ WSL sessions normally have no public IPv6, so they run IPv4 only (`SANDBOX_SESSI
 
 1. **Network egress isolation.** See [Egress isolation](#egress-isolation) below. Keep the `egress-guard` service running and `SANDBOX_EGRESS_GUARD=enforce`. On a Docker host you don't control (some managed or rootless setups), apply the same rules in the host or cloud firewall instead. The worker's probe tells you whether they work.
 2. **Session network.** The API joins `sandbox_sessions` to proxy the live view. The egress guard lets only the API's fixed address (`SANDBOX_SESSION_API_IP`) open connections to sessions, only on the live-view port. Sessions cannot open connections to the API. In production, you can still move the live-view proxy to a dedicated, minimal service.
-3. **Worker privileges.** The worker uses the Docker socket, which is equivalent to root on the host. On SELinux hosts it runs with `label=disable` to reach the socket (see [Linux hosts](#linux-hosts-selinux-and-the-iptables-backend)). Run it on a dedicated host or VM, never expose it, and keep it off the session network. Use `SANDBOX_SESSION_RUNTIME=runsc` (gVisor) where available.
+3. **Worker privileges.** The worker runs as the non-root user `app` and has no Docker socket (SR-19). It reaches Docker only through the `docker-proxy` service, see [Docker socket proxy](#docker-socket-proxy). Keep the proxy on its internal `docker-api` network, never publish its port, and keep the worker off the session network. Run the stack on a dedicated host or VM. Use `SANDBOX_SESSION_RUNTIME=runsc` (gVisor) where available; that needs a Linux host.
 4. **Secrets.** Set `SANDBOX_SECRET_KEY` to a long random value (32+ characters), the same on every API instance. Production refuses to start with the default, a short key or dev auth. OIDC mode refuses the default key in every environment, because the key signs session cookies.
 5. **Single sign-on.** Set `SANDBOX_AUTH_MODE=oidc`, `SANDBOX_OIDC_ISSUER`, `SANDBOX_OIDC_CLIENT_ID`, `SANDBOX_OIDC_CLIENT_SECRET`, `SANDBOX_OIDC_REDIRECT_URL` (`https://<host>/auth/callback`) and map IdP groups to roles with `SANDBOX_OIDC_ROLE_MAP` (JSON, for example `{"sg-soc": "analyst", "sg-soc-leads": "senior_analyst"}`). Tests cover the token format, but not yet your provider.
 6. **Feeds and terms.** Check each feed's licence and key requirements (Admin → Feeds). URLhaus, ThreatFox and MalwareBazaar need a free abuse.ch Auth-Key from https://auth.abuse.ch/. Put it in `.env` as `SANDBOX_ABUSECH_AUTH_KEY` (one key covers all three), or set it per feed with **Set key**. PhishTank is disabled by default.
@@ -115,6 +115,24 @@ On 2026-11-20 the development host had no public IPv6 (link-local addresses only
 
 What it does not cover: DNS passes from Docker's embedded resolver to the host's resolver. So a page can still resolve internal names, but it cannot connect to them. Use a public resolver for the Docker daemon if internal DNS names are sensitive. Traffic leaves with the host's public IP.
 
+## Docker socket proxy
+
+Only the `docker-proxy` service mounts `/var/run/docker.sock`. It runs `python -m sandbox.dockerproxy` from the API image, as root (to open the socket) with every capability dropped, a read-only root filesystem and `no-new-privileges`. The worker sets `SANDBOX_DOCKER_URL=tcp://docker-proxy:2375` and reaches the proxy over the `docker-api` network, which is `internal` and has no other member. The API and the session containers cannot reach it.
+
+The proxy forwards only the calls the session backend and the Suricata runner make: list, create, inspect, start, stop, kill, wait, logs, archive copy, exec and remove for containers; inspect and create for the session network; image inspect; `/_ping` and `/version`. It refuses pulls, builds, volumes, `/info`, swarm and plugins. It also reads each create body and refuses:
+
+- an image not in `SANDBOX_PROXY_IMAGES` (the session, pcap and Suricata images);
+- a container without a `sandbox.role` label;
+- privileged mode, bind mounts, devices, published ports, host PID, IPC, user or cgroup namespaces, and any `HostConfig` field the backend does not use;
+- capabilities other than `NET_RAW`, security options other than `no-new-privileges`, sysctls outside `net.ipv6.conf.*`, runtimes outside `SANDBOX_PROXY_RUNTIMES` (`runc runsc`);
+- networks other than the session network or none, fixed addresses, and sharing the network of any container that is not a session browser.
+
+Every call on an existing container or exec must name a container with a `sandbox.role` label, so the worker cannot read the API's environment, exec into Postgres or stop the proxy. Refused calls return 403 to the worker and log one `denied` line: `docker compose logs docker-proxy`.
+
+If you change `SANDBOX_SURICATA_IMAGE`, compose passes the new name to the proxy. If you change the session or pcap image names or add a runtime, update `SANDBOX_PROXY_IMAGES` or `SANDBOX_PROXY_RUNTIMES` on the `docker-proxy` service as well.
+
+The `data-owner` service runs once at every `up`. It gives files in the artifact and quarantine volumes that still belong to root (written by the worker before 1.0's SR-19 fix) to the worker's user, uid 10001, and exits.
+
 ## Linux hosts: SELinux and the iptables backend
 
 Some Linux host settings stop the sandbox working even though `docker compose up` succeeds. A first install on openSUSE found three: SELinux (Docker with `"selinux-enabled": true`), iptables 1.8 on the legacy backend (`Firewall Backend: iptables+firewalld` in `docker info`), and `br_netfilter` not loaded. The stack now handles the first two by itself. For the third, run the host script.
@@ -128,15 +146,15 @@ Some Linux host settings stop the sandbox working even though `docker compose up
 
 ### Docker socket and SELinux
 
-With SELinux enforcing and `"selinux-enabled": true` in `/etc/docker/daemon.json`, Docker runs containers under the `container_t` label, and that label may not connect to `/var/run/docker.sock`. The worker then fails with `PermissionError: [Errno 13] Permission denied` even though it runs as root. `compose.yaml` therefore starts the worker with `security_opt: [label=disable]`, which turns off SELinux confinement for that one container. It costs little: access to the Docker socket is root on the host anyway. Where SELinux is off (Docker Desktop, Debian, Ubuntu), the option does nothing.
+With SELinux enforcing and `"selinux-enabled": true` in `/etc/docker/daemon.json`, Docker runs containers under the `container_t` label, and that label may not connect to `/var/run/docker.sock`. The worker then fails with `PermissionError: [Errno 13] Permission denied` even though it runs as root. `compose.yaml` therefore starts `docker-proxy`, the only container with the socket, with `security_opt: [label=disable]`, which turns off SELinux confinement for that one container. The worker keeps its SELinux label. Where SELinux is off (Docker Desktop, Debian, Ubuntu), the option does nothing.
 
 - Do not relabel the socket with `:z` or `:Z`. That changes the label of the host's socket for every process, and Docker or other services can stop working.
 - Do not switch SELinux off for the whole host (`setenforce 0`). That works, but it removes the confinement of every other container, including the session containers.
-- If the worker still cannot reach the socket, look for denials with `sudo ausearch -m avc -ts recent`, and make sure the container was recreated with the current file: `docker compose up -d --force-recreate worker`.
-- The worker runs as root (`user: "0:0"`), so the socket's group does not matter. If you change it to a non-root user, add the socket's group with `group_add` (the number from `stat -c %g /var/run/docker.sock`).
+- If the proxy still cannot reach the socket, look for denials with `sudo ausearch -m avc -ts recent`, and make sure the container was recreated with the current file: `docker compose up -d --force-recreate docker-proxy`.
+- The proxy runs as root (`user: "0:0"`), so the socket's group does not matter. If you change it to a non-root user, add the socket's group with `group_add` (the number from `stat -c %g /var/run/docker.sock`).
 - `compose.yaml` mounts `docker/postgres-init.sql` into Postgres with `:z`, so the Postgres container can read that one file on SELinux hosts.
 
-The worker now checks the socket when it starts. If it cannot reach Docker, it logs one line that says why (permission denied, no socket, or another error) and what to do, and exits. Compose restarts it, so the line repeats in `docker compose logs worker` until the cause is fixed.
+The worker checks Docker through the proxy when it starts. If it cannot reach Docker, it logs one line that says why (permission denied on the proxy's socket, the proxy not running, or another error) and what to do, and exits. Compose restarts it, so the line repeats in `docker compose logs worker` until the cause is fixed.
 
 ### iptables backend (legacy or nf_tables)
 
@@ -214,7 +232,8 @@ Endpoint: `POST /v1/analyses/{id}/artifact-bundle` with `{"reason": "...", "miss
 | Service | What it needs |
 | --- | --- |
 | `api` | Postgres, read access to the artifact volumes, the session network (live view) |
-| `worker` | Postgres, read/write artifact volumes, the Docker socket, internet (feeds, RDAP, optional VirusTotal) |
+| `worker` | Postgres, read/write artifact volumes, `docker-proxy`, internet (feeds, RDAP, optional VirusTotal). Runs as non-root `app` |
+| `docker-proxy` | The Docker socket, nothing else. Filters the worker's Docker API calls (SR-19) |
 | session containers | Internet only, enforced by `egress-guard`. Started from `sandbox-session:latest`, removed after every session |
 | `egress-guard` | The Docker host's network namespace and `NET_ADMIN`, nothing else. Without it, the worker refuses to start sessions |
 | pcap sidecar | Shares one session's network namespace. Its only capability is `NET_RAW` |
