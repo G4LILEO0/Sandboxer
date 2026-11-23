@@ -1,0 +1,17 @@
+title: ConsentFix: sign-in code pasted back to the page
+severity: critical
+score: 75
+tags: consent-phishing, clickfix, aitm
+attack: T1528, T1566.002, T1204.004
+description: A non-Microsoft page shows a real Entra authorize URL for a first-party (pre-
+  consented) app, such as Azure CLI, with a localhost redirect_uri. The page tells the
+  visitor to paste the resulting URL or code into a box on that page. The attacker gets
+  the authorization code (ConsentFix / AuthCodeFix). A page that only describes the step
+  (a tutorial) gets the medium rule. Tenant check: Microsoft's tenant
+  f8cdef31-a31e-4b4a-93e4-5f571e91255a owns the service principal of a first-party app.
+---
+// A first-party app's authorize URL with a loopback redirect on a foreign page
+// (see firstparty_loopback_authorize in _shared.kql) ...
+firstparty_loopback_authorize
+// ... on a page that asks the visitor to paste a URL back into a text box.
+| where signal("lure.paste_back_with_input") == true

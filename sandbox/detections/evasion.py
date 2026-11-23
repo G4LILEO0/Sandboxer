@@ -18,7 +18,7 @@ from sandbox.detections.base import (
     _host,
     _inline_scripts,
 )
-from sandbox.detections.model import all_of, any_of, detection, not_, sig, signal
+from sandbox.detections.model import all_of, any_of, detection, sig, signal
 from sandbox.runner.page_scripts import is_harness_code
 
 
@@ -263,30 +263,6 @@ signal(
 
 # --- detections ------------------------------------------------------------------------
 
-detection(
-    "captcha_gated_credential_page",
-    title="Credential page behind a CAPTCHA gate",
-    severity="medium",
-    score=25,
-    tags=["phishing", "evasion"],
-    attack=["T1497", "T1566.002"],
-    description=(
-        "A CAPTCHA/Turnstile gate preceded a credential prompt on a non-allowlisted host: "
-        "antibot gating used to keep crawlers off the harvester."
-    ),
-    when=all_of(
-        sig("capture.gated").is_true(),
-        any_of(
-            sig("brand.credential_prompt").is_true(),
-            sig("idp.ms_clone_pages") > 0,
-            sig("forms.password_forms") > 0,
-        ),
-        not_(sig("final.allowlisted").is_true()),
-    ),
-    evidence=[
-        "final.url",
-    ],
-)
 
 detection(
     "devtools_blocking",

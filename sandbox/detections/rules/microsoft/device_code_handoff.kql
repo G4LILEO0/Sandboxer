@@ -1,0 +1,11 @@
+title: Foreign page sends to Microsoft device-code sign-in
+severity: medium
+score: 30
+tags: consent-phishing
+attack: T1528
+description: A non-Microsoft, non-allowlisted page links to, opens or navigates to Microsoft's
+  device-code sign-in. On its own, this can be an IT help page. With a displayed code,
+  it is device_code_phishing_lure.
+---
+// See device_code_handoffs in _shared.kql.
+device_code_handoffs

@@ -1,0 +1,11 @@
+title: Microsoft app authorize to localhost from a foreign page
+severity: medium
+score: 30
+tags: consent-phishing
+attack: T1528
+description: A non-Microsoft, non-allowlisted page shows an Entra authorize URL for a first-party
+  app with a localhost redirect_uri. This is the structural half of ConsentFix. The rule
+  fires even when the page does not render the paste-back instruction.
+---
+// See firstparty_loopback_authorize in _shared.kql.
+firstparty_loopback_authorize

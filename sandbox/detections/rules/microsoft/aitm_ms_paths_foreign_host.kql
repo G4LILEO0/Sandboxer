@@ -1,0 +1,20 @@
+title: Microsoft login served by a reverse proxy (AiTM)
+severity: critical
+score: 80
+tags: phishing, aitm
+attack: T1557, T1539, T1566.002
+description: A non-Microsoft host serves Microsoft login endpoints (oauth2/authorize,
+  GetCredentialType, kmsi) with ESTS markers or ESTS cookies. This is an AiTM reverse
+  proxy.
+---
+requests
+| where isnotempty(host)
+    and not owned_by(host, "Microsoft")
+    and host !in list("microsoft.auth_hosts")
+    and not allowlisted(host)
+| where path matches list("microsoft.auth_path")
+// Microsoft's sign-in markup or ESTS session cookies coming back from that host:
+// it is relaying Microsoft's real sign-in (an AiTM reverse proxy).
+| where resp_text matches list("microsoft.login_page_markers")
+    or set_has_any(cookies_set, list("microsoft.ests_cookies"))
+| project host, path

@@ -1,0 +1,14 @@
+title: Device-code phishing lure
+severity: high
+score: 55
+tags: consent-phishing, phishing
+attack: T1566.002, T1528
+description: A non-Microsoft page sends the visitor to Microsoft's real device-code sign-in
+  (microsoft.com/devicelogin, aka.ms/devicelogin, oauth2/deviceauth). It also shows a
+  code to enter, or a shared-document pretext with an email-only form. The victim
+  authorises the attacker's device on Microsoft itself, so no clone is present.
+---
+// A foreign page hands off to Microsoft's device-code sign-in (device_code_handoffs)
+// and one of its frames shows a code or share lure (device_code_lure_frames).
+device_code_handoffs
+| where exists(device_code_lure_frames)

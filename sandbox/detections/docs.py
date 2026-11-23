@@ -53,6 +53,21 @@ def render() -> str:
                 "",
                 d.description,
                 "",
+            ]
+            if getattr(d, "kind", "") == "query":
+                info = catalog.describe(d)
+                lines += [
+                    f"Rule: [`{d.source}`](../{d.source})",
+                    "",
+                    "```kql",
+                    d.rule_text(),
+                    "```",
+                    "",
+                ]
+                for sh in info["shared"]:
+                    lines += [f"Uses `{sh['name']}`:", "", "```kql", sh["query"], "```", ""]
+                continue
+            lines += [
                 "```text",
                 d.rule_text(),
                 "```",

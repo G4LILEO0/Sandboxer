@@ -25,9 +25,16 @@ def test_every_shipped_entry_loads_and_is_documented():
 
 
 def test_every_entry_is_used_by_the_code():
-    """An entry no binding reads would be an edit that silently does nothing."""
+    """An entry no binding or rule reads would be an edit that silently does nothing."""
+    from sandbox.detections.kql.rules import RULES_DIR
+
+    in_rules = {
+        key
+        for path in RULES_DIR.glob("*/*.kql")
+        for key in re.findall(r'list\("([^"]+)"\)', path.read_text(encoding="utf-8"))
+    }
     bound = {b.key for b in detection._state.bindings}
-    assert bound == set(detection.entries())
+    assert bound | in_rules == set(detection.entries())
 
 
 def test_bound_globals_follow_the_active_value():

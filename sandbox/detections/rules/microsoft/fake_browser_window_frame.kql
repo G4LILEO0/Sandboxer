@@ -1,0 +1,12 @@
+title: Fake popup window around a framed sign-in
+severity: high
+score: 55
+tags: phishing, bitb, aitm
+attack: T1566.002, T1036, T1656
+description: A non-brand page draws a brand's URL (onedrive.office.com/...,
+  login.microsoftonline.com/...) as bare text, a fake address bar, right above an iframe
+  the brand does not serve: an in-page popup that frames the kit's own page or its proxy
+  of the real login. Fires before any password field loads.
+---
+// See fake_window_frames in _shared.kql.
+fake_window_frames

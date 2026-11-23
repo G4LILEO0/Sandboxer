@@ -1,0 +1,23 @@
+title: Salty2FA phishing kit
+severity: high
+score: 55
+tags: aitm, phaas, microsoft
+attack: T1557, T1566.002, T1027
+description: The page has four Salty2FA traits together: a Microsoft sign-in clone, a Turnstile-
+  style gate, blocked DevTools shortcuts, and a POST to a /<5-6 digits>.php endpoint on
+  a host that no brand owns.
+---
+// Salty2FA's exfil shape: a POST with a body to /<5-6 digits>.php on a host no brand
+// owns and that is not allowlisted.
+let numeric_php_posts =
+    requests
+    | where method == "POST" and isnotempty(post)
+    | where path matches list("exfiltration.numeric_php")
+    | where not allowlisted(host) and not owned_by(host)
+    | distinct host;
+// A Microsoft sign-in clone, behind a CAPTCHA, that blocks DevTools and posts to such a host.
+ms_clone_pages
+| where signal("capture.gated") == true
+    and signal("evasion.devtools_blocked") > 0
+    and exists(numeric_php_posts)
+| extend devtools_keys = signal("evasion.devtools_blocked_keys")

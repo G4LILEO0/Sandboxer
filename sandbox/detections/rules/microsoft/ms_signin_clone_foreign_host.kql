@@ -1,0 +1,12 @@
+title: Microsoft sign-in clone on a foreign host
+severity: high
+score: 60
+tags: phishing, aitm, brand-impersonation
+attack: T1566.002, T1056.003, T1656
+description: A non-Microsoft page carries Microsoft sign-in structural markers (ESTS $Config,
+  i0116/idSIButton9 ids, AADCDN assets) and shows a credential prompt: a cloned or
+  proxied Microsoft login.
+---
+// A copy of Microsoft's sign-in page on a host Microsoft does not own
+// (see ms_clone_pages in _shared.kql).
+ms_clone_pages

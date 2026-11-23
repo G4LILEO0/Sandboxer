@@ -13,7 +13,6 @@ from sandbox.detections import (
     forms,
     hosting,
     lures,
-    microsoft,
     navigation,
     network,
     scripts,
@@ -52,7 +51,6 @@ SECTIONS: dict[str, Callable[[Capture], dict[str, Any]]] = {
     "clipboard": clickfix.clipboard_section,
     "lure": lures.lure_section,
     "exfil": exfiltration.exfil_section,
-    "idp": microsoft.idp_section,
     "web3": web3.web3_section,
     "websocket": network.websocket_section,
     "evasion": evasion.evasion_section,
@@ -68,11 +66,20 @@ SECTIONS: dict[str, Callable[[Capture], dict[str, Any]]] = {
 }
 
 
-def build_facts(data: CaptureData) -> dict[str, Any]:
+class Facts(dict):
+    """The observed values (a plain dict, stored with the analysis) that also carry the
+    capture they came from, so query rules can read its tables in the same run."""
+
+    capture: Capture | None = None
+
+
+def build_facts(data: CaptureData) -> Facts:
     """Every observed value of one capture, by section: what detections read and what the
     report shows. Pure: a stored capture gives the same values again."""
     cap = Capture(data)
-    return {name: cap.section(name) for name in SECTIONS}
+    facts = Facts({name: cap.section(name) for name in SECTIONS})
+    facts.capture = cap
+    return facts
 
 
 def extract_iocs(data: CaptureData, facts: dict[str, Any]) -> dict[str, list[str]]:

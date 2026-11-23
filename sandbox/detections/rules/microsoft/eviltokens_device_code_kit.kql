@@ -1,0 +1,18 @@
+title: EvilTokens device-code phishing kit
+severity: critical
+score: 80
+tags: consent-phishing, phishing, eviltokens
+attack: T1566.002, T1528, T1550.001
+description: The page drives an EvilTokens-style device-code backend on a non-Microsoft host
+  (/api/device/gate, /api/device/start, /api/device/status/<session>) and either sends
+  the kit's X-Antibot-Token header (its fingerprint, sent even when the gate shows a
+  decoy), gets a Microsoft device code back, or sends the visitor to Microsoft's device-
+  code sign-in. The victim signs in to Microsoft for real while the kit polls /token for
+  their tokens.
+---
+// A device-code kit backend (device_code_kit_hosts) plus one more sign of the kit.
+device_code_kit_hosts
+| where exists(device_code_relays)
+    or antibot_header > 0
+    or exists(device_code_handoffs)
+    or exists(device_code_lure_frames)

@@ -1,0 +1,14 @@
+title: Microsoft session cookie set by a foreign host
+severity: critical
+score: 80
+tags: phishing, aitm
+attack: T1539, T1557
+description: A non-Microsoft host set a Microsoft Entra session cookie (ESTSAUTH*): the sign of a
+  relayed Microsoft login in an AiTM proxy.
+---
+requests
+| where isnotempty(host) and not owned_by(host, "Microsoft") and not allowlisted(host)
+| mv-expand cookie = cookies_set
+// Microsoft's ESTS session cookies, set by someone else's host
+| where cookie in list("microsoft.ests_cookies")
+| project host, cookie

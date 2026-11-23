@@ -125,6 +125,7 @@ async function viewRule(id) {
 // tested, and its severity and tags changed, but its logic changes in code.
 function viewDetection(r) {
   const d = r.detection;
+  if (d.kind === 'query') { viewQueryRule(r); return; }
   const actions = el('div', {},
     btn('Test against recent analyses', () => testDetection(r)),
     btn('Edit severity and tags', () => detectionMetaEditor(r)),
@@ -145,6 +146,39 @@ function viewDetection(r) {
       el('td', { className: 'small', textContent: s.description }),
       el('td', { className: 'monospace small', textContent: s.source })))),
     d.strings.length ? el('p', { className: 'small muted', textContent: `Detection strings used in this area (Admin > Detection strings): ${d.strings.join(', ')}` }) : null,
+    r.overrides.length ? el('div', {}, el('h3', { className: 'section-title', textContent: 'Local overrides' }),
+      ...r.overrides.map((o) => el('div', { className: 'small', textContent: `${o.at} ${o.by}: ${o.reason} ${o.active ? '(active)' : '(lifted)'}` }))) : null,
+    el('div', { id: 'test-out' }));
+}
+
+// A query rule: the KQL-style query in sandbox/detections/rules, the shared named
+// queries it uses, and what each table, function and detection string it names means.
+function viewQueryRule(r) {
+  const d = r.detection;
+  const actions = el('div', {},
+    btn('Test against recent analyses', () => testDetection(r)),
+    btn('Edit severity and tags', () => detectionMetaEditor(r)),
+    btn('Back', rules));
+  const defs = (items, head, row) => items.length ? [el('h3', { className: 'section-title', textContent: head }), table(['Name', 'Meaning'], items.map(row))] : [];
+  fill(
+    el('div', { className: 'row' }, el('h2', { className: 'section-title', textContent: d.title }), actions),
+    el('p', { className: 'small' }, el('span', { className: 'monospace', textContent: d.name }),
+      ` · severity ${r.severity} · score ${d.score} · tags ${r.tags.join(', ') || '—'} · ATT&CK ${r.attack_ids.join(', ') || '—'}`),
+    el('p', { textContent: d.description }),
+    el('p', { className: 'small muted' }, 'Fires when this query returns a row; the rows are its evidence. Written in ',
+      el('span', { className: 'monospace', textContent: d.source }), ' (docs/detection-rules.md).'),
+    el('pre', { className: 'small', textContent: d.rule }),
+    ...d.shared.map((sh) => el('details', {}, el('summary', { className: 'small', textContent: `Shared query: ${sh.name}` }), el('pre', { className: 'small', textContent: sh.query }))),
+    r.error ? el('p', { className: 'error-message small', textContent: r.error }) : null,
+    ...defs(d.tables, 'Tables it reads', (t) => el('tr', {},
+      el('td', { className: 'monospace small', textContent: t.signature || t.name }),
+      el('td', { className: 'small' }, el('div', { textContent: t.description }),
+        el('details', {}, el('summary', { className: 'small muted', textContent: 'columns' }),
+          el('ul', { className: 'small' }, Object.entries(t.columns).map(([c, m]) => el('li', {}, el('span', { className: 'monospace', textContent: c }), ` ${m}`))))))),
+    ...defs(d.functions, 'Functions it uses', (f) => el('tr', {},
+      el('td', { className: 'monospace small', textContent: f.signature }), el('td', { className: 'small', textContent: f.description }))),
+    ...defs(d.strings, 'Detection strings it uses (Admin > Detection strings)', (x) => el('tr', {},
+      el('td', { className: 'monospace small', textContent: x.key }), el('td', { className: 'small', textContent: `${x.title}: ${x.description}` }))),
     r.overrides.length ? el('div', {}, el('h3', { className: 'section-title', textContent: 'Local overrides' }),
       ...r.overrides.map((o) => el('div', { className: 'small', textContent: `${o.at} ${o.by}: ${o.reason} ${o.active ? '(active)' : '(lifted)'}` }))) : null,
     el('div', { id: 'test-out' }));

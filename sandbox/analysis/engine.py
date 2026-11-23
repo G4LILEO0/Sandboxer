@@ -351,6 +351,96 @@ async def _enrich(ctx, iocs: dict[str, list[str]], final_domain: str | None) -> 
     return out
 
 
+async def build_capture(
+    db, store, analysis_id: str, by_kind: dict[str, list[Artifact]], result: dict[str, Any]
+) -> tuple[CaptureData, list[dict], set[str]]:
+    """The stored capture of one analysis as the detections read it, with its brands and
+    allowlist (domain ages are left to the caller). Returns the data, the HAR entries and
+    the contacted hosts."""
+    events = [
+        {"ts": e.ts.isoformat(), "kind": e.kind, "source": e.source, "payload": e.payload}
+        for e in await db.scalars(
+            select(Event).where(Event.analysis_id == analysis_id).order_by(Event.ts)
+        )
+    ]
+    har_entries: list[dict] = []
+    for a in by_kind.get("har", []):
+        try:
+            har_entries = (
+                json.loads(store.read_bytes(a.object_key)).get("log", {}).get("entries", [])
+            )
+        except ValueError:
+            pass
+    scripts = {
+        a.sha256: store.read_bytes(a.object_key).decode("utf-8", "replace")
+        for a in by_kind.get("script", [])
+        if a.size <= _MAX_YARA_BYTES and store.exists(a.object_key)
+    }
+    heads = {}
+    download_paths = {}
+    for a in by_kind.get("download", []):
+        if store.exists(a.object_key):
+            with store.open(a.object_key) as fh:
+                # Enough to reach the ISO 9660 "CD001" marker at 0x8001 for magic typing.
+                heads[a.sha256] = fh.read(32780)
+            download_paths[a.sha256] = str(store.path(a.object_key))
+    dom_html = [
+        {
+            "url": a.meta.get("url", ""),
+            "html": store.read_bytes(a.object_key).decode("utf-8", "replace"),
+        }
+        for a in by_kind.get("dom", [])
+        if store.exists(a.object_key)
+    ]
+    dom_pages = [parse_dom(p["html"], p["url"]) for p in dom_html]
+    requests: list[dict] = []
+    for a in by_kind.get("requests_log", []):
+        if store.exists(a.object_key):
+            for line in store.read_bytes(a.object_key).decode("utf-8", "replace").splitlines():
+                try:
+                    requests.append(json.loads(line))
+                except ValueError:
+                    pass
+
+    data = CaptureData(
+        result=result,
+        events=events,
+        har_entries=har_entries,
+        scripts=scripts,
+        download_heads=heads,
+        download_paths=download_paths,
+        dom_pages=dom_pages,
+        dom_html=dom_html,
+        requests=requests,
+        brands=await load_brands(db),
+    )
+    hosts = contacted_hosts(data)
+    regs = sorted({registrable(h) for h in hosts})
+    data.allowlisted = await load_allowlisted(db, regs)
+    return data, har_entries, hosts
+
+
+async def stored_capture(db, store, analysis_id: str) -> CaptureData | None:
+    """The stored capture of an analysis, for running detections again without
+    detonating (the Admin dry run); None when it has no stored capture."""
+    artifacts = list(
+        await db.scalars(
+            select(Artifact).where(
+                Artifact.analysis_id == analysis_id, Artifact.deleted_at.is_(None)
+            )
+        )
+    )
+    by_kind: dict[str, list[Artifact]] = {}
+    for a in artifacts:
+        by_kind.setdefault(a.kind, []).append(a)
+    result_art = (by_kind.get("capture_result") or [None])[0]
+    if result_art is None or not store.exists(result_art.object_key):
+        return None
+    result = json.loads(store.read_bytes(result_art.object_key))
+    data, _, _ = await build_capture(db, store, analysis_id, by_kind, result)
+    return data
+
+
 async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | None:
     store = ctx.store
     async with ctx.sessionmaker() as db:
@@ -378,69 +468,11 @@ async def analyse(ctx, analysis_id: str, *, reason: str) -> AnalysisVersion | No
             return None
         result = json.loads(store.read_bytes(result_art.object_key))
 
-        events = [
-            {"ts": e.ts.isoformat(), "kind": e.kind, "source": e.source, "payload": e.payload}
-            for e in await db.scalars(
-                select(Event).where(Event.analysis_id == analysis_id).order_by(Event.ts)
-            )
-        ]
-        har_entries: list[dict] = []
-        for a in by_kind.get("har", []):
-            try:
-                har_entries = (
-                    json.loads(store.read_bytes(a.object_key)).get("log", {}).get("entries", [])
-                )
-            except ValueError:
-                pass
-        scripts = {
-            a.sha256: store.read_bytes(a.object_key).decode("utf-8", "replace")
-            for a in by_kind.get("script", [])
-            if a.size <= _MAX_YARA_BYTES and store.exists(a.object_key)
-        }
-        heads = {}
-        download_paths = {}
-        for a in by_kind.get("download", []):
-            if store.exists(a.object_key):
-                with store.open(a.object_key) as fh:
-                    # Enough to reach the ISO 9660 "CD001" marker at 0x8001 for magic typing.
-                    heads[a.sha256] = fh.read(32780)
-                download_paths[a.sha256] = str(store.path(a.object_key))
-        dom_html = [
-            {
-                "url": a.meta.get("url", ""),
-                "html": store.read_bytes(a.object_key).decode("utf-8", "replace"),
-            }
-            for a in by_kind.get("dom", [])
-            if store.exists(a.object_key)
-        ]
-        dom_pages = [parse_dom(p["html"], p["url"]) for p in dom_html]
-        requests: list[dict] = []
-        for a in by_kind.get("requests_log", []):
-            if store.exists(a.object_key):
-                for line in store.read_bytes(a.object_key).decode("utf-8", "replace").splitlines():
-                    try:
-                        requests.append(json.loads(line))
-                    except ValueError:
-                        pass
-
-        data = CaptureData(
-            result=result,
-            events=events,
-            har_entries=har_entries,
-            scripts=scripts,
-            download_heads=heads,
-            download_paths=download_paths,
-            dom_pages=dom_pages,
-            dom_html=dom_html,
-            requests=requests,
-            brands=await load_brands(db),
-        )
-        hosts = contacted_hosts(data)
-        regs = sorted({registrable(h) for h in hosts})
-        data.allowlisted = await load_allowlisted(db, regs)
+        data, har_entries, hosts = await build_capture(db, store, analysis_id, by_kind, result)
         if ctx.settings.rdap_base_url:
             # The submitted, redirect and final domains first: they decide the verdict.
             chain = {registrable(h) for h in chain_hosts(data)}
+            regs = sorted({registrable(h) for h in hosts})
             ordered = sorted(regs, key=lambda d: (d not in chain, d))
             for domain in [d for d in ordered if d not in data.allowlisted and "." in d][:8]:
                 data.domain_ages[domain] = await registration_age_days(

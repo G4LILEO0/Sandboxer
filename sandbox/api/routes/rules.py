@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import any_, func, literal, or_, select, update
 
-from sandbox.analysis.engine import load_weights
+from sandbox.analysis.engine import load_weights, stored_capture
 from sandbox.analysis.scoring import SEVERITY_FALLBACK
 from sandbox.api.access import visible_clause
 from sandbox.api.auth import Engineer, Principal, require_scope
@@ -23,6 +23,7 @@ from sandbox.db.models import (
     ScoringConfig,
 )
 from sandbox.detections import catalog
+from sandbox.detections.observe import build_facts
 from sandbox.ids import new_id
 from sandbox.orchestrator import jobs
 from sandbox.rules.bundles import activate_bundle
@@ -426,7 +427,17 @@ async def test_rule(body: RuleTest, principal: Engineer, db: Db, store: Store) -
     results = []
     for analysis, version in rows:
         matched, evidence = False, {}
-        if detection is not None:
+        if detection is not None and getattr(detection, "kind", "") == "query":
+            # A query rule reads the capture's tables: rebuild them from the stored
+            # capture (nothing is detonated).
+            data = await stored_capture(db, store, analysis.id)
+            if data is not None:
+                data.domain_ages = version.summary.get("domain_ages") or {}
+                outcome = detection.evaluate(build_facts(data))
+                matched, evidence = outcome.matched, outcome.facts
+            else:
+                evidence = {"note": "no stored capture"}
+        elif detection is not None:
             outcome = detection.evaluate(version.summary.get("facts", {}))
             matched, evidence = outcome.matched, outcome.facts
         else:

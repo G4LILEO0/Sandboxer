@@ -86,6 +86,9 @@ def test_builtin_detections_load_and_are_documented():
     assert len(catalog.detections()) >= 85
     for d in catalog.detections():
         assert d.title and d.description and d.severity in SEVERITIES, d.name
+        if getattr(d, "kind", "") == "query":
+            assert d.rule_text(), d.name  # parsed when the catalog loaded
+            continue
         for s in d.signals():  # the catalog refuses to load an undeclared signal
             assert s.title and s.description, (d.name, s.path)
         assert d.rule_text().startswith("Fires when")
@@ -94,11 +97,20 @@ def test_builtin_detections_load_and_are_documented():
 
 
 def test_every_signal_is_read_by_a_detection_and_exists_in_the_observed_values():
+    import re
+
     from sandbox.detections.base import CaptureData
+    from sandbox.detections.kql.rules import RULES_DIR
     from sandbox.detections.model import _MISSING, SIGNALS, get_value
     from sandbox.detections.observe import build_facts
 
     used = {s.path for d in catalog.detections() for s in d.signals()}
+    # Query rules read values of areas not yet written as queries with signal("...").
+    used |= {
+        path
+        for f in RULES_DIR.glob("*/*.kql")
+        for path in re.findall(r'signal\("([^"]+)"\)', f.read_text(encoding="utf-8"))
+    }
     assert used == set(SIGNALS)
     facts = build_facts(CaptureData(result={"url": "https://a.example/", "pages": []}))
     # Fake-wallet values only exist when the wallet profile ran.

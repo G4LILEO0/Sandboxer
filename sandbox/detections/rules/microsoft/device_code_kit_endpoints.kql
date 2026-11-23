@@ -1,0 +1,12 @@
+title: Device-code kit endpoints
+severity: medium
+score: 30
+tags: consent-phishing
+attack: T1528
+description: A non-Microsoft, non-allowlisted host serves two of the EvilTokens device-flow
+  endpoints (/api/device/gate, /start, /status/<session>) or receives the X-Antibot-
+  Token header. Seen alone when the kit's gate shows its decoy instead of the code; with
+  a code or a hand-off it is eviltokens_device_code_kit.
+---
+// See device_code_kit_hosts in _shared.kql.
+device_code_kit_hosts

@@ -461,7 +461,9 @@ async function showEvidence(h) {
   if (ev.description) parts.push(el('p', { className: 'small', textContent: ev.description }));
   // A detection explains itself: the rule as sentences, then every check it made with
   // the value it saw (sandbox/detections).
-  if (ev.rule_text) parts.push(el('pre', { className: 'small rule-text', textContent: ev.rule_text }));
+  if (ev.kind === 'query') {
+    parts.push(...queryEvidence(ev));
+  } else if (ev.rule_text) parts.push(el('pre', { className: 'small rule-text', textContent: ev.rule_text }));
   if (ev.condition.length) {
     parts.push(el('h3', { className: 'section-title', textContent: 'Checks' }),
       table(['Check', 'Signal', 'Value seen', ''], ev.condition.map((c) => el('tr', { className: c.passed ? '' : 'muted' },
@@ -492,6 +494,27 @@ async function showEvidence(h) {
   }
   parts.push(details('Recorded facts (raw)', ev.facts));
   body.replaceChildren(...parts);
+}
+
+// A query rule (sandbox/detections/rules): the query, how many rows each step kept, and
+// the rows it returned. Steps of the shared queries it uses are listed under their name.
+function queryEvidence(ev) {
+  const out = [el('h3', { className: 'section-title', textContent: 'Rule' }),
+    el('pre', { className: 'small rule-text', textContent: ev.rule_text || '' })];
+  ev.shared.forEach((sh) => out.push(details(`Uses ${sh.name}`, sh.query)));
+  if (ev.steps.length) {
+    out.push(el('h3', { className: 'section-title', textContent: 'How it narrowed down' }),
+      table(['Query', 'Step', 'Rows kept'], ev.steps.map((st) => el('tr', { className: st.rows ? '' : 'muted' },
+        el('td', { className: 'monospace small', textContent: st.query || 'rule' }),
+        el('td', { className: 'monospace small', textContent: st.step }),
+        el('td', { className: 'small', textContent: String(st.rows) })))));
+  }
+  const cols = [...new Set(ev.rows.flatMap((r) => Object.keys(r)))];
+  out.push(el('h3', { className: 'section-title', textContent: `Rows it returned (${ev.row_count})` }),
+    ev.rows.length && cols.length
+      ? table(cols, ev.rows.map((r) => el('tr', {}, cols.map((c) => el('td', { className: 'monospace small evidence-actual', textContent: fmtValue(r[c]) })))))
+      : empty(ev.row_count ? 'The rule returned rows with no columns to show.' : 'No rows.'));
+  return out;
 }
 
 function sampleBlock(s) {
