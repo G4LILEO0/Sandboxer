@@ -39,7 +39,11 @@ def test_regional_s3_buckets_are_their_own_site(host, platform):
 
 @pytest.mark.parametrize(
     "host",
-    ["ec2-1-2-3-4.compute-1.amazonaws.com", "api.execute-api.us-east-1.amazonaws.com", "amazonaws.com"],
+    [
+        "ec2-1-2-3-4.compute-1.amazonaws.com",
+        "api.execute-api.us-east-1.amazonaws.com",
+        "amazonaws.com",
+    ],
 )
 def test_other_aws_hosts_are_not_storage(host):
     assert free_hosting(host) is None
