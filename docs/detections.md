@@ -1979,15 +1979,18 @@ let government_lookalike_hosts =
 
 `hosting_abuse_interstitial` · high · score 40 · ATT&CK T1583.006 · tags phishing, malware-download, takedown
 
-The page ended on Cloudflare's 'Suspected Phishing' or 'Suspected Malware' block for this hostname. The provider already confirmed abuse. The payload is not visible, but the URL is not clean. Run the analysis again only if you need the payload.
+A tab ended on Cloudflare's 'Suspected Phishing' or 'Suspected Malware' block for its hostname. The provider already confirmed abuse. The payload is not visible, but the URL is not clean. Run the analysis again only if you need the payload.
 
 Rule: [`sandbox/detections/rules/hosting/hosting_abuse_interstitial.kql`](../sandbox/detections/rules/hosting/hosting_abuse_interstitial.kql)
 
 ```kql
-// The final page is the hosting provider's own phishing warning: a form that posts to
-// /cdn-cgi/phish-bypass on the final host, with abuse wording (string lures.abuse_warning).
+// An open tab ends on the hosting provider's own phishing warning: a form that posts to
+// /cdn-cgi/phish-bypass on the tab's own host, with abuse wording (string
+// lures.abuse_warning). Any tab counts, not only the session's final page: a lure page
+// (for example a shared Power BI report) often opens the kit in a new tab, and the session
+// then ends on the lure. Frames inside a page do not count.
 forms
-| where live and isnotempty(page_host) and page_host == toscalar(capture | project final_host)
+| where live and top and isnotempty(page_host)
 | where url_path(raw_action) == "/cdn-cgi/phish-bypass" and url_host(raw_action) == page_host
 | where content matches list("lures.abuse_warning")
 | project page_url, warning = extract(list("lures.abuse_warning"), 1, content)
@@ -4833,6 +4836,7 @@ Every form in every frame (as in frames), plus one row for each frame with a pas
 | `page_url` | The frame URL |
 | `page_host` | Its host |
 | `live` | True for a frame still open at the end of the session |
+| `top` | True for a top-level page: the main frame of an open tab, or a page seen earlier |
 | `content` | The frame's title and visible text, joined by a space |
 | `action` | Where the form submits: its action, else the page URL; empty for a password field outside any form |
 | `raw_action` | The action attribute as written (empty when the form has none) |
