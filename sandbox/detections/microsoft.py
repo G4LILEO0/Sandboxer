@@ -13,6 +13,7 @@ from sandbox.detections import strings as S
 from sandbox.detections.base import (
     _MS_AUTH_HOSTS,
     _SIGN_IN,
+    Capture,
     CaptureData,
     _all_frames,
     _chain_urls,
@@ -497,3 +498,11 @@ def _cdn_document_host(data: CaptureData, asset_url: str) -> str | None:
             doc = r.get("document_url") or r.get("frame_url")
             return _host(doc) if doc else None
     return None
+
+
+# --- observed values ---------------------------------------------------------------------
+
+
+def idp_section(cap: Capture) -> dict[str, Any]:
+    """Identity-provider sign-in: clones, AiTM proxies, OAuth and device-code abuse."""
+    return _idp(cap.data, cap.reqs)

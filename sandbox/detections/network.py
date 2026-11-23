@@ -9,7 +9,8 @@ from sandbox.analysis.domains import (
     site,
 )
 from sandbox.detections import strings as S
-from sandbox.detections.base import CaptureData, _host
+from sandbox.detections.base import Capture, CaptureData, _host
+from sandbox.detections.navigation import _trusted_redirectors
 
 IP_LOOKUP_HOSTS = S.bind(globals(), "IP_LOOKUP_HOSTS", "exfiltration.ip_lookup_hosts", S.as_set)
 
@@ -245,3 +246,29 @@ def _socketio_polling(data: CaptureData, reqs: list[dict[str, Any]]) -> list[dic
         for body in (post, resp):
             c["events"].update(_SOCKETIO_EVENT.findall(body[:20000]))
     return [{**c, "events": sorted(c["events"])[:20]} for c in hosts.values()]
+
+
+# --- observed values ---------------------------------------------------------------------
+
+
+def network_section(cap: Capture) -> dict[str, Any]:
+    """Network requests: blocked internal addresses, IP lookups, local probes, web proxies."""
+    data = cap.data
+    blocked = data.result.get("blocked", [])
+    internal = [b for b in blocked if "scheme" not in b.get("reason", "")]
+    return {
+        "requests": len(data.har_entries),
+        "hosts": len(cap.hosts),
+        "blocked_internal": len(internal),
+        "blocked": blocked[:20],
+        "ip_lookups": _ip_lookups(cap.reqs),
+        "local_probe": _local_probe(data),
+        "request_log": _requests_summary(data),
+        "trusted_redirectors": _trusted_redirectors(data),
+        **_web_proxy_kit(data, cap.reqs),
+    }
+
+
+def websocket_section(cap: Capture) -> dict[str, Any]:
+    """WebSocket and Socket.IO connections to other sites."""
+    return _websocket(cap.data, cap.reqs)

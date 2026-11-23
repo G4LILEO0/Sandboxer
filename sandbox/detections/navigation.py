@@ -12,8 +12,11 @@ from sandbox.analysis.domains import (
 from sandbox.detections import strings as S
 from sandbox.detections.base import (
     _MS_AUTH_HOSTS,
+    Capture,
     CaptureData,
     _all_frames,
+    _credential_prompt,
+    _frames,
     _host,
     _same_site,
     _split_analyst_hops,
@@ -189,3 +192,41 @@ def _trusted_redirectors(data: CaptureData) -> list[str]:
         if _TRUSTED_REDIRECTOR.search(frm):
             out.append(_host(frm))
     return sorted(set(out))[:10]
+
+
+# --- observed values ---------------------------------------------------------------------
+
+
+def redirects_section(cap: Capture) -> dict[str, Any]:
+    """The redirect chain from the submitted URL to the final page."""
+    return _redirects(cap.data)
+
+
+def navigation_section(cap: Capture) -> dict[str, Any]:
+    """What caused each navigation, and protocol-handler (ms-search:, search-ms:) attempts."""
+    data = cap.data
+    return {**_navigation_cause(data), **_protocol_handler(data)}
+
+
+def frames_section(cap: Capture) -> dict[str, Any]:
+    """Frames and pages: hidden iframes and credential pages smuggled in blob: documents."""
+    data = cap.data
+    hidden = sorted({src for f in _all_frames(data) for src in _suspicious_hidden(f, data)})
+    # Credential/credential-like form pages served from blob: or about: documents
+    # (HTML smuggling), which Chromium allows for script-created top-level/frame docs.
+    smuggled = sorted(
+        {
+            f.get("url", "")
+            for f in _all_frames(data)
+            if str(f.get("url", "")).startswith(("blob:", "about:srcdoc", "about:blank"))
+            and _credential_prompt(f)
+        }
+    )
+    return {
+        "count": len(_frames(data.result)),
+        "pages_seen": len({f.get("url") for f in data.dom_pages}),
+        "hidden_iframes": len(hidden),
+        "hidden_iframe_urls": hidden[:10],
+        "smuggled_credential_pages": len(smuggled),
+        "smuggled_credential_urls": smuggled[:10],
+    }

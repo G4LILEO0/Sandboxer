@@ -11,6 +11,7 @@ from sandbox.core import antibot
 from sandbox.detections import strings as S
 from sandbox.detections.base import (
     _MARKUP_NOISE,
+    Capture,
     CaptureData,
     _all_frames,
     _frames,
@@ -159,3 +160,39 @@ def _custom_captcha(data: CaptureData) -> list[str]:
                 pages.append(url)
                 break
     return sorted(set(pages))[:10]
+
+
+# --- observed values ---------------------------------------------------------------------
+
+
+def capture_section(cap: Capture) -> dict[str, Any]:
+    """How the capture went: errors, load failure, CAPTCHA gates and bot checks."""
+    data, final_url = cap.data, cap.final_url
+    r = data.result
+    challenge_gate = _challenge_gate(data, cap.reqs)
+    custom_captcha = _custom_captcha(data)
+    return {
+        "end_reason": r.get("end_reason"),
+        "errors": r.get("errors", []),
+        "navigated": any(
+            str(n.get("url", "")).startswith(("http:", "https:")) for n in r.get("navigations", [])
+        ),
+        # The session ended on Chrome's own error page (DNS, TLS or connection failure).
+        "load_failed": not str(final_url or "").startswith(("http:", "https:")),
+        "duration_ms": r.get("duration_ms"),
+        # A CAPTCHA/Turnstile gate was seen this session (DE-PHI-011): a run that stops
+        # at one should prefer "unknown" to "benign" and be re-run interactively.
+        "gated": challenge_gate or bool(custom_captcha),
+        # A home-made canvas CAPTCHA no provider serves (Tycoon 2FA); it gates too.
+        "custom_captcha": len(custom_captcha),
+        "custom_captcha_pages": custom_captcha,
+        # The session ended on a bot check (Cloudflare challenge / block page) that
+        # it did not get through: the real page was never seen.
+        "antibot": _antibot(data, cap.reqs, cap.final_host),
+        "browser_mode": (r.get("browser") or {}).get("mode"),
+    }
+
+
+def evasion_section(cap: Capture) -> dict[str, Any]:
+    """Anti-analysis tricks: blocked DevTools, context menu, debugger traps."""
+    return _evasion(cap.data)

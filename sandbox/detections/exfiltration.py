@@ -3,7 +3,7 @@
 from typing import Any
 
 from sandbox.detections import strings as S
-from sandbox.detections.base import CaptureData
+from sandbox.detections.base import Capture, CaptureData
 
 _TELEGRAM_BOT = S.bind(globals(), "_TELEGRAM_BOT", "exfiltration.telegram_bot")
 
@@ -33,3 +33,11 @@ def _exfil(data: CaptureData, reqs: list[dict[str, Any]]) -> dict[str, Any]:
         "form_collectors": sorted(set(collectors))[:20],
         "form_collector_count": len(set(collectors)),
     }
+
+
+# --- observed values ---------------------------------------------------------------------
+
+
+def exfil_section(cap: Capture) -> dict[str, Any]:
+    """Posts to known data drops (Telegram bots, Discord webhooks, form collectors)."""
+    return _exfil(cap.data, cap.reqs)

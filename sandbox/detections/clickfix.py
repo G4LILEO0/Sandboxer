@@ -5,7 +5,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from sandbox.detections import strings as S
-from sandbox.detections.base import _CMD_NOISE, CaptureData
+from sandbox.detections.base import _CMD_NOISE, Capture, CaptureData
 
 _COMMAND = S.bind(globals(), "_COMMAND", "clickfix.shell_command")
 
@@ -200,3 +200,11 @@ def _clipboard(data: CaptureData) -> dict[str, Any]:
 _FILEFIX = S.bind(globals(), "_FILEFIX", "clickfix.filefix")
 
 _MAC_CLICKFIX = S.bind(globals(), "_MAC_CLICKFIX", "clickfix.mac_linux_traits", S.patterns)
+
+
+# --- observed values ---------------------------------------------------------------------
+
+
+def clipboard_section(cap: Capture) -> dict[str, Any]:
+    """Clipboard writes and the commands in them."""
+    return _clipboard(cap.data)

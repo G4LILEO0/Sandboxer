@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 from sandbox.detections import strings as S
-from sandbox.detections.base import CaptureData, _top_frames
+from sandbox.detections.base import Capture, CaptureData, _top_frames
 
 # --- HAR access (pure over the stored HAR) --------------------------------------------
 
@@ -207,3 +207,24 @@ def _linked_exec(large: list[str], data: CaptureData) -> bool:
             if any(len(w) == 64 and any(w in s for s in samples) for w in windows):
                 return True
     return False
+
+
+# --- observed values ---------------------------------------------------------------------
+
+
+def web3_section(cap: Capture) -> dict[str, Any]:
+    """Blockchain RPC calls, EtherHiding and wallet-drainer traits."""
+    data = cap.data
+    lure = cap.section("lure")
+    web3 = _web3(data, cap.reqs)
+    web3.update(
+        _web3_derived(
+            data,
+            web3,
+            cap.section("scripts")["libraries"],
+            cap.section("js"),
+            lure_page=bool(lure["fake_update_pages"] or lure["fake_captcha"]),
+            final_allowlisted=cap.final_allowlisted,
+        )
+    )
+    return web3

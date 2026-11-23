@@ -4,6 +4,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import cached_property
 from html import unescape
 from typing import Any
 from urllib.parse import urlsplit
@@ -12,6 +13,7 @@ from sandbox.analysis.domains import (
     BrandRef,
     brand_owner,
     registrable,
+    site,
 )
 from sandbox.detections import strings as S
 
@@ -355,3 +357,42 @@ def _inline_scripts(data: CaptureData) -> list[tuple[str, str]]:
     out = [(f"sha256:{sha}", text) for sha, text in data.scripts.items()]
     out += [(page.get("url", ""), page.get("html", "")) for page in data.dom_html]
     return out
+
+
+class Capture:
+    """One capture as the detection areas see it: the raw ``CaptureData`` plus the inputs
+    several areas share (the request list, the contacted hosts, the final URL), each
+    computed once. ``section(name)`` returns one area's observed values, also computed
+    once, so an area that reads another area's values does not compute them again."""
+
+    def __init__(self, data: CaptureData):
+        self.data = data
+        self._sections: dict[str, dict[str, Any]] = {}
+
+    @cached_property
+    def reqs(self) -> list[dict[str, Any]]:
+        return _har_requests(self.data)
+
+    @cached_property
+    def hosts(self) -> list[str]:
+        return contacted_hosts(self.data)
+
+    @cached_property
+    def final_url(self) -> str | None:
+        r = self.data.result
+        return r.get("final_url") or r.get("url")
+
+    @cached_property
+    def final_host(self) -> str:
+        return _host(self.final_url)
+
+    @cached_property
+    def final_allowlisted(self) -> bool:
+        return bool(self.final_host) and site(self.final_host) in self.data.allowlisted
+
+    def section(self, name: str) -> dict[str, Any]:
+        if name not in self._sections:
+            from sandbox.detections.observe import SECTIONS
+
+            self._sections[name] = SECTIONS[name](self)
+        return self._sections[name]
