@@ -1,0 +1,22 @@
+title: Sign-in page loads IdP branding from the IdP's CDN
+severity: high
+score: 45
+tags: phishing, aitm
+attack: T1566.002, T1656
+description: A page that is not the identity provider loads IdP sign-in branding from the IdP's CDN
+  (AADCDN, Okta CDN) and shows a credential prompt.
+---
+// Hosts of pages that ask for credentials, that Microsoft does not own and that are
+// not allowlisted.
+let foreign_signin_hosts =
+    frames
+    | where isnotempty(host) and isnotempty(prompt)
+    | where not owned_by(host, "Microsoft") and not allowlisted(host)
+    | distinct host;
+requests
+| where host matches list("microsoft.idp_cdn")
+// With the browser request log, the page that loaded the asset must be one of them.
+// Without it (older captures), any such page in the session is enough.
+| where document_host in (foreign_signin_hosts)
+    or (not(has_request_log()) and exists(foreign_signin_hosts))
+| project url = substring(url, 0, 300), document_host

@@ -1,0 +1,12 @@
+title: Browser-in-the-browser sign-in window
+severity: high
+score: 50
+tags: phishing, bitb, aitm
+attack: T1566.002, T1036
+description: A page draws a real sign-in URL as element text in a fake address bar
+  (login.microsoftonline.com, accounts.google.com...). It also has a live password
+  input. This is a browser-in-the-browser popup (Sneaky2FA). Real pages put URLs in
+  href.
+---
+// See fake_address_bars in _shared.kql.
+fake_address_bars

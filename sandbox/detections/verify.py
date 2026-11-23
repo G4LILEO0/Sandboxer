@@ -3,10 +3,11 @@
     python -m sandbox.detections.verify                  # every stored analysis
     python -m sandbox.detections.verify --since 2026-11-01
 
-For each analysis version it runs every enabled detection over the observed values
-stored with it (``summary.facts``) and compares the result with the behaviour hits
-stored when it ran. It uses the database in ``SANDBOX_DATABASE_URL`` (or ``.env``),
-like the API, and only reads.
+For each analysis version it runs every enabled detection again and compares the
+result with the behaviour hits stored when it ran. Python detections read the observed
+values stored with it (``summary.facts``); query rules read the capture's tables, rebuilt
+from the stored capture. It uses the database and artifact store in ``SANDBOX_*``
+settings (or ``.env``), like the API, and only reads.
 
 * ``missing``: a detection fired then and does not now.
 * ``extra``: a detection fires now and did not then (a possible new false positive).
@@ -25,14 +26,19 @@ from datetime import datetime
 
 from sqlalchemy import select
 
+from sandbox.analysis.engine import stored_capture
 from sandbox.config import Settings
 from sandbox.db.engine import make_engine, make_sessionmaker
 from sandbox.db.models import Analysis, AnalysisVersion, Rule, RuleHit
 from sandbox.detections import catalog
+from sandbox.detections.observe import build_facts
+from sandbox.storage import make_store
 
 
 async def verify(since: datetime | None) -> int:
-    engine = make_engine(Settings().database_url)
+    settings = Settings()
+    store = make_store(settings)
+    engine = make_engine(settings.database_url)
     session = make_sessionmaker(engine)
     try:
         async with session() as db:
@@ -67,7 +73,16 @@ async def verify(since: datetime | None) -> int:
                         )
                     )
                 )
-                now = {h["rule_name"] for h in catalog.run(specs, facts)}
+                plain = [s for s in specs if getattr(catalog.get(s["name"]), "kind", "") != "query"]
+                queries = [s for s in specs if s not in plain]
+                now = {h["rule_name"] for h in catalog.run(plain, facts)}
+                if queries:
+                    data = await stored_capture(db, store, version.analysis_id)
+                    if data is not None:
+                        data.domain_ages = (version.summary or {}).get("domain_ages") or {}
+                        now |= {h["rule_name"] for h in catalog.run(queries, build_facts(data))}
+                    else:
+                        stored -= {s["name"] for s in queries}  # nothing to re-run them on
                 checked += 1
                 # A stored hit from a rule that is now disabled or removed is not a change.
                 missing = sorted(n for n in stored - now if n in enabled)

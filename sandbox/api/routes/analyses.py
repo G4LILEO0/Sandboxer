@@ -626,6 +626,9 @@ async def rule_hit_evidence(
             rule = {"detection": catalog.get(row.name), "description": row.description}
         else:
             rule = {"description": row.description, "source_text": row.body}
+    elif hit.engine == "behaviour" and (d := catalog.get(hit.rule_name)) is not None:
+        # A hit from a local run (no rule row) still has its detection in the code.
+        rule = {"detection": d, "description": d.description}
     version = await db.scalar(
         select(AnalysisVersion).where(
             AnalysisVersion.analysis_id == analysis_id, AnalysisVersion.version == hit.version

@@ -1,0 +1,133 @@
+// Named queries that several Microsoft sign-in rules use. Each one is a plain query:
+// read it top to bottom like a rule.
+
+// Pages that copy Microsoft's sign-in page: a host Microsoft does not own and that is not
+// allowlisted, whose raw HTML carries at least 2 Microsoft sign-in markers ($Config,
+// i0116, idSIButton9, AADCDN assets, ...) and asks for credentials (a password input or
+// sign-in wording). Markers in the HTML survive text obfuscation.
+let ms_clone_pages =
+    pages
+    | where isnotempty(host) and not owned_by(host, "Microsoft") and not allowlisted(host)
+    | extend markers = matched_names(html, list("microsoft.login_page_markers"))
+    | where array_length(markers) >= 2
+    | where replace_regex(tolower(html), @"[""' ]", "") contains "type=password"
+        or html matches regex @"(?i)<input[^>]+type\s*=\s*['""]?password"
+        or html matches list("forms.sign_in_wording")
+    | project host, url, markers;
+
+// A non-Microsoft, non-allowlisted page that sends the visitor to Microsoft's real
+// device-code sign-in (microsoft.com/devicelogin, login.microsoftonline.com/device, ...).
+// The victim signs in on Microsoft itself, so there is no clone to find.
+let device_code_handoffs =
+    urls_seen(list("microsoft.device_login"))
+    | extend url = replace_string(url, @"\/", "/")
+    | where isnotempty(source_host)
+        and not owned_by(source_host, "Microsoft")
+        and not allowlisted(source_host)
+    | where begins_with_match(url, list("microsoft.device_login"))
+    | extend url = substring(url, 0, 200)
+    | distinct source_host, url;
+
+// Frames of a page that hands off to device-code sign-in and also shows a lure: a code
+// token near "enter this code" wording, or a document-share pretext with an email-only
+// form. Code wording alone is not a lure (IT help pages describe the step).
+let device_code_lure_frames =
+    frames
+    | where host in (device_code_handoffs | project source_host)
+    | extend page_text = strcat(title, " ", text)
+    | where near(page_text, list("microsoft.code_wording"), list("microsoft.device_code_token"), 80)
+        or (email_only_form and page_text matches list("lures.share_pretext"))
+    | project host, url;
+
+// Hosts that serve a device-code phishing backend (EvilTokens): two kinds of kit
+// endpoint (/api/device/gate, /start, /status) or an X-Antibot-Token header. One lone
+// /api/device/status/1 on a smart-home console does not count.
+let device_code_kit_hosts =
+    requests
+    | where isnotempty(host) and not owned_by(host, "Microsoft") and not allowlisted(host)
+    | extend endpoint = tolower(extract(@"(?i)/api/device/(start|status|gate)(?:/[^/?#]+)?/?$", 1, path))
+    | summarize endpoints = make_set(endpoint),
+                kinds = dcountif(endpoint, isnotempty(endpoint)),
+                antibot_header = countif(has_key(headers, "x-antibot-token"))
+          by host
+    | where kinds >= 2 or antibot_header > 0;
+
+// Requests to a host that does not belong to Microsoft and is not allowlisted, whose
+// response hands the page a live Microsoft device code and its verification URL: the
+// backend relaying Microsoft's /devicecode answer.
+let device_code_relays =
+    requests
+    | where isnotempty(host) and not owned_by(host, "Microsoft") and not allowlisted(host)
+    | extend body = substring(resp_text, 0, 20000)
+    | where body matches regex @"(?i)[""']?(user_?code)[""']?\s*:\s*[""'][A-Z0-9-]{6,12}[""']"
+        and body matches regex @"(?i)verification_?ur[il]|microsoft\.com(?:/|\\/)devicelogin|login\.microsoft(?:online)?\.com(?:/|\\/)device"
+    | project host, path = substring(path, 0, 120);
+
+// The device-code grant run from a foreign page's browser against Microsoft itself:
+// calls to Microsoft's /devicecode, or to /token with a device_code grant, whose Origin
+// (or Referer) is a host Microsoft does not own and that is not allowlisted.
+let device_code_browser_flows =
+    requests
+    | where owned_by(host, "Microsoft")
+    | where isnotempty(origin_host)
+        and not owned_by(origin_host, "Microsoft")
+        and not allowlisted(origin_host)
+    | where path matches regex @"(?i)/oauth2/(?:v2\.0/)?devicecode$"
+        or (path matches regex @"(?i)/oauth2/(?:v2\.0/)?token$"
+            and post matches regex @"(?i)urn(?::|%3A)ietf(?::|%3A)params(?::|%3A)oauth(?::|%3A)grant-type(?::|%3A)device_code")
+    | project page_host = origin_host, path;
+
+// ConsentFix / AuthCodeFix: an Entra authorize URL for a first-party, pre-consented app
+// (Azure CLI and similar) whose redirect_uri is loopback, surfaced by a page Microsoft
+// does not own and that is not allowlisted. The victim signs in for real and pastes the
+// localhost URL, which carries the authorization code, back to the attacker.
+let firstparty_loopback_authorize =
+    urls_seen(list("microsoft.authorize_url_in_page"))
+    | where isnotempty(source_host)
+        and not owned_by(source_host, "Microsoft")
+        and not allowlisted(source_host)
+    | extend url = html_decode(replace_string(replace_string(url, @"\/", "/"), @"\u0026", "&"))
+    | where url_host(url) in ("login.microsoftonline.com", "login.microsoft.com")
+    | where url_path(url) matches regex @"(?i)/(oauth2/(v2\.0/)?authorize|v2\.0/adminconsent|adminconsent)"
+    | where tolower(url_param(url, "prompt")) != "none"
+    | extend client_id = tolower(url_param(url, "client_id")),
+             redirect_uri_host = url_host(url_param(url, "redirect_uri"))
+    | where client_id in list("microsoft.first_party_app_ids")
+    | where trim(@"[\[\]]", redirect_uri_host) in ("localhost", "127.0.0.1", "::1")
+    | extend url = substring(url, 0, 300)
+    | distinct url, client_id, source_host, redirect_uri_host;
+
+// Browser-in-the-browser: a page on a host no brand owns and that is not allowlisted
+// draws a sign-in URL as element text (a fake address bar), not as a link, and a
+// password field is live in the session or in this page's HTML.
+let live_password_frames = frames | where set_has(prompts, "password");
+let fake_address_bars =
+    pages
+    | where isnotempty(host) and not allowlisted(host) and not owned_by(host)
+    | extend shown_url = extract(list("microsoft.fake_address_bar"), 1, html)
+    | where isnotempty(shown_url)
+    | where exists(live_password_frames)
+        or html matches regex @"(?i)<input\b[^>]*\btype\s*=\s*['""]?password"
+    | project page = url, shown_url = substring(shown_url, 0, 200);
+
+// A fake popup window: a brand's URL drawn as a bare text node (with or without
+// https://, not in a link or code span) on a page no brand owns and that is not
+// allowlisted, followed within 2,500 characters by an iframe the brand does not serve.
+// A real brand page cannot be framed under its own URL, so the frame is the kit's own
+// content or its proxy of the real login.
+let fake_window_frames =
+    url_texts(2500)
+    | where isnotempty(page_host) and not allowlisted(page_host) and not owned_by(page_host)
+    // a bare domain is a footer or a list entry, not an address bar
+    | where shown contains "/" or shown startswith "http"
+    | extend brand = brand_owner(shown_host)
+    | where isnotempty(brand)
+    | where not(quoted)
+    | where isnotempty(frame_src)
+    | where not(frame_src startswith "about:" or frame_src startswith "javascript:" or frame_src startswith "data:")
+    // a relative src is the page's own site
+    | extend frame_host = iff(isempty(frame_host), page_host, frame_host)
+    | where not owned_by(frame_host, brand)
+    | where not(site(frame_host) != site(page_host) and allowlisted(frame_host))
+    | project page_url, brand, shown_url = substring(html_decode(shown), 0, 200),
+              frame_src = substring(frame_src, 0, 200);

@@ -440,7 +440,9 @@ def test_facts_backward_compatible_with_old_capture():
     """A capture missing every new artifact yields neutral facts, never a crash."""
     facts = build_facts(_capd("https://plain.example/"))
     assert facts["exfil"]["telegram_count"] == 0
-    assert facts["idp"]["ms_clone_pages"] == 0
+    # Query rules read the capture's tables, which are empty, not missing.
+    hits = behaviour_hits(builtin_behaviour(), facts)
+    assert not [h["rule_name"] for h in hits if h["detail"].get("kind") == "query"]
     assert facts["web3"]["rpc_call_count"] == 0
     assert facts["websocket"]["count"] == 0
     assert facts["evasion"]["devtools_blocked"] == 0

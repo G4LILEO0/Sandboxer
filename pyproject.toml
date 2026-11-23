@@ -36,7 +36,7 @@ dev = [
 include = ["sandbox*"]
 
 [tool.setuptools.package-data]
-sandbox = ["db/migrations/*.mako", "db/migrations/*.py", "db/migrations/versions/*.py", "web/*.html", "web/css/*.css", "web/js/*.js", "web/fonts/*", "detections/*.toml"]
+sandbox = ["db/migrations/*.mako", "db/migrations/*.py", "db/migrations/versions/*.py", "web/*.html", "web/css/*.css", "web/js/*.js", "web/fonts/*", "detections/*.toml", "detections/rules/*/*.kql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -492,35 +492,6 @@ detection(
     ],
 )
 
-detection(
-    "web_proxy_signin_relay",
-    title="Sign-in relayed through a web-proxy kit",
-    severity="critical",
-    score=75,
-    tags=["phishing", "aitm", "proxy"],
-    attack=["T1557", "T1566.002", "T1539"],
-    description=(
-        "A non-allowlisted page runs an interception web proxy (Ultraviolet, Scramjet, "
-        "Rammerhead) and presents a sign-in: a fake browser window, a credential prompt or a "
-        "Microsoft sign-in page. The victim sees the brand's real login, served through the "
-        "attacker's host, which keeps the session (AiTM)."
-    ),
-    when=all_of(
-        sig("network.web_proxy_kit_count") > 0,
-        any_of(
-            sig("idp.fake_window_frames") > 0,
-            sig("idp.fake_address_bar") > 0,
-            sig("idp.ms_clone_pages") > 0,
-            sig("brand.credential_prompt").is_true(),
-        ),
-    ),
-    evidence=[
-        "network.web_proxy_kits",
-        "network.web_proxy_assets",
-        "brand.name",
-        "final.url",
-    ],
-)
 
 detection(
     "client_side_ip_geo_lookup",
@@ -544,35 +515,6 @@ detection(
     ),
     evidence=[
         "network.ip_lookups",
-        "final.url",
-    ],
-)
-
-detection(
-    "credential_relay_websocket",
-    title="Credentials relayed over a WebSocket",
-    severity="high",
-    score=50,
-    tags=["aitm", "exfil"],
-    attack=["T1557", "T1056.003"],
-    description=(
-        "A brand credential-prompt page opened a WebSocket, or a Socket.IO long-polling "
-        "channel, to a host it does not own. AiTM kits (Mamba/Tycoon) use this real-time "
-        "channel to relay typed credentials."
-    ),
-    when=all_of(
-        any_of(
-            sig("websocket.foreign_count") > 0,
-            sig("websocket.socketio_polling") > 0,
-        ),
-        any_of(
-            sig("brand.credential_prompt").is_true(),
-            sig("idp.ms_clone_pages") > 0,
-        ),
-    ),
-    evidence=[
-        "websocket.connections",
-        "websocket.polling_connections",
         "final.url",
     ],
 )

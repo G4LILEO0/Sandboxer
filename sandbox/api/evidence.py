@@ -89,8 +89,8 @@ def condition_leaves(rule: dict[str, Any] | None, ctx: Context) -> list[dict[str
     """Each test of the detection's condition with the value it saw and whether it passed.
     ``rule["detection"]`` is the ``Detection`` (sandbox.detections) behind the hit."""
     detection = (rule or {}).get("detection")
-    if detection is None:
-        return []
+    if detection is None or getattr(detection, "when", None) is None:
+        return []  # a query rule explains itself with its steps and rows instead
     out: list[dict[str, Any]] = []
 
     def walk(cond: Any, group: str, negated: bool) -> None:
@@ -256,8 +256,30 @@ def resolve(
             (rule or {})["detection"].rule_text() if (rule or {}).get("detection") else None
         ),
         "condition": leaves,
+        **_query_parts(rule, detail),
         "facts": ctx.facts if ctx.facts else {k: v for k, v in detail.items() if k != "facts"},
         "samples": ctx.samples,
         "files": list(ctx.files.values()),
         "sample_cap": SAMPLE_CAP,
     }
+
+
+def _query_parts(rule: dict[str, Any] | None, detail: dict[str, Any]) -> dict[str, Any]:
+    """For a query rule: the rows it returned, how many rows each step kept, and the
+    shared named queries it uses, so the report can show why it fired."""
+    if detail.get("kind") != "query":
+        return {"kind": "conditions"}
+    facts = detail.get("facts") or {}
+    out: dict[str, Any] = {
+        "kind": "query",
+        "rows": facts.get("rows", []),
+        "row_count": facts.get("row_count", len(facts.get("rows", []))),
+        "steps": detail.get("checks") or [],
+        "shared": [],
+    }
+    detection = (rule or {}).get("detection")
+    if detection is not None and getattr(detection, "kind", "") == "query":
+        from sandbox.detections import catalog
+
+        out["shared"] = catalog.describe(detection)["shared"]
+    return out

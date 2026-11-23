@@ -32,53 +32,51 @@ To change what ships, edit the TOML file and add a test. The code reads an entry
 
 ## Behaviour detections
 
-Every behaviour verdict comes from one model, with no exceptions: a **detection** made of **signals**. There are no JSON conditions, no weight table and no scoring code outside it.
+A behaviour detection is a **query rule**: one file in [`sandbox/detections/rules/<area>/`](../sandbox/detections/rules/) that holds its whole logic as a query in a small subset of Kusto (KQL), the language of Microsoft Sentinel and Defender Advanced Hunting. The rule fires when the query returns at least one row, and those rows are its evidence.
 
-- A **signal** is one named value observed in a capture, such as `clipboard.command_like` (how many clipboard writes look like a shell command). It has a title and a plain description of how it is computed, and it never scores on its own.
-- A **detection** combines signals into a condition and gives the result a severity and a score.
-
-Both live in the **area module** that computes the signals: `clickfix`, `downloads`, `evasion`, `exfiltration`, `forms`, `hosting`, `lures`, `microsoft`, `navigation`, `network`, `scripts`, `web3` under [`sandbox/detections/`](../sandbox/detections/). Each module holds, top to bottom, the detection strings it binds, the code that computes its section of the observed values (`*_section(cap)`), its `signal(...)` declarations and its `detection(...)` declarations. So the code, its wording and its rules are in one file.
-
-```python
-signal(
-    "idp.cdn_assets_on_foreign_page",
-    "IdP CDN assets on a foreign sign-in page",
-    "True when a request to an identity-provider CDN (string microsoft.idp_cdn) was made "
-    "by a page that shows a credential prompt and is on a host that is not Microsoft-owned "
-    "(Admin > Brands) and not allowlisted. ...",
-)
-
-detection(
-    "idp_cdn_assets_foreign_page",
-    title="Sign-in page loads IdP branding from the IdP's CDN",
-    severity="high",
-    score=45,
-    tags=["phishing", "aitm"],
-    attack=["T1566.002", "T1656"],
-    description="A page that is not the identity provider loads IdP sign-in branding from "
-    "the IdP's CDN (AADCDN, Okta CDN) and shows a credential prompt.",
-    when=sig("idp.cdn_assets_on_foreign_page").is_true(),
-    evidence=["idp.cdn_assets", "final.url"],
-)
+```kql
+title: Sign-in page loads IdP branding from the IdP's CDN
+severity: high
+score: 45
+tags: phishing, aitm
+attack: T1566.002, T1656
+description: A page that is not the identity provider loads IdP sign-in branding from
+  the IdP's CDN (AADCDN, Okta CDN) and shows a credential prompt.
+---
+// Hosts of pages that ask for credentials, that Microsoft does not own and that are
+// not allowlisted.
+let foreign_signin_hosts =
+    frames
+    | where isnotempty(host) and isnotempty(prompt)
+    | where not owned_by(host, "Microsoft") and not allowlisted(host)
+    | distinct host;
+requests
+| where host matches list("microsoft.idp_cdn")
+// With the browser request log, the page that loaded the asset must be one of them.
+// Without it (older captures), any such page in the session is enough.
+| where document_host in (foreign_signin_hosts)
+    or (not(has_request_log()) and exists(foreign_signin_hosts))
+| project url = substring(url, 0, 300), document_host
 ```
 
-Admin and the report show this rule as: *Fires when IdP CDN assets on a foreign sign-in page*, followed by the check with the value it saw.
+The file name is the detection's name and the folder is its area. Code does only two generic things, and neither decides anything about one rule:
 
-- Tests: `signal > n`, `>=`, `<`, `<=`, `.equals(v)`, `.is_true()`, `.present()` (set and not empty), `.one_of([...])`.
-- Combine with `all_of`, `any_of`, `not_` (or `&`, `|`, `~`). Use `sig("area.key")` to read a signal declared in another module. A shared condition is a plain Python variable (`CLICKFIX_LIKE` in `clickfix.py`).
-- A missing value never passes a test, except `not_(x.present())`. A value of the wrong type is a miss, never an error.
-- `evidence` names extra signals stored with the hit for the report.
-- The catalog ([`catalog.py`](../sandbox/detections/catalog.py)) refuses to load if a detection reads or names a signal nobody declared, so a typo cannot ship as a rule that silently never fires. A test also fails if a signal is declared but no detection reads it, or if it is missing from the observed values of an empty capture.
+- **Tables** describe what the capture holds: `requests` (the HAR), `pages` (raw HTML snapshots), `frames` (rendered frames with their text, forms and the secret they ask for), `chain_urls`, `capture` (one row about the session), and the table functions `urls_seen(pattern)` and `url_texts(span)`.
+- **Functions** are a short, documented list: `owned_by`, `brand_owner`, `allowlisted`, `site`, `url_host`, `url_param`, `extract`, `near`, `count_matches`, `matched_names`, `begins_with_match` and the usual text functions. `list("key")` reads a detection string (Admin > Detection strings), so analysts can still tune wording and host lists without touching a rule.
 
-**How a detection explains itself.** Every hit stores each test it made, with the value it saw and whether it passed (`detail.checks`), and every `any_of` branch is checked so the report shows all of them. The report's Evidence dialog shows the rule as sentences, the checks table and the matched content. Admin > Detection rules > View shows the same sentences, every signal with how it is computed and where, and the detection strings of that area. [`docs/detections.md`](detections.md) lists all of them; it is generated with `python -m sandbox.detections.docs`, and a test fails when it is out of date.
+Every exclusion, threshold, fallback and combination is written in the rule. `_shared.kql` in an area folder holds named queries (`let name = ...;`) that several rules use, such as `ms_clone_pages`. Admin shows a rule with the shared queries it uses and what each table, function and detection string means. [`docs/detections.md`](detections.md) lists every rule and is regenerated with `python -m sandbox.detections.docs`.
 
-**Performance.** The observed values are built once per capture (the report stores them anyway, as `summary.facts`), each section once, sharing one parsed view of the requests and hosts. A detection only reads values out of that tree, so adding one costs microseconds.
+The language: `let`, `where`, `extend`, `project`, `summarize ... by` (`count`, `countif`, `dcount`, `dcountif`, `make_set`, `take_any`, `min`, `max`, `sum`), `distinct`, `count`, `take`, `mv-expand`, `union`, `in (subquery)`, `exists(name)`, `and`/`or`/`not`, `== != < <= > >= =~ !~`, `has`, `contains`, `startswith`, `endswith`, `matches regex`, and `matches list("key")`. A comparison with a missing value is false, and a value of the wrong type is a miss, never an error. Rules are parsed into Python closures once at startup, and a shared query runs once per capture however many rules use it. A rule that doesn't parse, or names an unknown table, function or detection string, stops startup with its file and line.
+
+**How a rule explains itself.** Each hit stores the rows the query returned and how many rows each step kept. The report's Evidence dialog shows the query, the shared queries it uses, a "How it narrowed down" table (for example `requests 412` → `where host matches list(...) 3` → `where document_host in (...) 1`) and the rows.
+
+**Moving the rest over.** The Microsoft sign-in area, plus four rules in other areas that read it, are written as queries (20 of 85). The other areas still declare `detection(...)` over signals in Python (`sandbox/detections/<area>.py`, see `model.py`). Both kinds load into one catalog and run through the same function. Until an area moves, a query rule reads its values with `signal("area.key")`. Each area that moves deletes its Python signal code, and the move is checked hit-for-hit against the old code on the test captures.
 
 ### Adding or changing a detection
 
 1. Open the case's missed-detection export or report, and find the values that tell the case apart (the report's **Recorded facts**, or `python -m sandbox.analysis.local <capture-dir>` offline).
-2. If no signal says it yet, add one in the area module: compute it in that module's `*_section` function as a pure function of the stored capture, then declare it with `signal(...)`. If it depends on wording or a host list, add a detection string to the area's TOML file and `S.bind` it, so analysts can tune it in Admin.
-3. Declare the `detection(...)` next to it.
+2. Write the rule as a new `.kql` file in `sandbox/detections/rules/<area>/`, starting from a similar rule. If it needs wording or a host list, add a detection string to the area's TOML file and read it with `list("key")`, so analysts can tune it in Admin. If it needs something the tables don't hold, add a column to a table in `sandbox/detections/kql/tables.py` that only describes the capture, never decides.
+3. Run the tests: every rule is parsed when the catalog loads.
 4. Add a test in `tests/test_detections.py` that shows it firing on the true positive and staying quiet on the closest false positive, run `python -m sandbox.detections.docs`, and run the tests.
 5. Dry-run it over stored analyses: Admin > Detection rules > View > **Test against recent analyses** (`POST /v1/rules/test` with `engine: behaviour` and the detection's name as `body`). It shows which verdicts would change.
 6. Before an upgrade or after a large change, run `python -m sandbox.detections.verify [--since 2026-11-01]` against the database. It re-runs every enabled detection over the observed values stored with each analysis and lists any analysis whose behaviour hits would differ (read-only, nothing is detonated).

@@ -1,0 +1,13 @@
+title: Device-code relay backend
+severity: high
+score: 60
+tags: consent-phishing, phishing
+attack: T1566.002, T1528
+description: A non-Microsoft, non-allowlisted host answered the page with a live Microsoft device
+  code (user_code with its verification URI), or the page itself ran the device-code
+  grant against Microsoft (/devicecode, or /token with a device_code grant). Device
+  codes are for TVs and CLIs, not for a web page to show visitors.
+---
+// A backend relaying a live Microsoft device code, or the device-code grant run from a
+// foreign page's browser (see _shared.kql).
+union device_code_relays, device_code_browser_flows

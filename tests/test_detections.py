@@ -56,6 +56,13 @@ def _hits(data: CaptureData) -> set[str]:
     return {h["rule_name"] for h in behaviour_hits(builtin_behaviour(), build_facts(data))}
 
 
+def _hit(data: CaptureData, name: str) -> dict:
+    """One detection's hit: detail.facts.rows are a query rule's evidence rows and
+    detail.checks how many rows each step kept."""
+    hits = behaviour_hits(builtin_behaviour(), build_facts(data))
+    return next(h for h in hits if h["rule_name"] == name)
+
+
 PASSWORD_FORM = {"action": "", "fields": [{"type": "email"}, {"type": "password"}]}
 
 
@@ -2509,9 +2516,9 @@ def _salty(devtools=True, php="/482913.php"):
 
 def test_salty2fa_four_signals_fire():
     data = _salty()
-    facts = build_facts(data)
-    assert facts["idp"]["numeric_php_hosts"] == ["collect.example-host.ru"]
-    assert "salty2fa_kit" in _hits(data)
+    checks = _hit(data, "salty2fa_kit")["detail"]["checks"]
+    # The numeric .php POST host is found (the last step of numeric_php_posts keeps 1 row).
+    assert [c["rows"] for c in checks if c["query"] == "numeric_php_posts"][-1] == 1
 
 
 def test_salty2fa_needs_every_signal():
@@ -2625,9 +2632,8 @@ def test_bitb_fake_address_bar_with_live_password_fires():
     frame = _page("https://docs-share.example-host.com/f", "Sign in", forms=[PASSWORD_FORM])
     dom = [{"url": url, "html": _BITB_HTML}]
     data = _cap(url, [_page(url, "Shared file"), frame], dom_html=dom)
-    bar = build_facts(data)["idp"]["fake_address_bar_details"]
+    bar = _hit(data, "browser_in_the_browser_window")["detail"]["facts"]["rows"]
     assert bar[0]["shown_url"].startswith("https://login.microsoftonline.com/")
-    assert "browser_in_the_browser_window" in _hits(data)
 
 
 def test_bitb_tutorial_and_linked_login_are_quiet():
@@ -2665,7 +2671,7 @@ def test_fake_window_over_proxied_login_fires_before_the_login_loads():
     page = _page(url, "Loading content", "Complete verification in the window")
     data = _cap(url, [page], har=_UV_ASSETS, dom_html=[{"url": url, "html": _UV_WINDOW_HTML}])
     facts = build_facts(data)
-    window = facts["idp"]["fake_window_frame_details"][0]
+    window = _hit(data, "fake_browser_window_frame")["detail"]["facts"]["rows"][0]
     assert window["brand"] == "Microsoft"
     assert window["shown_url"].startswith("onedrive.office.com/")
     assert facts["network"]["web_proxy_kits"] == ["ultraviolet"]
@@ -2693,8 +2699,7 @@ def test_quoted_brand_urls_and_brand_frames_are_not_fake_windows():
     ]
     for html in cases:
         data = _cap(url, [_page(url, "Help")], dom_html=[{"url": url, "html": html}])
-        assert build_facts(data)["idp"]["fake_window_frames"] == 0, html
-        assert "fake_browser_window_frame" not in _hits(data)
+        assert "fake_browser_window_frame" not in _hits(data), html
     # Microsoft's own page drawing its own URL is never a fake window.
     real = "https://www.office.com/"
     data = _cap(real, [_page(real, "Office")], dom_html=[{"url": real, "html": _UV_WINDOW_HTML}])
