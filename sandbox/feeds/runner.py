@@ -169,7 +169,7 @@ async def _promote_indicators(ctx, db, feed: Feed, run: FeedRun, data: bytes) ->
                 """
                 INSERT INTO indicators (type, value)
                 SELECT * FROM unnest(CAST(:types AS text[]), CAST(:values AS text[]))
-                ON CONFLICT (type, value) DO UPDATE SET last_seen = now()
+                ON CONFLICT (type, md5(value)) DO UPDATE SET last_seen = now()
                 RETURNING id, type, value
                 """
             ),

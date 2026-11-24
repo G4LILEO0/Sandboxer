@@ -10,6 +10,7 @@ restricted visibility, feeds and metrics.
 import asyncio
 import io
 import json
+import secrets
 import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -801,6 +802,29 @@ async def test_feeds_matching_and_drop_guard(env):
     await _drain(worker)
     report = (await client.get(f"/v1/analyses/{created['id']}/report", headers=ALICE)).json()
     assert report["indicator_hits"] == []
+
+
+async def test_feed_indicator_longer_than_btree_row_limit(env):
+    """A feed URL past the B-tree row limit (about 2.7 KB) is stored, updated and found."""
+    client, ctx, _, _ = env
+    long_url = "https://long.example/?q=" + secrets.token_urlsafe(5300)[:7000]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=long_url)
+
+    ctx.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with ctx.sessionmaker() as db:
+        feed = await db.scalar(select(Feed).where(Feed.name == "openphish"))
+    from sandbox.feeds.runner import run_feed
+
+    first = await run_feed(ctx, feed.id)
+    assert first.status == "success" and first.rows_added == 1, first.error
+    second = await run_feed(ctx, feed.id)  # ON CONFLICT (type, md5(value)) path
+    assert second.status == "success" and second.rows_updated == 1, second.error
+    looked = (
+        await client.get("/v1/indicators", params={"type": "url", "value": long_url}, headers=ALICE)
+    ).json()
+    assert looked["sources"][0]["feed"] == "openphish"
 
 
 async def test_abusech_feed_key_from_settings_and_redacted(env):
