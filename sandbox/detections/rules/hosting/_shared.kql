@@ -47,3 +47,17 @@ let lookalike_hosts =
 let government_lookalike_hosts =
     hosts
     | where isnotempty(government_lookalike);
+
+// Hosts that vouch for nothing: anyone can stand one up in minutes. A tenant on a free
+// hosting or site-builder platform, a host under a heavily abused TLD (string
+// hosting.high_abuse_tlds), a bare IPv4 address, or a domain registered less than 90
+// days ago. A brand's own hosts and allowlisted sites never count.
+let untrusted_hosts =
+    hosts
+    | where isnotempty(host) and not allowlisted(host) and not owned_by(host)
+    | extend platform = free_hosting(host)
+    | where isnotempty(platform)
+        or host_in(host, list("hosting.high_abuse_tlds"))
+        or host matches regex @"^\d{1,3}(\.\d{1,3}){3}$"
+        or registrable(host) in (domains | where age_days < 90 | project domain)
+    | project host, platform;

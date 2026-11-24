@@ -55,6 +55,20 @@ type = "regex"
 flags = 'i'
 pattern = '\bshared\s+(a\s+|the\s+)?(document|file|folder)\b|\bonedrive\b|\bsharepoint\b|\bview\s+(the\s+)?(document|file)\b|\bsecure\s+(document|message)\b|\be-?fax\b|\bvoice\s?mail\b'
 
+[device_login_other]
+title = 'Device-code sign-in pages of other providers'
+description = "Device-code (OAuth device authorization grant) verification pages of identity providers other than Microsoft: Google, GitHub, AWS IAM Identity Center, Okta, Auth0. A page that sends the visitor there with a code to type lets the attacker's device sign in as the victim. Microsoft's pages are microsoft.device_login."
+type = "regex"
+flags = 'i'
+pattern = '''https?:(?://|\\/\\/)(?:www\.)?google\.com(?:/|\\/)device\b|https?:(?://|\\/\\/)github\.com(?:/|\\/)login(?:/|\\/)device\b|https?:(?://|\\/\\/)device\.sso\.[a-z0-9-]+\.amazonaws\.com\b|https?:(?://|\\/\\/)[a-z0-9-]+\.awsapps\.com(?:/|\\/)start(?:/|\\/)?#?(?:/|\\/)device\b|https?:(?://|\\/\\/)[a-z0-9-]+\.(?:okta|oktapreview|auth0)\.com(?:/|\\/)(?:activate|device)\b'''
+
+[device_code_token_any]
+title = 'Displayed device code (any provider)'
+description = 'A displayed device code (case-sensitive): two or three dash-separated groups of 3 to 4 upper-case letters or digits (GitHub WDJB-MJHT, Google ABC-DEF-GHI, AWS HJKL-MNPQ).'
+type = "regex"
+flags = ''
+pattern = '\b[A-Z0-9]{4}-[A-Z0-9]{4}\b|\b[A-Z0-9]{3}-[A-Z0-9]{3}-[A-Z0-9]{3}\b'
+
 [document_pretext]
 title = 'Document pretext (search-ms / WebDAV)'
 description = 'Document pretexts (invoice, remittance, purchase order ...) on search-ms / WebDAV lures.'
