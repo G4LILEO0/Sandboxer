@@ -5,8 +5,9 @@ Built-in rule bodies are refreshed when the shipped version changes, unless a de
 engineer edited the body in Admin: that edit is kept until it is reverted. Disables and
 weights always survive. Built-in brand domains are
 merged into existing brand rows; keywords, extra domains and ``enabled`` set by an
-admin are kept. Weights are only ever inserted, and so are feeds, except that a feed
-still on a default URL its provider retired moves to the current default.
+admin are kept. A weight follows the shipped default until it is set in Admin, and from
+then on is kept. Feeds are only ever inserted, except that a feed still on a default URL
+its provider retired moves to the current default.
 """
 
 from datetime import UTC, datetime
@@ -117,9 +118,17 @@ async def ensure_defaults(db: AsyncSession) -> None:
                 attack_ids=meta["attack_ids"],
             )
 
-    weights = set(await db.scalars(select(ScoringConfig.tag_or_rule)))
+    # The latest row per key wins. A key whose latest row is still the seed's follows the
+    # shipped default when it changes; a weight set in Admin is never touched.
+    latest = {
+        row.tag_or_rule: row
+        for row in await db.scalars(
+            select(ScoringConfig).order_by(ScoringConfig.active_from, ScoringConfig.id)
+        )
+    }
     for key, weight in catalog.default_weights().items():
-        if key not in weights:
+        row = latest.get(key)
+        if row is None or (row.updated_by == "seed" and row.weight != weight):
             db.add(ScoringConfig(tag_or_rule=key, weight=weight, updated_by="seed"))
 
     brands = {b.name: b for b in await db.scalars(select(Brand))}

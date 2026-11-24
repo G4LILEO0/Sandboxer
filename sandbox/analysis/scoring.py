@@ -7,9 +7,17 @@ reproduced from the stored hits, weights and thresholds.
 
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
+
+from sandbox.analysis.domains import site
 
 SEVERITY_FALLBACK = {"info": 0, "low": 10, "medium": 25, "high": 45, "critical": 75}
 ALLOWLIST_FACTOR = 0.25
+# A feed match this confident on the page's own URL, file or domain is a verdict, not a
+# hint: the score is raised to the malicious threshold ("floor" contribution). Feeds
+# that list whole platforms or shared domains (Phishing.Database, 60) stay below it, and
+# IP matches never count (one CDN address serves thousands of sites).
+DEFINITIVE_CONFIDENCE = 75
 SURICATA_DEFAULT_CAP = 45
 # Suricata alert severity (the classtype priority: 1 is most severe) -> share of the
 # per-alert weight. ET INFO / POLICY / HUNTING rules describe traffic rather than
@@ -42,6 +50,28 @@ class ScoreResult:
     verdict: str
     contributions: list[Contribution]
     weights_used: dict[str, float]
+
+
+def _indicator_allowlisted(hit: dict[str, Any], allowlisted: set[str]) -> bool:
+    return hit["matched_value"] in allowlisted or hit.get("registrable") in allowlisted
+
+
+def definitive_indicator(hit: dict[str, Any], allowlisted: set[str]) -> bool:
+    """A feed match strong enough to decide the verdict on its own: a URL, file hash or
+    domain (not an IP) from a feed with confidence of at least DEFINITIVE_CONFIDENCE.
+    A domain must not be allowlisted. A URL may be on an allowlisted site (a payload on a
+    file-sharing site), except the site's bare root, which every visit to it matches."""
+    if hit["type"] not in ("url", "hash", "domain"):
+        return False
+    confidence = max((s.get("confidence") or 0) for s in hit["sources"]) if hit["sources"] else 0
+    if confidence < DEFINITIVE_CONFIDENCE or _indicator_allowlisted(hit, allowlisted):
+        return False
+    if hit["type"] == "url":
+        parts = urlsplit(hit["matched_value"])
+        host = (parts.hostname or "").lower()
+        bare_root = parts.path in ("", "/") and not parts.query
+        return not (bare_root and host and site(host) in allowlisted)
+    return True
 
 
 def _weight(
@@ -85,15 +115,19 @@ def score(
 
     base, cap = _weight(weights, "indicator", 60)
     indicator_total = 0.0
+    definitive: str | None = None
     for hit in indicator_hits:
         confidence = (
             max((s.get("confidence") or 0) for s in hit["sources"]) if hit["sources"] else 0
         )
         w = base * confidence / 100
         note = {}
-        if hit["matched_value"] in allowlisted or hit.get("registrable") in allowlisted:
+        if _indicator_allowlisted(hit, allowlisted):
             w *= ALLOWLIST_FACTOR  # FED-11: allowlisted stays visible but weighs less
             note["allowlisted"] = True
+        elif definitive is None and definitive_indicator(hit, allowlisted):
+            definitive = f"{hit['type']}:{hit['matched_value']}"
+            note["definitive"] = True
         indicator_total += w
         contributions.append(
             Contribution(
@@ -140,7 +174,17 @@ def score(
     used["suricata:alert"] = per_alert
 
     total = max(0, min(100, round(sum(c.weight for c in contributions))))
-    if total >= thresholds.get("malicious", 70):
+    malicious_at = thresholds.get("malicious", 70)
+    if definitive and total < malicious_at:
+        # A confident feed match on the page's own URL, file or domain is malicious
+        # whatever else the capture showed (a kit that hid itself from the browser).
+        contributions.append(
+            Contribution(
+                "floor", "known_bad_indicator", malicious_at - total, {"indicator": definitive}
+            )
+        )
+        total = malicious_at
+    if total >= malicious_at:
         verdict = "malicious"
     elif total >= thresholds.get("suspicious", 30):
         verdict = "suspicious"

@@ -29,6 +29,9 @@ values = [
   'dweb.link',
   'firebaseapp.com',
   'firebasestorage.googleapis.com',
+  # Apps Script web apps render in n-<id>-script.googleusercontent.com sandbox frames;
+  # each one is its own tenant, never Google's allowlisted site.
+  'googleusercontent.com',
   'fleek.co',
   'framer.app',
   'framer.website',
@@ -108,6 +111,37 @@ title = 'Abused country-code TLDs'
 description = 'Free or cheap ccTLDs heavily used for abuse; "brand.*" never covers these.'
 type = "words"
 values = [
+  'cc',
+  'cf',
+  'ga',
+  'gq',
+  'ml',
+  'pw',
+  'su',
+  'tk',
+  'ws',
+]
+
+[high_abuse_tlds]
+title = 'Heavily abused generic TLDs'
+description = 'Cheap generic TLDs where most registrations seen in phishing and malware reports are abusive (Interisle, Spamhaus). A host under one counts as untrusted: rules read it with host_in(host, list("hosting.high_abuse_tlds")). Keep popular TLDs that real businesses use (.online, .shop, .site) off this list.'
+type = "words"
+values = [
+  'bond',
+  'buzz',
+  'cfd',
+  'click',
+  'cyou',
+  'gdn',
+  'icu',
+  'lol',
+  'monster',
+  'quest',
+  'rest',
+  'sbs',
+  'top',
+  'xyz',
+  'zip',
   'cc',
   'cf',
   'ga',

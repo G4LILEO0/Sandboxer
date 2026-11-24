@@ -36,7 +36,9 @@ def render() -> str:
         f"{len(dets)} detections. Each one is a rule file: a short header and a query over "
         "the capture's tables (see [detection-rules.md](detection-rules.md)). A rule fires "
         "when its query returns a row, and adds its score to the verdict (an Admin weight "
-        "overrides it). Thresholds: suspicious >= 30, malicious >= 70.",
+        "overrides it). Thresholds: suspicious >= 30, malicious >= 70. A feed match with "
+        "confidence 75 or more on a URL, file or domain that is not allowlisted raises the "
+        "score to the malicious threshold on its own (sandbox/analysis/scoring.py).",
         "",
         "Contents: "
         + ", ".join(f"[{a}](#{a})" for a in areas)
