@@ -166,7 +166,8 @@ def _blocked_table(cap: Capture) -> list[Row]:
 @table(
     "local_probes",
     "Every attempt to reach the visitor's own machine or network: a refused http(s) or "
-    "WebSocket request to a loopback or private address, and every WebRTC STUN/TURN "
+    "WebSocket request to a loopback or private address (also one Chromium refused "
+    "itself, such as mixed content from an https page), and every WebRTC STUN/TURN "
     "server on one. Link-local addresses (169.254.x.x, cloud metadata) are not probes.",
     {
         "channel": "http, websocket or webrtc",
