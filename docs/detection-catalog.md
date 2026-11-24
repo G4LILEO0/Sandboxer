@@ -2,7 +2,7 @@
 
 _Master list of every built-in detection on the `detection-rules` branch. Last regenerated 2026-10-25 from the old `sandbox/rules/defaults.py`; the rule names, scores and conditions are unchanged since, and the code now lives in `sandbox/detections/`._
 
-Totals: **85 built-in behaviour rules, 11 web YARA rules.** Suricata comes from ET Open / local rule files (not listed); feed matches score `indicator` hits. Round legend: **baseline** = before the detection-spec work; **R1 / R2 / R3 / R4 / R5** = added in that round; **LR1** = live-sample round 1 ([live-round-1.md](live-round-1.md)). The *Changes* column marks rules modified in rounds 3, 4 and LR1. Spec IDs: `DE-*` from detection-spec.md / -loop1.md, `L2-NEW-*` from detection-spec-loop2.md, `LR1-*` from live-round-1.md.
+Totals: **85 built-in behaviour rules, 11 web YARA rules.** Suricata comes from ET Open / local rule files (not listed); feed matches score `indicator` hits. Round legend: **baseline** = before the detection-spec work; **R1 / R2 / R3 / R4 / R5** = added in that round; **LR1** = live-sample round 1 (internal notes). The *Changes* column marks rules modified in rounds 3, 4 and LR1. Spec IDs: `DE-*` from detection-spec.md / -loop1.md, `L2-NEW-*` from detection-spec-loop2.md, `LR1-*` from the live-round notes.
 
 ## Behaviour rules
 

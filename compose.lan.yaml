@@ -2,7 +2,7 @@
 #   docker compose -f compose.yaml -f compose.lan.yaml up -d
 # Set SANDBOX_LAN_IP (and SANDBOX_LAN_PORT if 8000 is taken) in .env first.
 # Dev auth has no sign-in: anyone who can reach this address can act as admin.
-# See docs/lan-exposure-assessment.md before using this on an untrusted network.
+# Do not use this on an untrusted network without a sign-in proxy in front of the API.
 services:
   api:
     ports:
