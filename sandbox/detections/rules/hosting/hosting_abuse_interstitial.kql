@@ -1,11 +1,12 @@
 title: Hosting provider already flagged the site
 severity: high
-score: 40
+score: 75
 tags: phishing, malware-download, takedown
 attack: T1583.006
 description: A tab ended on Cloudflare's 'Suspected Phishing' or 'Suspected Malware'
-  block for its hostname. The provider already confirmed abuse. The payload is not visible,
-  but the URL is not clean. Run the analysis again only if you need the payload.
+  block for its hostname. The provider already confirmed abuse, so this alone is malicious.
+  The payload is not visible, but the URL is not clean. Run the analysis again only if you
+  need the payload.
 ---
 // An open tab ends on the hosting provider's own phishing warning: a form that posts to
 // /cdn-cgi/phish-bypass on the tab's own host, with abuse wording (string

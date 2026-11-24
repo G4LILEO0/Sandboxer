@@ -3255,3 +3255,93 @@ def test_lone_debugger_statement_is_not_a_trap():
     data = _cap("https://app.example/")
     data.scripts = {"e" * 64: "function f(x){ debugger; return x + 1 }"}
     assert _rows(data, "debugger_traps") == []
+
+
+# --- general behaviour rules: untrusted hosts --------------------------------------------
+
+
+def test_secret_prompt_on_untrusted_host_fires_on_cheap_tld_and_new_domain():
+    for url in ("https://secure-verify.top/login", "https://kit-login.pages.dev/"):
+        page = _page(url, "Sign in", text="Sign in to continue", forms=[PASSWORD_FORM])
+        assert "secret_prompt_on_untrusted_host" in _hits(_cap(url, [page]))
+    url = "https://portal-update.com/login"
+    page = _page(url, "Sign in", text="Sign in to continue", forms=[PASSWORD_FORM])
+    young = _cap(url, [page])
+    young.domain_ages = {"portal-update.com": 12}
+    assert "secret_prompt_on_untrusted_host" in _hits(young)
+
+
+def test_secret_prompt_on_established_or_allowlisted_host_is_quiet():
+    url = "https://accounts.example.com/login"
+    page = _page(url, "Sign in", text="Sign in to continue", forms=[PASSWORD_FORM])
+    old = _cap(url, [page])
+    old.domain_ages = {"example.com": 4000}
+    assert "secret_prompt_on_untrusted_host" not in _hits(old)
+    tenant = "https://intranet.pages.dev/"
+    page = _page(tenant, "Sign in", text="Sign in to continue", forms=[PASSWORD_FORM])
+    trusted = _cap(tenant, [page], allowlisted={"intranet.pages.dev"})
+    assert "secret_prompt_on_untrusted_host" not in _hits(trusted)
+    # A newsletter box is not a sign-in prompt.
+    news = {"action": "/subscribe", "fields": [{"type": "email"}]}
+    blog = _page("https://notes.pages.dev/", "My notes", text="Subscribe", forms=[news])
+    assert "secret_prompt_on_untrusted_host" not in _hits(_cap("https://notes.pages.dev/", [blog]))
+
+
+def test_brand_and_share_lure_on_regional_s3_bucket():
+    """an_01M84GBB0X7F0T9C9TBENF939P: an Adobe 'shared document' lure on a regional S3
+    bucket, with only a button on the page."""
+    url = "https://adobe-jax3h6.s3.us-east-1.amazonaws.com/index.html"
+    page = _page(
+        url,
+        "Adobe Acrobat - Shared document",
+        text="Adobe Acrobat. Someone shared a document with you. View document",
+    )
+    hits = _hits(_cap(url, [page], allowlisted={"amazonaws.com"}))
+    assert {"brand_page_on_untrusted_host", "share_lure_on_untrusted_host"} <= hits
+
+
+def test_brand_and_share_wording_on_established_site_is_quiet():
+    url = "https://www.printshop.example/blog/acrobat-tips"
+    page = _page(
+        url,
+        "Adobe Acrobat tips",
+        text="How to view a document someone shared a document with you in Adobe Acrobat",
+    )
+    data = _cap(url, [page])
+    data.domain_ages = {"printshop.example": 3000}
+    hits = _hits(data)
+    assert not {"brand_page_on_untrusted_host", "share_lure_on_untrusted_host"} & hits
+    # Share wording on free hosting with no brand and no prompt is not enough either.
+    url = "https://family-photos.pages.dev/"
+    page = _page(url, "Our photos", text="I shared a folder of photos. View the file below.")
+    assert "share_lure_on_untrusted_host" not in _hits(_cap(url, [page]))
+
+
+def test_device_code_lure_for_github_fires_and_help_text_is_quiet():
+    url = "https://repo-access.pages.dev/"
+    link = ["https://github.com/login/device"]
+    lure = _page(url, "Verify access", text="Go to the link and enter this code: WDJB-MJHT")
+    lure["frames"][0]["links"] = link
+    assert "device_code_lure_other_provider" in _hits(_cap(url, [lure]))
+    help_url = "https://docs.tooling.example/cli/login"
+    helps = _page(
+        help_url, "CLI login", text="Open the link and enter the code your terminal shows."
+    )
+    helps["frames"][0]["links"] = link
+    assert "device_code_lure_other_provider" not in _hits(_cap(help_url, [helps]))
+
+
+def test_cloudflare_phishing_block_alone_is_malicious():
+    weight = catalog.get("hosting_abuse_interstitial").score
+    result = score(
+        rule_hits=[
+            {"rule_name": "hosting_abuse_interstitial", "engine": "behaviour", "severity": "high"}
+        ],
+        indicator_hits=[],
+        suricata_alerts=[],
+        weights={"hosting_abuse_interstitial": (weight, None)},
+        thresholds={"suspicious": 30, "malicious": 70},
+        allowlisted=set(),
+        capture_ok=True,
+    )
+    assert result.verdict == "malicious"

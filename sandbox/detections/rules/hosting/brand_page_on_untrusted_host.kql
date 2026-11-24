@@ -1,0 +1,17 @@
+title: Brand page on an untrusted host
+severity: high
+score: 45
+tags: phishing, brand-impersonation
+attack: T1656, T1583.001
+description: A page presents a known brand (confidence 40 or more: the brand in the title,
+  or its name throughout the text) on a host that vouches for nothing: a free hosting
+  tenant, a heavily abused TLD, a bare IP address or a domain registered less than 90
+  days ago. The brand does not own the host. The page need not ask for anything yet:
+  lures often show only a button that leads to the sign-in.
+---
+// The brand pages (brand_claims) on a host in untrusted_hosts (hosting/_shared.kql).
+brand_claims
+| where confidence >= 40
+| where host in (untrusted_hosts | project host)
+| project brand, confidence, host, url = substring(url, 0, 300), evidence
+| take 5

@@ -1,0 +1,22 @@
+title: Shared-document lure on an untrusted host
+severity: medium
+score: 30
+tags: phishing
+attack: T1566.002
+description: A page with a shared-document pretext ("shared a document", "view document",
+  OneDrive, SharePoint, e-fax, voicemail) sits on a host that vouches for nothing (a free
+  hosting tenant, an abused TLD, an IP address or a new domain) and names a brand or asks
+  for a secret. Real file shares live on the provider's own domains.
+---
+// A top-level page with share wording (string lures.share_pretext) on a host in
+// untrusted_hosts (hosting/_shared.kql) ...
+let share_frames =
+    frames
+    | where top and content matches list("lures.share_pretext")
+    | where host in (untrusted_hosts | project host);
+// ... that asks for a secret or names a brand.
+share_frames
+| where isnotempty(prompt)
+    or host in (brand_claims | where confidence >= 20 | project host)
+| project url = substring(url, 0, 300), host, title, prompt
+| take 5
