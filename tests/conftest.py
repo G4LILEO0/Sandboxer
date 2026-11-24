@@ -14,7 +14,23 @@ from sandbox.api.deps import get_resolver
 from sandbox.api.main import create_app
 from sandbox.config import Settings
 
-TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+
+def _test_database_url() -> str | None:
+    """TEST_DATABASE_URL from the environment, else from the project's .env (where
+    .env.example puts it), so a plain `pytest` on a machine running the compose stack
+    also runs the database tests instead of skipping them."""
+    if url := os.environ.get("TEST_DATABASE_URL"):
+        return url
+    env = Path(__file__).resolve().parents[1] / ".env"
+    if env.is_file():
+        for line in env.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.strip().partition("=")
+            if sep and key.strip() == "TEST_DATABASE_URL":
+                return value.strip().strip("'\"") or None
+    return None
+
+
+TEST_DATABASE_URL = _test_database_url()
 UNREACHABLE_DB = "postgresql+asyncpg://nobody:nothing@127.0.0.1:1/unreachable_test"
 ROOT = Path(__file__).resolve().parents[1]
 
