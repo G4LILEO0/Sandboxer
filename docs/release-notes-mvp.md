@@ -153,7 +153,7 @@ If the run cannot get past the check, the verdict is "unknown", not "benign". Th
 
 ### 3.14 Security review
 
-A security review of the full code base took place before this release. The review found 24 issues. This release fixes 16 of them and partly fixes one more. `docs/security-review.md` lists each finding. Section 5.2 lists the open findings.
+A security review of the full code base took place before this release. The review found 24 issues. This release fixes 16 of them and partly fixes one more. Section 5.2 lists the open findings.
 
 ## 4. Installation
 
@@ -209,7 +209,7 @@ By default, the API listens only on `127.0.0.1`. The optional file `compose.lan.
 ### 5.2 Security
 
 - Dev authentication has no sign-in. Under dev auth, anyone who can reach the API can act as admin.
-- Do not use `compose.lan.yaml` until a sign-in proxy is in front of the API and `SANDBOX_SECRET_KEY` has a random value. Refer to `docs/lan-exposure-assessment.md`, findings C-1 and C-2.
+- Do not use `compose.lan.yaml` until a sign-in proxy is in front of the API and `SANDBOX_SECRET_KEY` has a random value. Under dev auth, anyone who reaches the LAN address is admin.
 - SR-09 is partly open. Set `SANDBOX_NOVNC_DIR` so that the API serves the live-view page itself.
 - SR-18 is open. Chromium runs without its own sandbox. Docker Desktop on Windows cannot run gVisor.
 - SR-19 is open. The worker uses the Docker socket, which gives root access to the host.

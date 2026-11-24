@@ -1,4 +1,4 @@
-"""Regression tests for the findings of the security review (docs/security-review.md).
+"""Regression tests for the findings of the internal security review.
 
 Each test names the finding it covers (SR-nn).
 """
