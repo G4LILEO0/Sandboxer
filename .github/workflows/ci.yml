@@ -41,6 +41,15 @@ jobs:
       - run: docker build -f docker/api.Dockerfile .
       - run: docker build -f docker/pcap.Dockerfile -t sandbox-pcap:ci .
       - run: docker build -f docker/session.Dockerfile -t sandbox-session:ci .
+      # The runner's real-Chromium tests skip in the test job (no browser there); run them
+      # in the session image, which has Patchright's Chromium.
+      - run: >-
+          docker run --rm -v "$PWD:/src:ro" -w /src --entrypoint sh
+          -e PYTHONDONTWRITEBYTECODE=1 sandbox-session:ci -c
+          "pip install -q --target /tmp/pt pytest pytest-asyncio
+          && PYTHONPATH=/src:/tmp/pt python -m pytest -ra -p no:cacheprovider --noconftest
+          tests/test_runner_browser_blocks.py tests/test_runner_downloads.py
+          tests/test_runner_frames.py"
       # Smoke-test the session image under the same hardening the worker applies.
       - run: >-
           docker run --rm --read-only --tmpfs /tmp --tmpfs /home/runner:uid=10002
