@@ -344,7 +344,9 @@ async def test_rule_hit_evidence(env):
     url = f"/v1/analyses/{aid}/rule-hits/{hit['id']}/evidence"
     ev = (await client.get(url, headers=ALICE)).json()
     assert ev["rule"] == "clickfix_clipboard_command" and ev["rule_found"]
-    assert ev["condition"] and any(c["passed"] for c in ev["condition"])
+    # A query rule: the rows it returned and how many rows each step kept.
+    assert ev["kind"] == "query" and ev["row_count"] >= 1
+    assert ev["steps"] and all(step["rows"] >= 1 for step in ev["steps"])
     assert any("powershell" in s["content"] for s in ev["samples"])
 
     # Same visibility as the report: a hidden analysis and a foreign hit look missing.
@@ -697,7 +699,8 @@ async def test_rules_bundles_and_rule_testing(env):
         )
     ).json()
     assert tested["tested"] == 1 and tested["matched"] == 1
-    assert tested["results"][0]["evidence"]["clipboard.clickfix_like"] >= 1
+    rows = tested["results"][0]["evidence"]["rows"]
+    assert any(r["trait"] == "unambiguous" and "powershell" in r["command"] for r in rows)
     # Behaviour detections are code: no JSON rule can be created or edited in Admin.
     refused = await client.post(
         "/v1/rules",
@@ -709,7 +712,8 @@ async def test_rules_bundles_and_rule_testing(env):
     assert edit.status_code == 409 and edit.json()["error"] == "detection_in_code"
     detail = (await client.get(f"/v1/rules/{target['id']}", headers=ALICE)).json()
     assert detail["detection"]["title"] == "Hidden third-party iframe"
-    assert detail["detection"]["signals"][0]["path"] == "frames.hidden_iframes"
+    assert detail["detection"]["kind"] == "query"
+    assert [t["name"] for t in detail["detection"]["tables"]] == ["iframes"]
     listed = (await client.get("/v1/detections", headers=ALICE)).json()["items"]
     assert len(listed) >= 85
     yara_test = (
@@ -910,7 +914,7 @@ async def test_seed_refreshes_builtin_rules_and_merges_brand_domains(env):
         await db.commit()
 
         await db.refresh(rule)
-        assert "Brand page asks for a secret" in rule.body  # the rule as plain text
+        assert "brand_claim" in rule.body and "asks for a secret" in rule.body  # rule text
         assert rule.version == "2"
         assert await db.scalar(select(RuleOverride.active).where(RuleOverride.rule_id == rule.id))
         await db.refresh(google)
