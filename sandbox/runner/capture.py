@@ -64,6 +64,7 @@ except ImportError:  # development machines and tests with stock Playwright
 
 from sandbox.core import antibot
 from sandbox.core.netguard import NetGuard, system_resolver
+from sandbox.core.urls import MAX_URL_LENGTH
 from sandbox.runner.events import Emitter, now_iso
 from sandbox.runner.page_scripts import (
     BINDING,
@@ -299,7 +300,7 @@ class Capture:
             await route.continue_()
 
     async def _block(self, route: Route, url: str, reason: str) -> None:
-        entry = {"url": url[:2000], "reason": reason}
+        entry = {"url": url[:MAX_URL_LENGTH], "reason": reason}
         self.blocked.append(entry)
         self.events.emit("request_blocked", "network", **entry)
         with contextlib.suppress(PlaywrightError):
@@ -309,12 +310,12 @@ class Capture:
         parts = urlsplit(ws.url)
         reason, _ = await self.hosts.check(parts.hostname or "")
         if reason:
-            entry = {"url": ws.url[:2000], "reason": reason, "websocket": True}
+            entry = {"url": ws.url[:MAX_URL_LENGTH], "reason": reason, "websocket": True}
             self.blocked.append(entry)
             self.events.emit("request_blocked", "network", **entry)
             await ws.close(code=1008, reason="blocked")
             return
-        self.events.emit("websocket", "network", url=ws.url[:2000])
+        self.events.emit("websocket", "network", url=ws.url[:MAX_URL_LENGTH])
         ws.connect_to_server()
 
     async def on_response(self, page: Page, response: Response) -> None:
@@ -447,7 +448,7 @@ class Capture:
 
     async def _on_download(self, page: Page, download: Download) -> None:
         """Downloads land in quarantine with hashes and never leave it (CAP-7, INT-4)."""
-        url = download.url[:2000]
+        url = download.url[:MAX_URL_LENGTH]
         self.download_urls.add(url)
         # The entry made when Chromium started the download, if there is one: this event
         # completes it instead of adding a second entry.
@@ -492,7 +493,7 @@ class Capture:
 
     def _on_download_requested(self, pid: str | None, data: dict[str, Any]) -> None:
         """Record a download link the page activated, before any response (page hook)."""
-        url = str(data.get("href", ""))[:2000]
+        url = str(data.get("href", ""))[:MAX_URL_LENGTH]
         if not url or len(self.downloads) >= 200 or url in self.download_urls:
             return  # already recorded (the download event can arrive first)
         if any(d["url"] == url for d in self.downloads):
@@ -504,7 +505,7 @@ class Capture:
             "suggested_filename": name[:255],
             "status": "requested",
             "trigger": str(data.get("how") or "")[:40],
-            "script_url": str(data.get("script_url") or "")[:2000] or None,
+            "script_url": str(data.get("script_url") or "")[:MAX_URL_LENGTH] or None,
             "ms": self._elapsed_ms(),
         }
         self.pending_downloads[url] = entry
@@ -543,11 +544,11 @@ class Capture:
         req = event.get("request") or {}
         self.cdp_requests.append(
             {
-                "url": str(req.get("url", ""))[:2000],
+                "url": str(req.get("url", ""))[:MAX_URL_LENGTH],
                 "method": req.get("method"),
                 "type": event.get("type"),
                 "frame_id": event.get("frameId"),
-                "document_url": str(event.get("documentURL", ""))[:2000],
+                "document_url": str(event.get("documentURL", ""))[:MAX_URL_LENGTH],
                 "has_post": bool(req.get("hasPostData")),
                 "page": self._page_id(page),
                 "initiator": self._initiator(event.get("initiator")),
@@ -561,7 +562,7 @@ class Capture:
             return
         self.cdp_requests.append(
             {
-                "url": str(event.get("url", ""))[:2000],
+                "url": str(event.get("url", ""))[:MAX_URL_LENGTH],
                 "method": "GET",
                 "type": "WebSocket",
                 "page": self._page_id(page),
@@ -584,10 +585,10 @@ class Capture:
             worker = sw.url if sw else None
         self.pw_requests.append(
             {
-                "url": request.url[:2000],
+                "url": request.url[:MAX_URL_LENGTH],
                 "method": request.method,
                 "type": request.resource_type,
-                "frame_url": (frame_url or "")[:2000] or None,
+                "frame_url": (frame_url or "")[:MAX_URL_LENGTH] or None,
                 "worker_url": worker,
                 "navigation": request.is_navigation_request(),
                 "ms": self._elapsed_ms(),
@@ -634,7 +635,7 @@ class Capture:
         if m:
             event = m.group(1)
         entry = {
-            "url": url[:2000],
+            "url": url[:MAX_URL_LENGTH],
             "direction": direction,
             "event": event,
             "size": len(payload) if payload is not None else 0,
@@ -1092,7 +1093,7 @@ class Capture:
         entry: dict[str, Any] = {
             "provider": state["provider"],
             "kind": state["kind"],
-            "url": page.url[:2000],
+            "url": page.url[:MAX_URL_LENGTH],
             "ray_id": state.get("ray_id"),
             "markers": state.get("markers", []),
             "ms": self._elapsed_ms(),
@@ -1147,7 +1148,7 @@ class Capture:
                 entry["clicks"] += 1
                 last_click = time.monotonic()
         entry["waited_ms"] = int((time.monotonic() - started) * 1000)
-        entry["final_url"] = page.url[:2000] if not page.is_closed() else None
+        entry["final_url"] = page.url[:MAX_URL_LENGTH] if not page.is_closed() else None
         if entry["cleared"]:
             self.events.emit(
                 "antibot_cleared", "runner", url=entry["final_url"], waited_ms=entry["waited_ms"]
@@ -1204,14 +1205,14 @@ class Capture:
                 {
                     "provider": state["provider"],
                     "kind": state["kind"],
-                    "url": page.url[:2000],
+                    "url": page.url[:MAX_URL_LENGTH],
                     "ray_id": state.get("ray_id"),
                     "markers": state.get("markers", []),
                     "ms": self._elapsed_ms(),
                     "clicks": 0,
                     "cleared": False,
                     "waited_ms": 0,
-                    "final_url": page.url[:2000],
+                    "final_url": page.url[:MAX_URL_LENGTH],
                 }
             )
             self.events.emit(
@@ -1219,7 +1220,7 @@ class Capture:
                 "runner",
                 provider=state["provider"],
                 check=state["kind"],
-                url=page.url[:2000],
+                url=page.url[:MAX_URL_LENGTH],
                 waited_ms=0,
             )
         elif not state and self.antibot and not self.antibot[-1]["cleared"]:

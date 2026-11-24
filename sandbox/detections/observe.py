@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 from sandbox.analysis.domains import site
+from sandbox.core.urls import MAX_URL_LENGTH
 from sandbox.detections import (  # noqa: F401  (clickfix and lures register tables)
     clickfix,
     downloads,
@@ -114,7 +115,7 @@ def extract_iocs(data: CaptureData, facts: dict[str, Any]) -> dict[str, list[str
         url = entry.get("request", {}).get("url", "")
         host = _host(url)
         if url.startswith("http") and host and site(host) not in data.allowlisted:
-            urls.add(url[:2000])
+            urls.add(url[:MAX_URL_LENGTH])
     for frame in _all_frames(data):
         emails.update(m.lower() for m in _EMAIL.findall(frame.get("text", "")))
         for link in frame.get("links", []):
