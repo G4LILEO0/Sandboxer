@@ -385,8 +385,63 @@ def test_allowlisted_indicator_weighs_less():
         thresholds={"suspicious": 30, "malicious": 70},
         capture_ok=True,
     )
-    assert score(indicator_hits=[hit], allowlisted=set(), **kwargs).score == 60
+    # Confidence 100 on a site that is not allowlisted decides the verdict (floor to 70).
+    assert score(indicator_hits=[hit], allowlisted=set(), **kwargs).score == 70
     assert score(indicator_hits=[hit], allowlisted={"cdn.example"}, **kwargs).score == 15
+
+
+def _ind(ioc_type, value, confidence, registrable=None):
+    return {
+        "type": ioc_type,
+        "matched_value": value,
+        "registrable": registrable,
+        "sources": [{"feed": "x", "confidence": confidence}],
+    }
+
+
+def _score_ind(hits, allowlisted=()):
+    return score(
+        rule_hits=[_hit("clipboard_page_write", "low")],
+        indicator_hits=hits,
+        suricata_alerts=[],
+        weights={"indicator": (60, None), "clipboard_page_write": (5, None)},
+        thresholds={"suspicious": 30, "malicious": 70},
+        allowlisted=set(allowlisted),
+        capture_ok=True,
+    )
+
+
+def test_confident_feed_match_on_the_page_is_malicious():
+    for hit in (
+        _ind("url", "https://kit.example/login", 80),
+        _ind("domain", "kit.example", 90, "kit.example"),
+        _ind("hash", "a" * 64, 85),
+    ):
+        result = _score_ind([hit])
+        assert result.verdict == "malicious"
+        assert result.score == 70
+        floor = [c for c in result.contributions if c.source == "floor"]
+        assert floor and floor[0].detail["indicator"].endswith(hit["matched_value"])
+
+
+def test_weak_shared_or_allowlisted_feed_match_does_not_decide():
+    # Phishing.Database (60) lists whole platforms, such as a regional S3 endpoint.
+    assert (
+        _score_ind(
+            [_ind("domain", "s3.us-east-1.amazonaws.com", 60, "s3.us-east-1.amazonaws.com")]
+        ).verdict
+        == "suspicious"
+    )
+    # One CDN address serves thousands of sites.
+    assert _score_ind([_ind("ip", "104.21.90.131", 100)]).score == 65
+    # An allowlisted domain, or the bare root URL of an allowlisted site (every visit to
+    # the site matches it), never decides the verdict.
+    allow = {"dropbox.com"}
+    assert _score_ind([_ind("domain", "dropbox.com", 90, "dropbox.com")], allow).verdict == "benign"
+    assert _score_ind([_ind("url", "https://www.dropbox.com/", 90)], allow).verdict == "suspicious"
+    # A payload URL on an allowlisted file-sharing site does.
+    payload = _ind("url", "https://www.dropbox.com/s/abc/invoice.zip", 90)
+    assert _score_ind([payload], allow).verdict == "malicious"
 
 
 def test_failed_capture_without_hits_is_unknown():
