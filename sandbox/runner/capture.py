@@ -190,6 +190,9 @@ class Capture:
         self.redirects: list[dict[str, Any]] = []
         self.navigations: list[dict[str, Any]] = []
         self.blocked: list[dict[str, Any]] = []
+        self.blocked_seen: set[tuple[str, str]] = set()
+        # CDP request id -> URL, to name the request in Network.loadingFailed.
+        self.cdp_request_urls: dict[str, str] = {}
         self.tls: dict[str, dict[str, Any]] = {}
         self.contacted: dict[str, set[str]] = {}
         self.downloads: list[dict[str, Any]] = []
@@ -408,7 +411,13 @@ class Capture:
             # A3: initiator type / script URL / stack top per request on this target.
             cdp.on("Network.requestWillBeSent", lambda e: self._on_cdp_request(page, e))
             cdp.on("Network.webSocketCreated", lambda e: self._on_cdp_ws(page, e))
+            # Probes Chromium refuses before the route filter sees them (mixed content,
+            # Local/Private Network Access): see _on_audit_issue and _on_cdp_failed.
+            cdp.on("Network.loadingFailed", lambda e: self._on_cdp_failed(e))
+            cdp.on("Audits.issueAdded", lambda e: self._on_audit_issue(e))
             await cdp.send("Network.enable")
+            with contextlib.suppress(PlaywrightError):
+                await cdp.send("Audits.enable")
             if self.relay:
                 # Patchright: page hooks report through the runner's own isolated world
                 # (page_scripts.RELAY_LISTENER), drained by polling (_relay_poll).
@@ -539,9 +548,11 @@ class Capture:
         return out
 
     def _on_cdp_request(self, page: Page, event: dict[str, Any]) -> None:
+        req = event.get("request") or {}
+        if event.get("requestId") and len(self.cdp_request_urls) < _MAX_REQUEST_LOG:
+            self.cdp_request_urls[event["requestId"]] = str(req.get("url", ""))
         if len(self.cdp_requests) >= _MAX_REQUEST_LOG:
             return
-        req = event.get("request") or {}
         self.cdp_requests.append(
             {
                 "url": str(req.get("url", ""))[:MAX_URL_LENGTH],
@@ -558,6 +569,8 @@ class Capture:
         )
 
     def _on_cdp_ws(self, page: Page, event: dict[str, Any]) -> None:
+        if self.relay:  # no WebSocket route under Patchright: check the socket here
+            self._spawn(self._check_websocket(str(event.get("url", ""))))
         if len(self.cdp_requests) >= _MAX_REQUEST_LOG:
             return
         self.cdp_requests.append(
@@ -571,6 +584,61 @@ class Capture:
                 "source": "cdp",
             }
         )
+
+    async def _check_websocket(self, url: str) -> None:
+        """What on_websocket records, for a socket the browser opened itself (Patchright).
+        The runner cannot refuse it from here; the egress guard drops internal addresses."""
+        parts = urlsplit(url)
+        reason, _ = await self.hosts.check(parts.hostname or "")
+        if reason:
+            self._record_blocked(url, reason, websocket=True)
+        else:
+            self.events.emit("websocket", "network", url=url[:MAX_URL_LENGTH])
+
+    def _on_audit_issue(self, event: dict[str, Any]) -> None:
+        """Mixed content Chromium refused: an https page asking for an http:// or ws://
+        resource by host name. The request never reaches the route filter (a blocked
+        WebSocket or iframe never reaches the Network domain either), so a local port scan
+        from an https page would otherwise leave no trace."""
+        issue = event.get("issue") or {}
+        if issue.get("code") != "MixedContentIssue":
+            return
+        details = (issue.get("details") or {}).get("mixedContentIssueDetails") or {}
+        if details.get("resolutionStatus") != "MixedContentBlocked":
+            return
+        if url := str(details.get("insecureURL") or ""):
+            self._spawn(self._record_browser_block(url, "mixed content"))
+
+    def _on_cdp_failed(self, event: dict[str, Any]) -> None:
+        """Requests Chromium refused itself. Mixed content is left to _on_audit_issue (it
+        also covers WebSockets and frames); this adds Local/Private Network Access."""
+        cors = str((event.get("corsErrorStatus") or {}).get("corsError") or "")
+        if "PrivateNetwork" not in cors and "LocalNetwork" not in cors:
+            return
+        if url := self.cdp_request_urls.get(str(event.get("requestId", ""))):
+            self._spawn(self._record_browser_block(url, "local network access"))
+
+    async def _record_browser_block(self, url: str, why: str) -> None:
+        """Record a request the browser refused when the egress guard would refuse it too
+        (an internal address): it is then a probe of the visitor's own machine or LAN."""
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https", "ws", "wss") or not parts.hostname:
+            return
+        reason, _ = await self.hosts.check(parts.hostname)
+        if reason:
+            reason = f"{reason} (refused by the browser: {why})"
+            self._record_blocked(url, reason, websocket=parts.scheme in ("ws", "wss"))
+
+    def _record_blocked(self, url: str, reason: str, websocket: bool = False) -> None:
+        key = (url[:MAX_URL_LENGTH], reason)
+        if key in self.blocked_seen or len(self.blocked) >= _MAX_REQUEST_LOG:
+            return
+        self.blocked_seen.add(key)
+        entry: dict[str, Any] = {"url": key[0], "reason": reason}
+        if websocket:
+            entry["websocket"] = True
+        self.blocked.append(entry)
+        self.events.emit("request_blocked", "network", **entry)
 
     def _on_pw_request(self, request: Request) -> None:
         """Every request from every frame, OOPIF and worker (Playwright sees them all)."""
@@ -705,6 +773,8 @@ class Capture:
                     "runImmediately": True,
                 },
             )
+            cdp.on("Audits.issueAdded", lambda e: self._on_audit_issue(e))
+            await cdp.send("Audits.enable")
         except PlaywrightError:
             return
         sessions = self.relay_frame_sessions.setdefault(page, {})
@@ -935,7 +1005,12 @@ class Capture:
                 record_video_size=viewport,
             )
             await context.route("**/*", self.on_route)
-            await context.route_web_socket(re.compile(r".*"), self.on_websocket)
+            if not self.relay:
+                # Under Patchright the route's page-side WebSocket stand-in calls a binding
+                # that only exists in Patchright's isolated world, so every new WebSocket()
+                # threw "binding is not a function". There the runner checks each socket
+                # from CDP instead (_on_cdp_ws); the egress guard drops internal addresses.
+                await context.route_web_socket(re.compile(r".*"), self.on_websocket)
             await context.expose_binding(BINDING, self.on_binding)
             await context.add_init_script(init_script(self.profile.platform, self.relay))
             # Grant clipboard so hooked writes don't fail silently; notifications only when

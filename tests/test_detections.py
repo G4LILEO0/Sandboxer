@@ -3080,6 +3080,22 @@ def test_local_port_scan_over_webrtc_turn():
     assert [p["ports"] for p in _hit_rows(_cap(url, webrtc=lan), "local_port_scan")] == [[3478]]
 
 
+def test_local_port_scan_from_https_page_by_lan_host_name():
+    """Chromium refuses http:// and ws:// to a host name from an https page (mixed content)
+    before the route filter sees it; the runner records the refusal when the name is
+    internal, and the rule counts it like any other probe."""
+    url = "https://scan.example/"
+    why = "192.168.1.20 is a private address (refused by the browser: mixed content)"
+    blocked = [
+        {"url": "http://nas.corp.example:3389/", "reason": why},
+        {"url": "ws://nas.corp.example:5900/", "reason": why, "websocket": True},
+    ]
+    data = _cap(url, blocked=blocked)
+    (probe,) = _hit_rows(data, "local_port_scan")
+    assert sorted(probe["ports"]) == [3389, 5900]
+    assert sorted(probe["channels"]) == ["http", "websocket"]
+
+
 # --- clipboard writes the command patterns miss ---------------------------------------
 
 # Inert stand-in for an obfuscated payload: alias lookup plus base64 that the command

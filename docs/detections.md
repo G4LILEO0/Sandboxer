@@ -4219,7 +4219,7 @@ blocked
 
 `local_port_scan` · medium · score 25 · ATT&CK T1046, T1592.004 · tags fingerprinting, local-port-scan
 
-The page tried several ports on localhost or the LAN (WebSocket, fetch/image or WebRTC TURN/STUN). These are often remote-access ports such as RDP, VNC, SSH or TeamViewer. This is browser-based local port scanning, used to fingerprint visitors or detect remote-access tools. The rule ignores known anti-fraud scripts (ThreatMetrix), a desktop app's own helper ports and allowlisted sites.
+The page tried several ports on localhost or the LAN (WebSocket, fetch/image or WebRTC TURN/STUN), including requests Chromium refused itself, such as http:// or ws:// to a LAN host name from an https page (mixed content). These are often remote-access ports such as RDP, VNC, SSH or TeamViewer. This is browser-based local port scanning, used to fingerprint visitors or detect remote-access tools. The rule ignores known anti-fraud scripts (ThreatMetrix), a desktop app's own helper ports and allowlisted sites.
 
 Rule: [`sandbox/detections/rules/network/local_port_scan.kql`](../sandbox/detections/rules/network/local_port_scan.kql)
 
@@ -5134,7 +5134,7 @@ Every request the sandbox's egress guard refused (internal addresses, other sche
 
 ### `local_probes`
 
-Every attempt to reach the visitor's own machine or network: a refused http(s) or WebSocket request to a loopback or private address, and every WebRTC STUN/TURN server on one. Link-local addresses (169.254.x.x, cloud metadata) are not probes.
+Every attempt to reach the visitor's own machine or network: a refused http(s) or WebSocket request to a loopback or private address (also one Chromium refused itself, such as mixed content from an https page), and every WebRTC STUN/TURN server on one. Link-local addresses (169.254.x.x, cloud metadata) are not probes.
 
 | Column | Meaning |
 | --- | --- |
