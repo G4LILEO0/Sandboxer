@@ -286,7 +286,12 @@ class Indicator(Base):
     """One row per (type, value); each feed that reports it adds an IndicatorSource (FED-3)."""
 
     __tablename__ = "indicators"
-    __table_args__ = (UniqueConstraint("type", "value"),)
+    # Unique on md5(value), not value: a B-tree row holds at most about 2704 bytes and
+    # feed URLs can be longer. The hash index serves the equality lookups on value.
+    __table_args__ = (
+        Index("uq_indicators_type_md5_value", "type", text("md5(value)"), unique=True),
+        Index(None, "value", postgresql_using="hash"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     type: Mapped[str] = mapped_column(Text)
@@ -313,7 +318,11 @@ class IndicatorSuppression(Base):
     """Local suppression that survives feed updates (FED-10)."""
 
     __tablename__ = "indicator_suppressions"
-    __table_args__ = (UniqueConstraint("type", "value"),)
+    # Same as indicators: unique on md5(value) so long URLs fit the B-tree row limit.
+    __table_args__ = (
+        Index("uq_indicator_suppressions_type_md5_value", "type", text("md5(value)"), unique=True),
+        Index(None, "value", postgresql_using="hash"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     type: Mapped[str] = mapped_column(Text)
