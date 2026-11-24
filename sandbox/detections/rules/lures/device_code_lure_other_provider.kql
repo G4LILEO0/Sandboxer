@@ -1,0 +1,28 @@
+title: Device-code lure for Google, GitHub, AWS or Okta
+severity: high
+score: 55
+tags: consent-phishing, phishing
+attack: T1566.002, T1528
+description: A page that no identity provider owns and that is not allowlisted sends the
+  visitor to a device-code sign-in page (google.com/device, github.com/login/device, AWS
+  IAM Identity Center, Okta, Auth0) and shows a code to enter. The victim signs in on the
+  real provider and authorises the attacker's device. Microsoft's flow is
+  device_code_phishing_lure.
+---
+// Pages that send the visitor to a device-code sign-in page (string
+// lures.device_login_other) ...
+let handoffs =
+    urls_seen(list("lures.device_login_other"))
+    | extend url = replace_string(url, @"\/", "/")
+    | where isnotempty(source_host)
+        and not owned_by(source_host)
+        and not allowlisted(source_host)
+    | where begins_with_match(url, list("lures.device_login_other"))
+    | distinct source_host, url;
+// ... and show a code next to enter-the-code wording.
+frames
+| where host in (handoffs | project source_host)
+| extend page_text = strcat(title, " ", text)
+| where near(page_text, list("microsoft.code_wording"), list("lures.device_code_token_any"), 80)
+| project host, url = substring(url, 0, 300), handoff = toscalar(handoffs | project url)
+| take 3
