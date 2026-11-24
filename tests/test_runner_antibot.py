@@ -11,9 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from sandbox.analysis.local import evaluate_dir
-from sandbox.runner.capture import Capture
-from sandbox.runner.spec import RunSpec
+try:  # the runner's driver: Patchright in the session image, else stock Playwright
+    import patchright  # noqa: F401
+except ImportError:
+    pytest.importorskip("playwright")
+
+from sandbox.analysis.local import evaluate_dir  # noqa: E402
+from sandbox.runner.capture import Capture  # noqa: E402
+from sandbox.runner.spec import RunSpec  # noqa: E402
 
 RAY = "8e1f2a3b4c5d6e7f"
 _CHALLENGE = """<!DOCTYPE html><html><head><title>Just a moment...</title>
